@@ -513,3 +513,28 @@ not tagged and is not created by OpenTofu; delete it with
 `./demo.sh destroy --purge-state`'s logic by hand if you want it gone
 (`aws s3api list-object-versions` → `delete-objects` → `delete-bucket`), or
 keep it for the next `./demo.sh init`.
+
+## Timings
+
+Measured on 2026-09-09 in us-east-1 with the defaults (two `m7g.xlarge`
+Graviton nodes, account default VPC, EKS 1.36). The full record with commands,
+exit codes and sanitized output is in [LIVE-VALIDATION.md](LIVE-VALIDATION.md);
+the UTC timestamps below are the ones recorded there.
+
+| Step | Started | Finished | Duration | Notes |
+| --- | --- | --- | --- | --- |
+| `./demo.sh init` | 15:56:47 | 15:56:51 | 4 s | State bucket, `tofu init`, Helm repo |
+| `./demo.sh apply` (first) | 16:22:57 | 16:38:12 | 15 min 15 s | EKS control plane 10 min 8 s, node group 1 min 28 s, add-ons about 2 min; includes a 79 s stop to fix the scheduler input (see the validation record) |
+| `./demo.sh build-frontend` | 16:24:12 | 16:31:23 | 7 min 11 s | Cold buildx cache, native linux/arm64; ran alongside `apply` |
+| `./demo.sh deploy` | 16:38:40 | 16:41:00 | 2 min 20 s | Collector schema seed plus first image pulls |
+| `./demo.sh down` | 16:44:56 | 16:46:29 | 1 min 33 s | `helm uninstall`, namespaces, node group to 0 |
+| `./demo.sh up` | 16:54:06 | 16:56:33 | 2 min 27 s | Scale to 2, nodes Ready in about 60 s, CoreDNS, full deploy, tunnel |
+
+Telemetry was queryable in ClickHouse Cloud within three minutes of the
+storefront opening (`./demo.sh verify` at 16:44:15 showed 14 858 spans, 6 053
+log rows, 47 073 metric rows and 24 replay sessions in the preceding 15
+minutes). From idle to a browsable storefront is therefore under three minutes,
+and the first apply is the only step that takes a quarter of an hour. EC2
+instances linger for a few minutes after `down` returns (the node group update
+is accepted before the instances finish terminating); this is invisible to `up`,
+which waits for exactly `node_count` nodes whose status is `Ready`.

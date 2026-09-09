@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Create or update the AWS infrastructure: VPC, EKS cluster, node group, ECR
-# repository and the nightly scale-down schedule.
+# Create or update the AWS infrastructure: EKS cluster, node group, ECR
+# repository and the nightly scale-down schedule, in the account default VPC
+# (a dedicated VPC is created only when use_default_vpc = false).
 #
 #   ./demo.sh apply          show the plan and ask before applying
 #   ./demo.sh apply --yes    apply without the confirmation prompt
