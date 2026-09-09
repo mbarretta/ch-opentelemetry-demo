@@ -20,9 +20,10 @@ module "eks" {
   name               = var.name
   kubernetes_version = var.kubernetes_version
 
-  vpc_id                   = module.vpc.vpc_id
-  subnet_ids               = module.vpc.public_subnets
-  control_plane_subnet_ids = module.vpc.public_subnets
+  # Default VPC or dedicated module, per use_default_vpc; resolved in vpc.tf.
+  vpc_id                   = local.vpc_id
+  subnet_ids               = local.subnet_ids
+  control_plane_subnet_ids = local.subnet_ids
 
   # The module defaults to a private-only endpoint; presenters reach the API
   # from their laptops, so the public endpoint is on (IAM-authenticated).
@@ -83,7 +84,7 @@ module "eks" {
       max_size     = var.node_count
       desired_size = var.node_count
 
-      subnet_ids = module.vpc.public_subnets
+      subnet_ids = local.subnet_ids
 
       block_device_mappings = {
         xvda = {

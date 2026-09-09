@@ -21,7 +21,8 @@ Run `./demo.sh` with no subcommand to list what it can do.
          │
          │  EKS public API endpoint (IAM-authenticated, TLS)
          ▼
- AWS us-east-1  ── VPC 10.20.0.0/16, two PUBLIC subnets, no NAT gateway ──────────
+ AWS us-east-1  ── default VPC 172.31.0.0/16, two default PUBLIC subnets, no NAT gateway
+ │                (dedicated 10.20.0.0/16 VPC optional: use_default_vpc = false)
  │
  │  EKS control plane "otel-demo-eks" (Kubernetes 1.36, always on)
  │  managed node group "demo": 0 nodes idle, 2 × m7g.xlarge (Graviton) when up
@@ -51,6 +52,7 @@ all four.
 | --- | --- |
 | **Private access, `kubectl port-forward` only** (no LoadBalancer, Ingress or NodePort) | Anyone with the AWS profile can open the tunnel, nobody else can reach the storefront at all, and there is no load balancer or public endpoint to secure or pay for. |
 | **Public subnets, no NAT gateway** | ClickHouse Cloud accepts connections from any IP and nothing inbound reaches the nodes, so a NAT gateway (hourly plus per-GB) would be pure cost; nodes get public IPs (`map_public_ip_on_launch`) and egress directly through the internet gateway. |
+| **Run in the account default VPC** (`use_default_vpc = true`) | The account's us-east-1 VPC quota is used up by other teams' VPCs, so the cluster uses the default VPC's public subnets instead of creating its own; that also means no NAT gateway to add and nothing network-side to delete on teardown. OpenTofu only *reads* the default VPC and subnets (data sources, no `aws_default_*` resources), so it can never modify or destroy them. Set `use_default_vpc = false` in an account with headroom for a dedicated 10.20.0.0/16 VPC. |
 | **Graviton (arm64) nodes** | The session-replay frontend image is built on the Mac with `docker buildx`, and `linux/arm64` builds natively on Apple Silicon (no QEMU emulation); m7g is also cheaper than the x86 equivalent. |
 | **Scale to zero instead of destroy** | The EKS control plane is the slow part of `apply`, so keeping it (about $73/month) turns "stand the demo up" into scaling a node group rather than rebuilding a cluster; `destroy` is still there for when the demo is really over. |
 | **OpenTofu, remote state in S3** | The control plane is long-lived and costs money; state on one laptop could orphan it, and a second presenter could not `up`/`down` without it. The bucket is versioned so a clobbered state file can be restored. |
@@ -79,7 +81,7 @@ On the Mac:
 
 | Tool | Notes |
 | --- | --- |
-| `aws` CLI v2 | With an IAM Identity Center profile: `aws configure sso --profile <name>`. The permission set needs to create VPC, EC2, EKS, ECR, IAM roles, S3 and EventBridge Scheduler resources (an administrator-style set is the practical answer). |
+| `aws` CLI v2 | With an IAM Identity Center profile: `aws configure sso --profile <name>`. The permission set needs to create EC2, EKS, ECR, IAM roles, S3 and EventBridge Scheduler resources, plus VPC when `use_default_vpc = false`; an administrator-style set is the practical answer. |
 | OpenTofu >= 1.10 | `brew install opentofu`. `tofu` is the only IaC binary used; terraform and eksctl are not needed. |
 | Docker with buildx | Docker Desktop or equivalent. `build-frontend` runs on the Mac and pushes to ECR; on Apple Silicon the `linux/arm64` build is native. |
 | `kubectl` | Within one minor version of the cluster (1.36). |
@@ -125,7 +127,7 @@ Four commands, in order. Only the first two ask you anything.
 
 ```sh
 ./demo.sh init            # tools, SSO login, state bucket, tofu init, helm repo
-./demo.sh apply           # VPC + EKS + node group + ECR + schedule; asks before applying
+./demo.sh apply           # EKS + node group + ECR + schedule in the default VPC; asks first
 ./demo.sh build-frontend  # build the session-replay frontend image on the Mac, push to ECR
 ./demo.sh deploy          # collector + demo chart + tunnel; prints http://localhost:8080
 ```
@@ -141,7 +143,10 @@ Four commands, in order. Only the first two ask you anything.
   (context `otel-demo-eks`), prints `tofu output` and the next steps. Copy
   `tofu/terraform.tfvars.example` to `tofu/terraform.tfvars` first if you want
   a different `scale_down_hour`/`scale_down_timezone`, instance type, node
-  count, API CIDR allow-list or extra cluster admins.
+  count, API CIDR allow-list, extra cluster admins, or a dedicated VPC instead
+  of the account default one (`use_default_vpc = false`; decide before the
+  first apply, since a cluster cannot move between VPCs and changing it later
+  means `./demo.sh destroy` and a fresh apply).
 - `build-frontend` clones the demo source at the pinned commit (blobless, into
   the gitignored `opentelemetry-demo/`), applies
   `patches/frontend-session-replay.patch`, logs Docker in to ECR and runs
@@ -206,7 +211,7 @@ from a fresh shell.
 | Subcommand | Purpose | Flags |
 | --- | --- | --- |
 | `init` | One-time host and account setup: check tools, SSO login, create the versioned state bucket, `tofu init` with the S3 backend, add the `open-telemetry` Helm repo, warn about missing `envvars.*`. Idempotent. | |
-| `apply` | `tofu apply`: VPC, EKS cluster, node group, ECR repository, nightly schedule. Then kubeconfig, `kubectl get nodes`, `tofu output`. | `--yes` apply without the confirmation prompt |
+| `apply` | `tofu apply`: EKS cluster, node group, ECR repository, nightly schedule, in the account default VPC (or a dedicated VPC with `use_default_vpc = false`). Then kubeconfig, `kubectl get nodes`, `tofu output`. | `--yes` apply without the confirmation prompt |
 | `build-frontend` | Clone the demo at `d6fd782e`, apply the session-replay patch, `docker buildx build --push` the frontend to ECR under the deterministic tag. Skips the build if the tag is already in ECR. | `--force` build and push even if the tag exists |
 | `deploy` | Namespaces, Secrets from `envvars.clickhouse`, ClickStack collector, `helm upgrade --install` of the demo with the ECR image, then open the tunnel. Builds the image if ECR lacks it. Refuses on zero nodes. | |
 | `up` | Scale the node group to `node_count`, wait for Ready nodes and CoreDNS, then `deploy`. | |
@@ -234,7 +239,7 @@ credentials or cluster; run it after editing anything.
 | `scripts/lib/aws.sh` | `aws_login` (SSO), `tf_out` (OpenTofu outputs), node-group scaling. |
 | `scripts/lib/k8s.sh` | `kubeconfig`, `wait_nodes_ready`, the tunnel loop. |
 | `scripts/check.sh` | Offline verification (see above). |
-| `tofu/` | OpenTofu: VPC (`vpc.tf`), EKS + node group (`eks.tf`), ECR (`ecr.tf`), nightly schedule (`scheduler.tf`), S3 backend with no account values (`backend.tf`), variables, outputs, `terraform.tfvars.example`, committed lock file. |
+| `tofu/` | OpenTofu: network (`vpc.tf`: default-VPC lookup, or the dedicated-VPC module behind `use_default_vpc = false`), EKS + node group (`eks.tf`), ECR (`ecr.tf`), nightly schedule (`scheduler.tf`), S3 backend with no account values (`backend.tf`), variables, outputs, `terraform.tfvars.example`, committed lock file. |
 | `k8s/demo-values.yaml` | Static Helm values for the demo chart: backends off, gateway collector → ClickStack with the token from a Secret, frontend env for session replay. The ECR image arrives via `--set`. |
 | `k8s/clickstack-collector.yaml` | Namespace, Deployment and Service for the ClickStack collector; credentials come from the Secret `deploy` creates. |
 | `patches/frontend-session-replay.patch` | Adds the ClickStack browser SDK to the demo frontend (identical to the workshop's). |
@@ -454,30 +459,50 @@ for lt in $(aws ec2 describe-launch-templates --filters Name=tag:Project,Values=
   aws ec2 delete-launch-template --launch-template-id "$lt"
 done
 
-# 6. The VPC: security groups (the module's cluster and node groups reference
-#    each other, so revoke their ingress rules first), subnets, internet
-#    gateway, route tables, then the VPC itself
-VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=otel-demo-eks --query 'Vpcs[0].VpcId' --output text)
-SGS=$(aws ec2 describe-security-groups --filters Name=vpc-id,Values="$VPC_ID" \
-  --query "SecurityGroups[?GroupName!='default'].GroupId" --output text)
+# 6. The security groups the EKS module created: the additional cluster SG and
+#    the node SG (named otel-demo-eks-*) and the EKS-owned cluster SG (tagged
+#    kubernetes.io/cluster/otel-demo-eks). They reference each other, so revoke
+#    ingress rules first. With use_default_vpc = true (the default) this is ALL
+#    the network cleanup: the demo ran in the account default VPC, which
+#    OpenTofu never created. NEVER delete the default VPC, its subnets, its
+#    internet gateway, its route table or its default security group; they are
+#    shared with everything else in the account.
+SGS=$( {
+  aws ec2 describe-security-groups --filters "Name=tag-key,Values=kubernetes.io/cluster/$CLUSTER" \
+    --query "SecurityGroups[?GroupName!='default'].GroupId" --output text
+  aws ec2 describe-security-groups --filters "Name=group-name,Values=$CLUSTER-*" \
+    --query "SecurityGroups[?GroupName!='default'].GroupId" --output text
+} | tr '\t' '\n' | sort -u)
 for sg in $SGS; do
   rules=$(aws ec2 describe-security-group-rules --filters Name=group-id,Values="$sg" \
     --query "SecurityGroupRules[?IsEgress==\`false\`].SecurityGroupRuleId" --output text)
   [ -n "$rules" ] && aws ec2 revoke-security-group-ingress --group-id "$sg" --security-group-rule-ids $rules
 done
 for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg"; done
-for s in $(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC_ID" --query 'Subnets[].SubnetId' --output text); do
-  aws ec2 delete-subnet --subnet-id "$s"
-done
-IGW=$(aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values="$VPC_ID" \
-  --query 'InternetGateways[0].InternetGatewayId' --output text)
-aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$VPC_ID"
-aws ec2 delete-internet-gateway --internet-gateway-id "$IGW"
-for rt in $(aws ec2 describe-route-tables --filters Name=vpc-id,Values="$VPC_ID" \
-    --query "RouteTables[?Associations[0].Main!=\`true\`].RouteTableId" --output text); do
-  aws ec2 delete-route-table --route-table-id "$rt"
-done
-aws ec2 delete-vpc --vpc-id "$VPC_ID"
+
+# 7. ONLY if the cluster was applied with use_default_vpc = false: the dedicated
+#    VPC (tag Name=otel-demo-eks, never the default one) and what the vpc module
+#    put in it. The lookup excludes the default VPC explicitly and the `if`
+#    stops when nothing matches, so this block cannot fall through to deleting
+#    the account default VPC.
+VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=otel-demo-eks Name=is-default,Values=false \
+  --query 'Vpcs[0].VpcId' --output text)
+if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
+  for s in $(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC_ID" --query 'Subnets[].SubnetId' --output text); do
+    aws ec2 delete-subnet --subnet-id "$s"
+  done
+  IGW=$(aws ec2 describe-internet-gateways --filters Name=attachment.vpc-id,Values="$VPC_ID" \
+    --query 'InternetGateways[0].InternetGatewayId' --output text)
+  aws ec2 detach-internet-gateway --internet-gateway-id "$IGW" --vpc-id "$VPC_ID"
+  aws ec2 delete-internet-gateway --internet-gateway-id "$IGW"
+  for rt in $(aws ec2 describe-route-tables --filters Name=vpc-id,Values="$VPC_ID" \
+      --query "RouteTables[?Associations[0].Main!=\`true\`].RouteTableId" --output text); do
+    aws ec2 delete-route-table --route-table-id "$rt"
+  done
+  aws ec2 delete-vpc --vpc-id "$VPC_ID"
+else
+  echo "no dedicated VPC tagged Name=otel-demo-eks; nothing more to delete (default VPC left alone)"
+fi
 ```
 
 A `DependencyViolation` on a security group means a rule somewhere still

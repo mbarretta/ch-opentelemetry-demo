@@ -16,6 +16,20 @@ variable "kubernetes_version" {
   default     = "1.36"
 }
 
+# --- network -------------------------------------------------------------------
+
+variable "use_default_vpc" {
+  description = "Run in the account's default VPC (read with data sources, never managed or deleted) instead of creating a dedicated 10.20.0.0/16 VPC. Default true because us-east-1 in the demo account is at its VPC quota; set false in an account with headroom to get an isolated VPC that `tofu destroy` removes."
+  type        = bool
+  default     = true
+}
+
+variable "eks_excluded_azs" {
+  description = "Availability Zone names never used for the cluster or its subnets. us-east-1e cannot host an EKS control plane (UnsupportedAvailabilityZoneException); add any AZ that lacks a default subnet in your account."
+  type        = list(string)
+  default     = ["us-east-1e"]
+}
+
 # --- node group ----------------------------------------------------------------
 #
 # ami_type, instance_type and node_platform move together: the frontend image
