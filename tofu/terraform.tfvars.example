@@ -1,0 +1,21 @@
+# Copy to tofu/terraform.tfvars (gitignored) and edit. Every variable has a
+# default (see variables.tf); this file only shows the ones people change.
+
+# Local time at which the nightly schedule scales the node group to 0.
+scale_down_hour     = 23
+scale_down_timezone = "America/New_York"
+
+# Narrow the public EKS API endpoint to your egress IPs when you know them.
+endpoint_public_access_cidrs = ["0.0.0.0/0"]
+
+# Node shape. Cheaper: "m7g.large" (slower startup). x86 instead of Graviton:
+# instance_type = "m7i.xlarge", ami_type = "AL2023_x86_64_STANDARD",
+# node_platform = "linux/amd64".
+instance_type = "m7g.xlarge"
+node_count    = 2
+
+# Teammates' IAM principals (for example SSO permission-set role ARNs) that
+# should be cluster admins alongside whoever runs `tofu apply`.
+extra_admin_principal_arns = [
+  # "arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_<PermissionSet>_<hash>",
+]
