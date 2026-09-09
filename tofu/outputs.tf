@@ -1,5 +1,6 @@
 # Read by scripts/lib/aws.sh via `tofu -chdir=tofu output -raw <name>`; every
-# value here must therefore be a string, number or bool.
+# value the scripts read must therefore be a string, number or bool. subnet_ids
+# is the one list: it is for humans and `tofu output -json`, not for tf_out.
 
 output "region" {
   description = "AWS region."
@@ -49,4 +50,14 @@ output "scheduler_name" {
 output "kubeconfig_command" {
   description = "Command that writes a kubeconfig entry for the cluster."
   value       = "aws eks update-kubeconfig --region ${var.region} --name ${module.eks.cluster_name}"
+}
+
+output "vpc_id" {
+  description = "VPC the cluster runs in: the account default VPC, or the dedicated one when use_default_vpc = false."
+  value       = local.vpc_id
+}
+
+output "subnet_ids" {
+  description = "Public subnets (one per chosen AZ) used by the control plane and the node group."
+  value       = local.subnet_ids
 }
