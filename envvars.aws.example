@@ -1,0 +1,9 @@
+# AWS access for the demo. Copy to envvars.aws (gitignored). Sourced by the
+# scripts, so plain KEY=VALUE lines.
+
+# An IAM Identity Center (SSO) profile. Create one with:
+#   aws configure sso --profile <name>
+AWS_PROFILE=
+# Everything is deployed in one region; us-east-1 unless you also change
+# tofu/terraform.tfvars.
+AWS_REGION=us-east-1

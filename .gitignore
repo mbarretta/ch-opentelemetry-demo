@@ -1,0 +1,9 @@
+envvars.clickhouse
+envvars.aws
+opentelemetry-demo/
+.run/
+tofu/.terraform/
+tofu/*.tfstate
+tofu/*.tfstate.*
+tofu/terraform.tfvars
+.DS_Store
