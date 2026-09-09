@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Tear everything down: workloads, node group, cluster, VPC, ECR repository and
-# the nightly schedule. This is the end of the demo, not the nightly idle
-# state -- for that use ./demo.sh down.
+# Tear everything down: workloads, node group, cluster, ECR repository, the
+# nightly schedule and, only when use_default_vpc = false, the dedicated VPC
+# (the account default VPC is never touched). This is the end of the demo, not
+# the nightly idle state -- for that use ./demo.sh down.
 #
 #   ./demo.sh destroy                 tofu destroy (asks for confirmation)
 #   ./demo.sh destroy --purge-state   ... and then delete the state bucket too

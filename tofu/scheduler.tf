@@ -58,14 +58,18 @@ resource "aws_scheduler_schedule" "nightly_scale_down" {
     arn      = "arn:aws:scheduler:::aws-sdk:eks:updateNodegroupConfig"
     role_arn = aws_iam_role.scheduler.arn
 
-    # The EKS UpdateNodegroupConfig request body, camelCase as the API expects.
+    # The EKS UpdateNodegroupConfig request parameters. Universal targets take
+    # them in the SDK's PascalCase shape (ClusterName, ScalingConfig.MinSize),
+    # not the camelCase of the REST body: CreateSchedule rejects the latter with
+    # "Request payload is missing the following field(s): ClusterName,
+    # NodegroupName" (seen live on 2026-09-09).
     input = jsonencode({
-      clusterName   = module.eks.cluster_name
-      nodegroupName = local.nodegroup_name
-      scalingConfig = {
-        minSize     = 0
-        maxSize     = var.node_count
-        desiredSize = 0
+      ClusterName   = module.eks.cluster_name
+      NodegroupName = local.nodegroup_name
+      ScalingConfig = {
+        MinSize     = 0
+        MaxSize     = var.node_count
+        DesiredSize = 0
       }
     })
 
