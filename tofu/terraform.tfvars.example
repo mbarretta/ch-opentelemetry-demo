@@ -16,7 +16,12 @@ eks_excluded_azs = ["us-east-1e"]
 scale_down_hour     = 23
 scale_down_timezone = "America/New_York"
 
-# Narrow the public EKS API endpoint to your egress IPs when you know them.
+# Source addresses allowed to reach the public EKS API endpoint. The default
+# admits any source address; IAM authentication still applies, so an unknown
+# caller reaches the TLS endpoint but not the cluster. Narrow it to your own
+# egress IP when you can (`curl -s https://checkip.amazonaws.com` prints it;
+# one /32 per address, one entry per office or VPN exit):
+# endpoint_public_access_cidrs = ["203.0.113.7/32"]
 endpoint_public_access_cidrs = ["0.0.0.0/0"]
 
 # Node shape. Cheaper: "m7g.large" (slower startup). x86 instead of Graviton:
