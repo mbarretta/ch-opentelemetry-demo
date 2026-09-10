@@ -28,6 +28,8 @@ case "${1:-}" in
 esac
 [[ $# -le 1 ]] || usage
 
+need aws tofu kubectl helm
+
 # Local only, and a no-op when nothing is running.
 tunnel_stop
 

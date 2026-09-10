@@ -17,6 +17,8 @@ if [[ $# -gt 0 ]]; then
   exit 1
 fi
 
+need aws tofu kubectl helm curl
+
 aws_login
 
 log "identity"

@@ -28,6 +28,8 @@ case "${1:-}" in
 esac
 [[ $# -le 1 ]] || usage
 
+need aws tofu kubectl
+
 # `tofu apply` on an uninitialised backend fails with a generic message; the
 # fix is always the same, so name it. The backend-state file is the marker:
 # tofu/.terraform/ alone also appears after check.sh's `init -backend=false`.

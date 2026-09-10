@@ -29,6 +29,10 @@ case "${1:-}" in
 esac
 [[ $# -le 1 ]] || usage
 
+# kubectl and helm are not listed: only the courtesy down.sh below uses them,
+# it guards itself, and its failure is tolerated.
+need aws tofu jq
+
 # Delete every object version and delete marker, then the bucket. Versioning
 # is on (init.sh), so a plain `aws s3 rm --recursive` would leave the old
 # versions behind and delete-bucket would fail with BucketNotEmpty.

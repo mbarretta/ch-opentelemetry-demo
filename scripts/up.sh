@@ -17,6 +17,10 @@ if [[ $# -gt 0 ]]; then
   exit 1
 fi
 
+# helm is deploy's, not this script's, but deploy runs only after the nodes
+# are up and billing; better to learn it is missing before scaling.
+need aws tofu kubectl helm
+
 aws_login
 kubeconfig
 
