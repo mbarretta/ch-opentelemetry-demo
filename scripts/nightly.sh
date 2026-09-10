@@ -26,6 +26,8 @@ case "${1:-}" in
 esac
 [[ $# -eq 1 ]] || usage
 
+need aws tofu jq
+
 aws_login
 
 NAME="$(tf_out scheduler_name)"
