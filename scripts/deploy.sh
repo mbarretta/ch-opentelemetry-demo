@@ -76,13 +76,12 @@ fi
 ECR_REPO_URL="$(tf_out ecr_repository_url)"
 
 log "installing the OpenTelemetry demo (chart $CHART_VERSION)"
-helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null
-helm repo update open-telemetry >/dev/null
+helm_repo_ensure
 # Helm 4's --wait uses the kstatus watcher, which is stricter than Helm 3's
 # readiness poll (it also waits on Jobs and custom resources). If it ever
 # stalls on a resource that is in fact fine, `--wait=legacy` restores the old
 # behaviour. --timeout 20m covers the first-time image pulls on fresh nodes.
-helm upgrade --install "$RELEASE" open-telemetry/opentelemetry-demo --version "$CHART_VERSION" \
+helm upgrade --install "$RELEASE" "$HELM_REPO_NAME/opentelemetry-demo" --version "$CHART_VERSION" \
   -n "$NS_DEMO" -f k8s/demo-values.yaml \
   --set components.frontend.imageOverride.repository="$ECR_REPO_URL" \
   --set components.frontend.imageOverride.tag="$TAG" \
