@@ -55,10 +55,13 @@ kubectl -n "$NS_CS" logs deploy/clickstack-otel-collector --tail=40
 
 # The demo's gateway collector authenticates to the ClickStack collector with
 # this token; k8s/demo-values.yaml injects it with extraEnvsFrom and
-# ${env:OTLP_AUTH_TOKEN}, so the token never appears in the chart values.
+# ${env:OTLP_AUTH_TOKEN}, so the token never appears in the chart values. It is
+# fed to kubectl on stdin rather than as a flag value, so it never appears on a
+# command line either (argv is readable by every local user via ps).
+# printf '%s' adds no trailing newline: the stored value is exactly the token.
 log "creating Secret $NS_DEMO/clickstack-otlp-token"
-kubectl -n "$NS_DEMO" create secret generic clickstack-otlp-token \
-  --from-literal=OTLP_AUTH_TOKEN="$OTLP_AUTH_TOKEN" --dry-run=client -o yaml | kubectl apply -f -
+printf '%s' "$OTLP_AUTH_TOKEN" | kubectl -n "$NS_DEMO" create secret generic clickstack-otlp-token \
+  --from-file=OTLP_AUTH_TOKEN=/dev/stdin --dry-run=client -o yaml | kubectl apply -f -
 
 # Session replay is unconditional: the upstream frontend image has no ClickStack
 # browser SDK in its bundle and no runtime hook to add one, so the patched image
@@ -92,8 +95,8 @@ helm upgrade --install "$RELEASE" "$HELM_REPO_NAME/opentelemetry-demo" --version
 tunnel_start || true
 
 echo
-echo "Storefront:      http://localhost:8080"
-echo "Feature flags:   http://localhost:8080/feature/"
-echo "Load generator:  http://localhost:8080/loadgen/"
+echo "Storefront:      $TUNNEL_URL"
+echo "Feature flags:   ${TUNNEL_URL}feature/"
+echo "Load generator:  ${TUNNEL_URL}loadgen/"
 echo
 echo "Check telemetry is landing with ./demo.sh verify; reopen the tunnel with ./demo.sh tunnel."
