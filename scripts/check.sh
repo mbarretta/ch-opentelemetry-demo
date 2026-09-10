@@ -45,11 +45,7 @@ fi
 # --- opentofu ------------------------------------------------------------------
 
 if compgen -G "tofu/*.tf" >/dev/null; then
-  # Providers are large (the AWS provider alone is several hundred MB); cache
-  # them across runs and worktrees.
-  export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
-  mkdir -p "$TF_PLUGIN_CACHE_DIR"
-
+  # TF_PLUGIN_CACHE_DIR is exported by scripts/lib/common.sh.
   step "tofu fmt -check"
   tofu -chdir=tofu fmt -check
   step "tofu init -backend=false"
@@ -82,13 +78,11 @@ fi
 # --- helm values ---------------------------------------------------------------
 
 if [[ -f k8s/demo-values.yaml ]]; then
-  step "helm template $RELEASE open-telemetry/opentelemetry-demo --version $CHART_VERSION"
-  if ! helm repo list -o json 2>/dev/null | jq -e 'map(select(.name == "open-telemetry")) | length > 0' >/dev/null; then
-    helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts >/dev/null
-  fi
+  step "helm template $RELEASE $HELM_REPO_NAME/opentelemetry-demo --version $CHART_VERSION"
+  helm_repo_ensure
   # The real repository and tag are account-specific `--set`s at deploy time;
   # any non-empty pair lets the chart render here.
-  helm template "$RELEASE" open-telemetry/opentelemetry-demo --version "$CHART_VERSION" \
+  helm template "$RELEASE" "$HELM_REPO_NAME/opentelemetry-demo" --version "$CHART_VERSION" \
     -f k8s/demo-values.yaml \
     --set components.frontend.imageOverride.repository=example/frontend \
     --set components.frontend.imageOverride.tag=check >/dev/null

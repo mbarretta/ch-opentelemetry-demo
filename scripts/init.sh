@@ -66,11 +66,7 @@ aws s3api put-public-access-block --bucket "$BUCKET" \
 
 # backend.tf declares `backend "s3"` with no bucket/key/region, so the
 # account-specific values never land in the repo; they are supplied here.
-# Same provider cache as scripts/check.sh, so the AWS provider is downloaded
-# once per machine rather than once per checkout.
-export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
-mkdir -p "$TF_PLUGIN_CACHE_DIR"
-
+# TF_PLUGIN_CACHE_DIR (shared with scripts/check.sh) comes from lib/common.sh.
 log "tofu init (backend s3://$BUCKET/otel-demo-eks/terraform.tfstate)"
 tofu -chdir=tofu init -input=false \
   -backend-config="bucket=$BUCKET" \
@@ -79,12 +75,8 @@ tofu -chdir=tofu init -input=false \
 
 # --- helm ----------------------------------------------------------------------
 
-# --force-update makes a re-run a no-op instead of "repository name already
-# exists"; it also repairs the URL if it was ever added differently.
-log "helm repo open-telemetry"
-helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts \
-  --force-update >/dev/null
-helm repo update open-telemetry >/dev/null
+log "helm repo $HELM_REPO_NAME"
+helm_repo_ensure
 
 # --- local config --------------------------------------------------------------
 

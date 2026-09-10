@@ -6,7 +6,8 @@
 #   . scripts/lib/aws.sh     # when the script talks to AWS
 #   . scripts/lib/k8s.sh     # when it talks to the cluster
 #
-# The callers own `set -euo pipefail`; this file only defines things.
+# The callers own `set -euo pipefail`; this file only defines things, apart
+# from creating the two scratch directories below (RUN_DIR, TF_PLUGIN_CACHE_DIR).
 
 # --- output --------------------------------------------------------------------
 
@@ -36,12 +37,20 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 RUN_DIR="$REPO_ROOT/.run"
 mkdir -p "$RUN_DIR"
 
+# OpenTofu providers are large (the AWS provider alone is several hundred MB);
+# cache them across runs and worktrees so they download once per machine rather
+# than once per checkout. Exported here so check.sh and init.sh share one cache.
+export TF_PLUGIN_CACHE_DIR="${TF_PLUGIN_CACHE_DIR:-$HOME/.terraform.d/plugin-cache}"
+mkdir -p "$TF_PLUGIN_CACHE_DIR"
+
 # --- constants -----------------------------------------------------------------
 
 # Chart and demo source are pinned together: the session-replay patch is
 # generated against DEMO_REF, and a chart bump can move the frontend image the
 # patch expects. Re-check `git apply --check` when bumping either.
 CHART_VERSION=0.41.0
+HELM_REPO_NAME=open-telemetry
+HELM_REPO_URL=https://open-telemetry.github.io/opentelemetry-helm-charts
 RELEASE=otel-demo
 NS_DEMO=otel-demo
 NS_CS=clickstack
@@ -75,6 +84,17 @@ load_aws_env() {
   # shellcheck disable=SC1090
   . "$f"
   set +a
+}
+
+# --- helm ----------------------------------------------------------------------
+
+# Register the demo chart repository and refresh its index. --force-update makes
+# a re-run a no-op instead of "repository name already exists", and it repairs
+# the URL when a presenter already has "open-telemetry" registered pointing
+# somewhere else -- the case where a bare `helm repo add` exits non-zero.
+helm_repo_ensure() {
+  helm repo add "$HELM_REPO_NAME" "$HELM_REPO_URL" --force-update >/dev/null
+  helm repo update "$HELM_REPO_NAME" >/dev/null
 }
 
 # --- frontend image ------------------------------------------------------------
