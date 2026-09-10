@@ -146,7 +146,15 @@ Four commands, in order. Only the first two ask you anything.
   count, API CIDR allow-list, extra cluster admins, or a dedicated VPC instead
   of the account default one (`use_default_vpc = false`; decide before the
   first apply, since a cluster cannot move between VPCs and changing it later
-  means `./demo.sh destroy` and a fresh apply).
+  means `./demo.sh destroy` and a fresh apply). When you know your egress IP
+  (`curl -s https://checkip.amazonaws.com`), set `endpoint_public_access_cidrs`
+  to that `/32` in `tofu/terraform.tfvars`: the default admits any source
+  address, IAM-authenticated. EKS control-plane logging is off
+  (`enabled_log_types = []` in `tofu/eks.tf`, to avoid CloudWatch Logs
+  charges); listing `"audit"` (and optionally `"api"`, `"authenticator"`) there
+  turns it on, and setting `create_cloudwatch_log_group = true` beside it lets
+  the module own the log group and its retention instead of EKS creating one
+  that never expires.
 - `build-frontend` clones the demo source at the pinned commit (blobless, into
   the gitignored `opentelemetry-demo/`), applies
   `patches/frontend-session-replay.patch`, logs Docker in to ECR and runs
