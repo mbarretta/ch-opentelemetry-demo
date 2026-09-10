@@ -3,7 +3,7 @@
 A standing instance of the OpenTelemetry demo application on an AWS EKS cluster,
 shipping traces, logs, metrics and session replay to a managed ClickStack
 service on ClickHouse Cloud. It is the cloud counterpart of the laptop workshop
-in `../observability-workshop/`: same ClickHouse service, same collector wiring,
+in `../202609-offsite-workshop/observability-workshop/`: same ClickHouse service, same collector wiring,
 same Helm values and feature-flag exercise, but reachable by anyone with the AWS
 profile rather than tied to one Mac. Between demos the node group scales to
 zero and only the EKS control plane is billed; `./demo.sh up` brings the whole
@@ -361,7 +361,7 @@ under an existing tag is actually pulled; ECR tags are `MUTABLE` for the same
 reason.
 
 To reuse a checkout you already have instead of cloning a new one, point
-`DEMO_DIR` at it (`DEMO_DIR=../observability-workshop/opentelemetry-demo
+`DEMO_DIR` at it (`DEMO_DIR=../202609-offsite-workshop/observability-workshop/opentelemetry-demo
 ./demo.sh build-frontend`); a checkout without the SDK wiring gets the patch
 applied. To move to a newer demo commit, change `DEMO_REF` in
 `scripts/lib/common.sh`, remove `opentelemetry-demo/` and run

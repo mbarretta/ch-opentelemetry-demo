@@ -44,7 +44,7 @@ esac
 need aws tofu docker git
 
 # The demo source checkout. Gitignored; overridable to reuse an existing one
-# (for example DEMO_DIR=../observability-workshop/opentelemetry-demo).
+# (for example DEMO_DIR=../202609-offsite-workshop/observability-workshop/opentelemetry-demo).
 DEMO_DIR="${DEMO_DIR:-opentelemetry-demo}"
 DEMO_REPO=https://github.com/open-telemetry/opentelemetry-demo.git
 
