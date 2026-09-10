@@ -90,8 +90,7 @@ export AWS_REGION
 TAG="$(frontend_tag)"
 IMAGE="$ECR_REPO_URL:$TAG"
 
-if [[ "$FORCE" == false ]] && aws ecr describe-images --repository-name "$ECR_REPO_NAME" \
-     --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+if [[ "$FORCE" == false ]] && ecr_has_image "$TAG"; then
   log "$IMAGE is already in ECR; nothing to build (use --force to rebuild)"
   exit 0
 fi

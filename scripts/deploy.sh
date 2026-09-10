@@ -65,8 +65,7 @@ kubectl -n "$NS_DEMO" create secret generic clickstack-otlp-token \
 # is a prerequisite. Its tag is a pure function of the pinned demo commit and
 # the patch, so "does ECR hold that tag" is the whole up-to-date check.
 TAG="$(frontend_tag)"
-if aws ecr describe-images --repository-name "$ECR_REPO_NAME" \
-     --image-ids imageTag="$TAG" >/dev/null 2>&1; then
+if ecr_has_image "$TAG"; then
   log "frontend image $ECR_REPO_NAME:$TAG is in ECR"
 else
   log "frontend image $ECR_REPO_NAME:$TAG is not in ECR; building it (first run is slow)"

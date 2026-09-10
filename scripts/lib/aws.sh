@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# AWS helpers: SSO login, OpenTofu outputs, node-group scaling.
+# AWS helpers: SSO login, state bucket name, OpenTofu outputs, ECR image probe,
+# node-group scaling.
 # Source after lib/common.sh. Callers own `set -euo pipefail`.
 
 # Establish an authenticated session for the IAM Identity Center profile named
@@ -30,6 +31,20 @@ aws_login() {
   fi
 }
 
+# --- state bucket --------------------------------------------------------------
+
+# state_bucket -- print the name of the OpenTofu state bucket. One bucket per
+# account, deterministic, so destroy --purge-state (and a presenter on another
+# laptop) can find it without any local state. Needs a session (aws_login first).
+state_bucket() {
+  # A failed lookup must not become an empty suffix: the assignment is separate
+  # from `local` (whose own status is always 0) and returns aws's status
+  # explicitly, so it holds even where the caller's set -e is suspended.
+  local account
+  account="$(aws sts get-caller-identity --query Account --output text)" || return
+  printf 'otel-demo-eks-tfstate-%s\n' "$account"
+}
+
 # tf_out <name> -- one OpenTofu output, raw. The state lives in the S3 backend
 # configured by init, so this needs a working AWS session (aws_login first).
 tf_out() {
@@ -45,6 +60,16 @@ tf_out() {
   fi
   rm -f "$err"
   printf '%s\n' "$v"
+}
+
+# --- ecr -----------------------------------------------------------------------
+
+# ecr_has_image <tag> -- 0 iff the frontend repository holds an image with that
+# tag. Output is discarded: callers want only the yes/no, and a missing tag is
+# an ImageNotFoundException, the normal "no" rather than an error worth showing.
+ecr_has_image() {
+  aws ecr describe-images --repository-name "$ECR_REPO_NAME" \
+    --image-ids imageTag="$1" >/dev/null 2>&1
 }
 
 # --- managed node group --------------------------------------------------------

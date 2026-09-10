@@ -50,7 +50,7 @@ tunnel_status || true
 
 log "frontend image in ECR"
 TAG="$(frontend_tag)"
-if aws ecr describe-images --repository-name "$ECR_REPO_NAME" --image-ids "imageTag=$TAG" >/dev/null 2>&1; then
+if ecr_has_image "$TAG"; then
   echo "    $ECR_REPO_NAME:$TAG present"
 else
   echo "    $ECR_REPO_NAME:$TAG absent (./demo.sh build-frontend)"

@@ -72,9 +72,7 @@ log "tofu destroy"
 tofu -chdir=tofu destroy
 
 if ((PURGE)); then
-  # Same deterministic name init.sh creates, so this works on any laptop.
-  ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-  BUCKET="otel-demo-eks-tfstate-$ACCOUNT_ID"
+  BUCKET="$(state_bucket)"
   if aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
     log "purging state bucket s3://$BUCKET"
     purge_state_bucket "$BUCKET"

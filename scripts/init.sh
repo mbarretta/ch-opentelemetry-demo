@@ -32,13 +32,9 @@ aws_login
 log "authenticated as"
 aws sts get-caller-identity --output table
 
-ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-# One bucket per account, deterministic name so destroy --purge-state (and a
-# presenter on another laptop) can find it without any local state.
-BUCKET="otel-demo-eks-tfstate-$ACCOUNT_ID"
-
 # --- state bucket --------------------------------------------------------------
 
+BUCKET="$(state_bucket)"
 if aws s3api head-bucket --bucket "$BUCKET" >/dev/null 2>&1; then
   log "state bucket s3://$BUCKET already exists"
 else
