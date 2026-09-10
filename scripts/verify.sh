@@ -17,6 +17,13 @@ cd "$(dirname "$0")/.."
 # shellcheck source=scripts/lib/k8s.sh
 . scripts/lib/k8s.sh
 
+usage() {
+  echo "usage: ./demo.sh verify" >&2
+  exit 1
+}
+
+[[ $# -eq 0 ]] || usage
+
 need aws tofu kubectl curl
 load_clickhouse_env
 aws_login

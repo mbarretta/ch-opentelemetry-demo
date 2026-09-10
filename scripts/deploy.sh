@@ -15,12 +15,12 @@ cd "$(dirname "$0")/.."
 . scripts/lib/aws.sh
 . scripts/lib/k8s.sh
 
-usage() { echo "usage: ./demo.sh deploy" >&2; }
-
-if (($# > 0)); then
-  usage
+usage() {
+  echo "usage: ./demo.sh deploy" >&2
   exit 1
-fi
+}
+
+[[ $# -eq 0 ]] || usage
 
 need aws tofu kubectl helm
 

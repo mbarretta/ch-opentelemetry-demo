@@ -29,17 +29,18 @@ cd "$(dirname "$0")/.."
 . scripts/lib/aws.sh
 . scripts/lib/k8s.sh
 
-usage() { echo "usage: ./demo.sh build-frontend [--force]" >&2; }
+usage() {
+  echo "usage: ./demo.sh build-frontend [--force]" >&2
+  exit 1
+}
 
 FORCE=false
 case "${1:-}" in
   "") ;;
   --force) FORCE=true ;;
-  *)
-    usage
-    exit 1
-    ;;
+  *) usage ;;
 esac
+[[ $# -le 1 ]] || usage
 
 need aws tofu docker git
 
