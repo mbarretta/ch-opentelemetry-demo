@@ -23,10 +23,15 @@ aws_login
 kubeconfig
 
 # ClickHouse reads a POST body as the query verbatim, so send it raw rather
-# than form-encoded.
+# than form-encoded. The credentials reach curl through a config file on a
+# process-substitution fd instead of the command line: argv is world-readable
+# via ps for as long as the query runs. Curl's config syntax reads the value
+# as a double-quoted string, so backslashes and double quotes are escaped.
 q() {
+  local user=${CLICKHOUSE_USER//\\/\\\\} pass=${CLICKHOUSE_PASSWORD//\\/\\\\}
+  user=${user//\"/\\\"} pass=${pass//\"/\\\"}
   printf '%s' "$1" | curl -sS --max-time 60 --data-binary @- \
-    "${CLICKHOUSE_ENDPOINT}/" -u "${CLICKHOUSE_USER}:${CLICKHOUSE_PASSWORD}"
+    -K <(printf 'user = "%s:%s"\n' "$user" "$pass") "${CLICKHOUSE_ENDPOINT}/"
 }
 
 DB="$HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE"
