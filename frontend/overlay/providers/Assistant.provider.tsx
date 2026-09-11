@@ -4,12 +4,13 @@
 import { createContext, useCallback, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 } from 'uuid';
-import { getAssistantTransport, isDemoDetailsEnabled, toAssistantError } from '../gateways/Assistant.gateway';
+import { getAssistantTransport, isDemoDetailsEnabled, toAssistantError, UNREACHABLE } from '../gateways/Assistant.gateway';
 import SessionGateway from '../gateways/Session.gateway';
 import {
   ASSISTANT_CONTRACT_VERSION,
   AssistantError,
   AssistantProductRef,
+  FeedbackState,
   PendingTurn,
   TranscriptEntry,
 } from '../types/Assistant';
@@ -31,6 +32,8 @@ interface IContext {
   open(options?: OpenOptions): void;
   close(): void;
   conversationId: string | null;
+  // The contract_version the agent answered with, once a turn has completed.
+  contractVersion: string | null;
   transcript: TranscriptEntry[];
   pending: PendingTurn | null;
   error: AssistantError | null;
@@ -59,6 +62,7 @@ export const Context = createContext<IContext>({
   open: () => {},
   close: () => {},
   conversationId: null,
+  contractVersion: null,
   transcript: [],
   pending: null,
   error: null,
@@ -89,6 +93,7 @@ const AssistantProvider = ({ children }: IProps) => {
   const queryClient = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [contractVersion, setContractVersion] = useState<string | null>(null);
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const [failedTurn, setFailedTurn] = useState<PendingTurn | null>(null);
@@ -123,6 +128,7 @@ const AssistantProvider = ({ children }: IProps) => {
       try {
         const response =
           turn.kind === 'message' ? await transport.sendMessage(turn.request) : await transport.addToCart(turn.request);
+        setContractVersion(response.contract_version);
         if (response.contract_version !== ASSISTANT_CONTRACT_VERSION) {
           throw new AssistantError(
             'contract_mismatch',
@@ -149,6 +155,8 @@ const AssistantProvider = ({ children }: IProps) => {
         setAnnouncement(turn.kind === 'message' ? 'The assistant replied' : `Added ${turn.productName} to your cart`);
       } catch (caught) {
         const failure = toAssistantError(caught);
+        // The agent no longer knows this conversation (idle timeout or restart): the next message starts a new one.
+        if (failure.code === 'expired') setConversationId(null);
         setError(failure);
         setFailedTurn(turn);
         setAnnouncement(failure.message);
@@ -197,7 +205,12 @@ const AssistantProvider = ({ children }: IProps) => {
 
   const addToCart = useCallback(
     async (product: AssistantProductRef, quantity = 1) => {
-      if (pending || !conversationId) return;
+      if (pending) return;
+      if (!conversationId) {
+        // The conversation these cards came from has expired; a cart action needs a live one.
+        setError(new AssistantError('expired', 'This conversation has expired. Ask the assistant again to add a product.', false));
+        return;
+      }
       await run({
         kind: 'action',
         productName: product.name,
@@ -217,21 +230,23 @@ const AssistantProvider = ({ children }: IProps) => {
     async (entryId: string, helpful: boolean) => {
       const entry = transcript.find(candidate => candidate.id === entryId);
       if (!entry || entry.kind !== 'assistant' || entry.feedback) return;
-      const setFeedback = (feedback: 'saved' | 'not_saved' | 'pending') =>
+      const setFeedback = (feedback: FeedbackState, feedbackNote?: string) =>
         setTranscript(entries =>
-          entries.map(candidate => (candidate.id === entryId && candidate.kind === 'assistant' ? { ...candidate, feedback } : candidate))
+          entries.map(candidate =>
+            candidate.id === entryId && candidate.kind === 'assistant' ? { ...candidate, feedback, feedbackNote } : candidate
+          )
         );
       setFeedback('pending');
       try {
-        const { saved } = await getAssistantTransport().submitFeedback({
+        const { saved, message } = await getAssistantTransport().submitFeedback({
           conversation_id: entry.response.conversation_id,
           trace_id: entry.response.trace_id,
           helpful,
         });
-        setFeedback(saved ? 'saved' : 'not_saved');
+        setFeedback(saved ? 'saved' : 'not_saved', saved ? undefined : message);
         setAnnouncement(saved ? 'Feedback saved' : 'Feedback not saved');
       } catch {
-        setFeedback('not_saved');
+        setFeedback('not_saved', UNREACHABLE);
         setAnnouncement('Feedback not saved');
       }
     },
@@ -244,6 +259,7 @@ const AssistantProvider = ({ children }: IProps) => {
       open,
       close,
       conversationId,
+      contractVersion,
       transcript,
       pending,
       error,
@@ -267,6 +283,7 @@ const AssistantProvider = ({ children }: IProps) => {
       open,
       close,
       conversationId,
+      contractVersion,
       transcript,
       pending,
       error,

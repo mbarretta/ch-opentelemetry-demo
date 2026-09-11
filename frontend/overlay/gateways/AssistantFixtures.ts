@@ -15,6 +15,7 @@
 import { v4 } from 'uuid';
 import {
   AssistantActionRequest,
+  AssistantDemoToolCall,
   AssistantError,
   AssistantMessageRequest,
   AssistantProductRef,
@@ -78,11 +79,15 @@ export const FIXTURE_PRODUCTS: Record<string, AssistantProductRef> = {
 
 const FIXTURE_DEMO = {
   mode: 'fixtures',
+  scenario: 'shopping',
   prompt_version: 'fixture',
   prompt_source: 'frontend/overlay/gateways/AssistantFixtures.ts',
-  tools: [] as string[],
+  tools: [] as AssistantDemoToolCall[],
   links: {} as Record<string, string>,
 };
+
+// Fixture tool calls carry only the name; the live agent reports the model-visible arguments.
+const toolCalls = (names: string[]): AssistantDemoToolCall[] => names.map(name => ({ name, arguments: {}, ok: true }));
 
 const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
@@ -105,7 +110,7 @@ const respond = (
   cart_changed: cartChanged,
   trace_id: `fixture-${request.request_id.replace(/-/g, '').slice(0, 32)}`,
   feedback_enabled: true,
-  demo: { ...FIXTURE_DEMO, tools },
+  demo: { ...FIXTURE_DEMO, tools: toolCalls(tools) },
 });
 
 // Conversations are minted client-side; the same ids flow through the real transport later.

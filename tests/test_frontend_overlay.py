@@ -8,20 +8,37 @@ the empty-state copy, the Cypress hooks, and the one-patch-per-upstream-file lay
 
 import re
 from pathlib import Path
+from typing import get_args
 
 import pytest
+
+from concierge import contract
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "frontend/overlay"
 PATCHES = ROOT / "frontend/patches"
 UPSTREAM_FRONTEND = ROOT / ".upstream/opentelemetry-demo/src/frontend"
+ENVOY_TEMPLATE = ROOT / "docker/envoy.tmpl.yaml"
 
+# Browser code: everything here is compiled into the client bundle.
 ASSISTANT_SOURCES = sorted(
     path
     for pattern in ("components/Assistant/*", "providers/Assistant*", "gateways/Assistant*", "types/Assistant*")
     for path in OVERLAY.glob(pattern)
     if path.suffix in {".ts", ".tsx"}
 )
+
+# Server code: the same-origin API routes and what they call. The released Dockerfile copies
+# only fixed directories (pages/, gateways/, services/, ...), so these must live inside them.
+API_ROUTES = {
+    "message": OVERLAY / "pages/api/assistant/message.ts",
+    "action": OVERLAY / "pages/api/assistant/action.ts",
+    "feedback": OVERLAY / "pages/api/assistant/feedback.ts",
+    "conversation": OVERLAY / "pages/api/assistant/conversation/[conversationId].ts",
+}
+AGENT_GATEWAY = OVERLAY / "gateways/http/Agent.gateway.ts"
+ASSISTANT_SERVICE = OVERLAY / "services/Assistant.service.ts"
+SERVER_SOURCES = [*API_ROUTES.values(), AGENT_GATEWAY, ASSISTANT_SERVICE]
 
 REQUIRED_CYPRESS_HOOKS = {
     "AssistantTrigger": "assistant-trigger",
@@ -87,6 +104,12 @@ def test_no_agent_or_langfuse_address_reaches_the_browser_bundle():
     assert not re.search(r"agent:8010|localhost:8010|langfuse", joined, flags=re.IGNORECASE)
 
 
+def test_server_sources_hard_code_no_agent_or_observability_address():
+    joined = "\n".join(path.read_text() for path in SERVER_SOURCES if path.is_file())
+    assert "NEXT_PUBLIC_" not in joined
+    assert not re.search(r"agent:8010|localhost:8010|langfuse|https?://[a-z]", joined, flags=re.IGNORECASE)
+
+
 @pytest.mark.parametrize("name,target", sorted(EXPECTED_PATCH_TARGETS.items()))
 def test_each_assistant_patch_edits_exactly_its_upstream_file(name, target):
     patch = PATCHES / name
@@ -116,3 +139,95 @@ def test_document_patch_injects_assistant_env_without_next_public_prefix():
     patch = (PATCHES / "0006-document-assistant-env.patch").read_text()
     assert "ASSISTANT_TRANSPORT" in patch and "ASSISTANT_DEMO_DETAILS" in patch
     assert "NEXT_PUBLIC_ASSISTANT" not in patch
+
+
+# -- same-origin API routes (task 5) ---------------------------------------------------------
+
+
+def ts_interface_fields(source: str, name: str) -> set[str]:
+    """Top-level property names of `export interface <name> { ... }` in a TypeScript source."""
+    match = re.search(rf"export interface {name}\s*\{{(.*?)^\}}", source, flags=re.DOTALL | re.MULTILINE)
+    assert match, f"interface {name} not found"
+    return set(re.findall(r"^\s{2}(\w+)\??:", match.group(1), flags=re.MULTILINE))
+
+
+@pytest.mark.parametrize("name", sorted(API_ROUTES))
+def test_each_api_route_exists_and_is_wrapped_in_the_instrumentation_middleware(name):
+    route = API_ROUTES[name]
+    assert route.is_file(), f"missing {route.relative_to(OVERLAY)}"
+    source = route.read_text()
+    assert "InstrumentationMiddleware" in source
+    assert re.search(r"^export default ", source, flags=re.MULTILINE)
+
+
+def test_agent_base_url_is_read_server_side_at_request_time_only():
+    for path in SERVER_SOURCES:
+        assert path.is_file(), f"missing {path.relative_to(OVERLAY)}"
+    gateway = AGENT_GATEWAY.read_text()
+    assert "process.env.AGENT_BASE_URL" in gateway
+    # Inside a function, not destructured once when the module loads.
+    assert not re.search(r"^(const|let|var) .*process\.env", gateway, flags=re.MULTILINE)
+    for path in [*ASSISTANT_SOURCES, *API_ROUTES.values(), ASSISTANT_SERVICE]:
+        assert "AGENT_BASE_URL" not in path.read_text(), f"{path.relative_to(OVERLAY)} names AGENT_BASE_URL"
+    for patch in PATCHES.glob("*.patch"):
+        assert "src/frontend/next.config.js" not in patch_targets(patch), f"{patch.name} edits next.config.js"
+        assert "AGENT_BASE_URL" not in patch.read_text(), f"{patch.name} mentions AGENT_BASE_URL"
+
+
+def test_agent_deadline_sits_between_95s_and_the_proxy_route_timeout():
+    gateway = AGENT_GATEWAY.read_text()
+    deadline = re.search(r"AGENT_TIMEOUT_MS = ([\d_]+)", gateway)
+    assert deadline, "AGENT_TIMEOUT_MS constant not found"
+    deadline_ms = int(deadline.group(1).replace("_", ""))
+    route = re.search(r'prefix: "/api/assistant/" \}\s*\n\s*route: \{ cluster: frontend, timeout: (\d+)s', ENVOY_TEMPLATE.read_text())
+    assert route, "Envoy /api/assistant/ route timeout not found"
+    proxy_ms = int(route.group(1)) * 1000
+    assert 95_000 <= deadline_ms < proxy_ms, f"deadline {deadline_ms} ms not in [95000, {proxy_ms})"
+    assert "AbortSignal.timeout(AGENT_TIMEOUT_MS)" in gateway
+
+
+def test_routes_forward_no_arbitrary_headers_or_body_fields():
+    gateway = AGENT_GATEWAY.read_text()
+    # Only a JSON content type goes upstream; trace context comes from the Node auto-instrumentation.
+    assert "traceparent" not in gateway.lower()
+    assert "req.headers" not in gateway and "request.headers" not in gateway
+    for name, route in API_ROUTES.items():
+        source = route.read_text()
+        assert "req.headers" not in source and "request.headers" not in source, f"{name} forwards headers"
+        # Bodies are rebuilt field by field by the service, never spread through.
+        assert "...body" not in source and "...req.body" not in source, f"{name} spreads the browser body"
+
+
+def test_live_transport_is_the_default_and_fixtures_stay_selectable():
+    gateway = (OVERLAY / "gateways/Assistant.gateway.ts").read_text()
+    types = (OVERLAY / "types/Assistant.ts").read_text()
+    assert "'fixtures' ? FixtureTransport : LiveTransport" in gateway
+    assert "basePath = '/api/assistant'" in gateway
+    assert "import request from '../utils/Request'" in gateway
+    assert re.search(r"ASSISTANT_TRANSPORTS = \['live', 'fixtures'\]", types)
+
+
+def test_frontend_response_types_mirror_the_agent_contract_models():
+    types = (OVERLAY / "types/Assistant.ts").read_text()
+    assert ts_interface_fields(types, "AssistantResponse") == set(contract.AssistantResponse.model_fields)
+    assert ts_interface_fields(types, "AssistantDemo") == set(contract.DemoDetails.model_fields)
+    assert ts_interface_fields(types, "AssistantDemoToolCall") == set(contract.DemoToolCall.model_fields)
+    assert ts_interface_fields(types, "AssistantProductRef") == set(contract.ProductRef.model_fields)
+    assert ts_interface_fields(types, "AssistantConversationStatus") == set(contract.ConversationStatus.model_fields)
+    assert ts_interface_fields(types, "AssistantMessageRequest") == set(contract.MessageRequest.model_fields)
+    assert ts_interface_fields(types, "AssistantActionRequest") == set(contract.AddToCartAction.model_fields)
+    scenarios = re.search(r"ASSISTANT_SCENARIOS = \[([^\]]+)\]", types)
+    assert scenarios and set(re.findall(r"'([^']+)'", scenarios.group(1))) == set(get_args(contract.Scenario))
+
+
+def test_demo_details_render_scenario_prompt_tools_and_links():
+    source = (OVERLAY / "components/Assistant/DemoDetails.tsx").read_text()
+    for field in ("demo.scenario", "demo.prompt_version", "demo.prompt_source", "demo.tools", "demo.links"):
+        assert field in source, f"DemoDetails does not render {field}"
+    assert "tool.name" in source
+
+
+def test_every_assistant_answer_offers_feedback():
+    transcript = (OVERLAY / "components/Assistant/Transcript.tsx").read_text()
+    assert re.search(r"entry\.kind === 'assistant' \? <Feedback", transcript)
+    assert "feedback_enabled ? <Feedback" not in transcript
