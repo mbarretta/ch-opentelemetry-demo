@@ -1,0 +1,889 @@
+{
+  "slug": "feat-native-assistant-ui",
+  "title": "Native Astronomy Shop assistant in the storefront",
+  "kind": "feature",
+  "mode": "dev",
+  "created": "2026-09-11",
+  "status": "planned",
+  "context": "Implements NATIVE_AGENT_UI_PLAN.md (September 11, 2026): replace the Gradio chat with a native React assistant panel inside the OpenTelemetry Demo 3.0.0 storefront (Next.js Pages Router, styled-components, React Query), bind conversations to the shopper's existing cart/session, return structured product and cart results, share currency, keep one correlated OTel trace from browser to agent to shop with a Langfuse filter that retains the full ancestor chain, and ship locally buildable images (frontend, agent, MCP, proxy) selected by a native Compose override. Upstream source under .upstream/ stays unmodified: new frontend files live in frontend/overlay/, edits to upstream files are checked patches applied at stage time into .runtime/build/. Authored managed-ready: every task runs in a fresh git worktree, so task 1 makes worktrees self-bootstrapping (symlinked .upstream/.venv/.env from the main checkout) and the verification command begins with that setup. Only wave 2 is parallel; every later task needs the single Docker stack on port 8080 (compose project astronomy-concierge), which serializes them. EKS/registry publishing, token streaming, and session replay are out of scope per the source document. Pre-dispatch prerequisite: the repo has zero commits; an initial commit of the current tree must land on main before the go gate (pre-flight requires a clean tree).",
+  "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
+  "constraints": [
+    "Browser code calls only same-origin storefront endpoints; no agent, model, or Langfuse address or credential appears in the browser bundle (.next/static), in any NEXT_PUBLIC_* variable, or in any image build context.",
+    ".upstream/ is never modified; changes to upstream files exist only as files under frontend/overlay/ or as checked patches applied at stage time, and staging fails on an upstream pin or patch mismatch.",
+    "The shopper's cart/shop session ID is never a model-controlled tool argument; the server injects the bound ID into both HTTP and MCP tool calls.",
+    "No second browser tracing provider is installed, no token streaming (real or simulated) or invented tool-activity animation is shown, and no session-replay integration is added; progress UI reflects only real request state.",
+    "Unchanged shop services stay on the released ghcr.io/open-telemetry/demo:3.0.0-* images (DEMO_VERSION is not changed globally), the legacy POST /prompt endpoint keeps its request/response semantics, and images are built and loaded locally only: no registry publishing, EKS, or other deployment automation."
+  ],
+  "parallelism": "auto",
+  "wave_execution": "runner",
+  "autonomy": "interactive",
+  "security_audit": "auto",
+  "quality_review": "auto",
+  "plan_review": "auto",
+  "plan_review_model": null,
+  "deferred_review": "auto",
+  "sweep": false,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Worktree-portable dev setup and frontend overlay build path",
+      "status": "pending",
+      "depends_on": [],
+      "files": [
+        "scripts/dev-setup.sh",
+        "scripts/check-frontend.sh",
+        "scripts/demo.py",
+        "compose.native.yaml",
+        ".dockerignore",
+        ".gitignore",
+        "frontend/overlay/README.md",
+        "frontend/patches/README.md",
+        "tests/test_build.py"
+      ],
+      "why": "Every later task runs in a fresh git worktree and must build the custom frontend image from a clean staged 3.0.0 tree; nothing else can be verified until this exists.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "scripts/dev-setup.sh is idempotent: in a linked git worktree (git rev-parse --git-common-dir differs from --git-dir) it resolves the main checkout, symlinks .upstream and .venv from it, copies .env (falling back to .env.example), and runs `.venv/bin/python scripts/demo.py bootstrap`; in the main checkout with no .venv it creates one with `uv venv --python 3.14` and `uv pip install -r requirements-dev.lock`; a second run changes nothing and exits 0.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "`scripts/demo.py stage` writes .runtime/build/ as a clean export of the exact pinned upstream commit (git archive or checkout-index from .upstream, never a symlink), copies frontend/overlay/** onto .runtime/build/src/frontend/, applies every frontend/patches/*.patch in name order after `git apply --check`, and exits non-zero with a clear message when the upstream HEAD differs from the pin or a patch does not apply; re-running restages from scratch.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "scripts/check-frontend.sh stages, runs `npm ci` in .runtime/build/src/frontend (skipped when node_modules already matches package-lock.json), then `npx tsc --noEmit` and `npm run lint`, exiting non-zero on any failure; a deliberate type error in an overlay file makes it fail."
+        },
+        {
+          "id": "ac4",
+          "text": "`scripts/demo.py build --service frontend` builds astronomy-concierge-frontend:<tag> from .runtime/build using the released src/frontend/Dockerfile unchanged, for the host platform by default, and writes .runtime/images/manifest.json with tag, image ID, platform, and upstream commit; <tag> is a short sha256 over the build inputs (upstream commit, Dockerfile, package-lock.json, overlay files, patches) and a unit test in tests/test_build.py shows that changing an overlay file changes the tag.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "compose.native.yaml selects the custom frontend image; `scripts/demo.py up` applies it, keeps every other shop image at ghcr.io/open-telemetry/demo:3.0.0-* (checked via `demo.py config`), and exits non-zero with a message naming `build` when the manifest or image is missing; with an empty overlay the native stack serves the unchanged storefront at http://localhost:8080/ (home page 200 with 10 product cards).",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": ".dockerignore rules at the repo root and in the staged build tree exclude .env, .venv, .runtime (except the staged build inputs), .upstream, .cache, and telemetry captures; verified by listing the build context (for example `docker build --no-cache -f - .` with a `COPY . /ctx` + `RUN find /ctx` probe, or an equivalent tar listing)."
+        },
+        {
+          "id": "ac7",
+          "text": "The plan's verification command passes when run from a fresh linked worktree of this repository (dev-setup, ruff, pytest, check-frontend)."
+        }
+      ],
+      "notes": "Layout decision: frontend/overlay/<path relative to src/frontend/> for new files; frontend/patches/NNNN-<topic>.patch (generated with `git -C .runtime/build diff -- src/frontend`) for edits to upstream files. .runtime/build must be a real copy so the released Dockerfiles' `COPY ./src/frontend/...` contexts resolve. Baseline verification fails before this task exists (scripts/dev-setup.sh is missing); record that in the HANDOFF rather than reporting blocked. Docker image builds of the Next.js frontend take several minutes; run them in the background and poll. Do not modify .upstream/; bootstrap() refuses a dirty upstream checkout."
+    },
+    {
+      "id": "2",
+      "title": "Agent conversation contract v2: bound cart, structured results, currency, dedupe",
+      "status": "pending",
+      "depends_on": [
+        "1"
+      ],
+      "files": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "concierge/scripted_model.py",
+        "concierge/telemetry.py",
+        "scripts/demo.py",
+        "tests/test_agent.py",
+        "tests/test_contract.py"
+      ],
+      "why": "The storefront needs a conversation bound to the shopper's existing cart, structured product/cart results, currency awareness, and safe retries; today /prompt uses the conversation UUID as the cart ID.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "POST /assistant/message accepts {conversation_id|null, shop_session_id, request_id, message, currency_code, product_context?{product_id}, scenario?, budget?}; a null conversation_id creates a conversation bound to shop_session_id and returns the new id; a later message for that conversation with a different shop_session_id is rejected with 409; the bound shop_session_id is the user_id the cart tools receive (asserted through the fake tools in tests).",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The response carries contract_version (the string \"1\", exported as CONTRACT_VERSION from concierge/contract.py), conversation_id, request_id, reply, product_refs[] (id, name, picture, price Money) derived only from successful get_product/list_products tool results of that turn, cart_changed (true only when an add_to_cart tool call succeeded), trace_id, feedback_enabled, and demo {mode, prompt_version, prompt_source, tools, links}; nothing is parsed from reply prose and no model-generated price or URL is echoed.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "Cart/shop session identity is absent from every tool's model-visible schema (extend test_cart_identity_not_in_model_schema) and injected server-side on both the HTTP and MCP tool paths; list_products, get_product, and get_cart pass the conversation's currency_code to the shop API, which requires extending the bootstrap tools patch in scripts/demo.py (applied to .runtime/tools.py and .runtime/python/src/agents/tools.py) so the corrected tools accept a currency parameter.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Repeating a request with the same request_id on the same conversation returns the stored response without running the agent or tools again (asserted on the fake add_to_cart call count); a second concurrent turn on the same conversation returns 409 with a turn-in-flight message; request ids are scoped per conversation and dropped with the conversation.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "POST /assistant/actions/add-to-cart with {conversation_id, request_id, product_id, quantity, currency_code} performs exactly one scoped add_to_cart tool call inside the conversation's trace context, appends the action to conversation history, returns the same response shape with cart_changed true, and is deduplicated by request_id like a message."
+        },
+        {
+          "id": "ac6",
+          "text": "GET /assistant/conversations/{id} returns {conversation_id, shop_session_id, turns, currency_code, expires_at} for a live conversation and 404 for an unknown or expired one; POST /feedback still rejects a trace_id that does not belong to the conversation."
+        },
+        {
+          "id": "ac7",
+          "text": "The system prompt states the budget in currency_code; ScriptedModel formats amounts with the Money currencyCode returned by tools (no hard-coded $ or USD relabeling) and budget_adherence compares the returned price with the budget in the same currency; a product_context product_id combined with an explain/tell-me-about-this-product message makes ScriptedModel call get_product for that id."
+        },
+        {
+          "id": "ac8",
+          "text": "Legacy POST /prompt keeps its request/response semantics (conversation UUID doubles as cart id); every existing test in tests/test_agent.py passes without weakened assertions, and scripts/smoke.py still runs against /prompt.",
+          "critical": true
+        },
+        {
+          "id": "ac9",
+          "text": "Conversation lifetime (1 h idle, 20 turns, in-memory, lost on agent restart) and the fact that a restart makes an in-flight mutation's outcome uncertain are documented in concierge/contract.py's module docstring and surface as the 404 in ac6."
+        }
+      ],
+      "notes": "Keep subclassing the released Agent base class and register the new routes on self.app. Pydantic models stay strict (UUID types; shop_session_id is the storefront SessionGateway userId, a uuid v4 string). Add no dependencies. The shop's /api/products and /api/cart accept a currencyCode query parameter and return Money with the converted currencyCode. Mirror contract_version as a constant the frontend types will copy (task 3). This task edits scripts/demo.py only in bootstrap()'s tools patch; task 1 owns stage/build in the same file and lands first."
+    },
+    {
+      "id": "3",
+      "title": "Native assistant shell with fixtures on real storefront pages",
+      "status": "pending",
+      "depends_on": [
+        "1"
+      ],
+      "files": [
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.styled.ts",
+        "frontend/overlay/components/Assistant/AssistantTrigger.tsx",
+        "frontend/overlay/components/Assistant/Composer.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/components/Assistant/AssistantProductCard.tsx",
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/DemoDetails.tsx",
+        "frontend/overlay/components/Assistant/index.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/patches/0001-app-assistant-provider.patch",
+        "frontend/patches/0002-layout-assistant-host.patch",
+        "frontend/patches/0003-header-assistant-trigger.patch",
+        "frontend/patches/0004-product-page-ask-assistant.patch",
+        "frontend/patches/0005-cypress-fields-assistant.patch",
+        "frontend/patches/0006-document-assistant-env.patch",
+        "compose.native.yaml"
+      ],
+      "why": "The storefront needs a panel built from the shop's real theme and components, reviewable on real pages at desktop and mobile widths before any live agent call.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The overlay adds providers/Assistant.provider.tsx, components/Assistant/*, types/Assistant.ts (exporting ASSISTANT_CONTRACT_VERSION = \"1\", the same string value task 2 exports as CONTRACT_VERSION; no lookup of task 2 output is needed), and gateways/Assistant.gateway.ts with a fixture transport; patches mount the provider in pages/_app.tsx inside CartProvider, render one panel host in components/Layout/Layout.tsx, and add a labeled Shopping assistant control in components/Header/Header.tsx beside CurrencySwitcher and CartIcon; scripts/check-frontend.sh passes.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "With the built frontend image at http://localhost:8080/: at 1440, 1024, and 768 px (Theme.breakpoints.desktop is min-width: 768px) the panel opens as a right-side panel 400-440 px wide (capped by the viewport) leaving the catalog visible; at 767 and 390 px it opens as a full-screen dialog with title, close control, scrollable transcript, and a composer pinned above the keyboard area; at all five widths the header logo and cart control stay visible and the document does not scroll horizontally (Playwright screenshots at each width).",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "New component styles reference Theme tokens (colors.otelBlue, otelYellow, textGray, textLightGray, lightBorderGray, breakpoints.desktop, fonts) and reuse the existing Button, Input/Select, and ProductPrice components; no new component hard-codes a hex value that duplicates a Theme color.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The empty state shows 'Find the right telescope' with three suggestion chips ('A telescope for a beginner', 'Help me choose under $150', 'Explain this product') and the active budget and currency; product pages show an 'Ask about this product' control that opens the same panel with the product id as a visible context chip without starting a second conversation."
+        },
+        {
+          "id": "ac5",
+          "text": "Fixture transport, selected at runtime by ASSISTANT_TRANSPORT=fixtures injected through pages/_document.tsx's window.ENV, renders each state on real pages: pending (generic 'Looking up products' indicator, composer disabled), recommendation with compact product cards (image, name, ProductPrice, View product, Add to cart), cart-success, a recoverable inline error that preserves the transcript and composer text, and a collapsed 'Demo details' area that is absent when ASSISTANT_DEMO_DETAILS is off.",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "Keyboard: the header control opens the panel and moves focus into it; the desktop panel has a coherent non-modal Tab order (close, transcript, suggestions, composer, send); the mobile dialog traps focus, Escape closes it, and focus returns to the trigger; status changes are announced through an aria-live=polite region; every control has a visible focus style and text contrast of at least 4.5:1 on white.",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "Closing and reopening the panel and navigating home -> product -> cart preserves the fixture transcript because conversation state lives in the provider above the pages, not in page components."
+        },
+        {
+          "id": "ac8",
+          "text": "CypressFields gains data-cy hooks for the trigger, panel, composer, send, message, product card, suggestion, and close control; frontend/patches contains one patch per modified upstream file and `demo.py stage` applies them cleanly."
+        }
+      ],
+      "notes": "Upstream references: styles/Theme.ts (tokens), components/Header/Header.tsx and Header.styled.ts (Controls flex row, 768 px breakpoint), components/Layout/Layout.tsx, pages/_app.tsx (provider tree), pages/_document.tsx (window.ENV injection; add ASSISTANT_* keys there), pages/product/[productId]/index.tsx, components/ProductCard and ProductPrice, components/Button. The Gradio UI's examples live in concierge/chatbot.py for copy. Build with `demo.py build --service frontend` then `demo.py up` to review at 8080; only this task and task 2 share the wave and task 2 never touches the Docker stack."
+    },
+    {
+      "id": "4",
+      "title": "Complete native image set, build manifest, and default native stack",
+      "status": "pending",
+      "depends_on": [
+        "1",
+        "2",
+        "3"
+      ],
+      "files": [
+        "docker/agent.Dockerfile",
+        "docker/mcp.Dockerfile",
+        "docker/frontend-proxy.Dockerfile",
+        "docker/envoy.tmpl.yaml",
+        "docker/base-images.json",
+        "docker/README.md",
+        "compose.native.yaml",
+        "compose.dev.yaml",
+        "compose.concierge.yaml",
+        "scripts/demo.py",
+        ".env.example",
+        ".dockerignore",
+        "tests/test_build.py",
+        "tests/test_integration_config.py"
+      ],
+      "why": "The native run must work from built images without source mounts or the Gradio service so the storefront is the demo's entry point.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "docker/agent.Dockerfile, docker/mcp.Dockerfile, and docker/frontend-proxy.Dockerfile extend the released 3.0.0 agent, mcp, and frontend-proxy images by pinned @sha256 digest (digests and how they were resolved recorded in docker/base-images.json), bake in concierge/, prompts/, and the corrected tools.py at both src/agents/tools.py and src/mcp_server/tools.py, and set the entry points python -m concierge.run_agent and python -m concierge.run_mcp.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The proxy image adds an Envoy route for prefix /api/assistant/ to the frontend cluster with a timeout of at least 100 s, keeps every existing route and cluster (including /otlp-http/, /flagservice/, /images/, the catch-all) with unchanged timeouts, and starts cleanly when the chatbot service is absent (chatbot cluster removed or made resolvable-optional); envsubst placeholders remain intact.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "`scripts/demo.py build [--service NAME ...] [--platform linux/arm64|linux/amd64]` builds all four images for the host platform by default under one shared content-derived tag covering the upstream commit, base digests, Dockerfiles, lockfiles, frontend overlay and patches, concierge/, prompts/, and proxy config; .runtime/images/manifest.json records tag, per-image ID, platform, upstream commit, and contract_version; tests/test_build.py shows that changing prompts/concierge-v1.txt changes the tag.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "compose.native.yaml selects the four custom images, resets the inherited frontend-proxy -> chatbot dependency, and leaves chatbot out of the default service set; `demo.py up` starts the native stack with no application-code bind mounts on agent, mcp, or frontend (docker inspect Mounts); an explicit `demo.py up --debug-chatbot` adds the Gradio service; compose.dev.yaml holds the source bind mounts and is applied only with an explicit `--dev` flag.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "`demo.py config` shows every unchanged shop service still on ghcr.io/open-telemetry/demo:3.0.0-*; .env.example documents AGENT_BASE_URL (frontend service, server-side), ASSISTANT_TRANSPORT, ASSISTANT_DEMO_DETAILS, and marks CHAT_PORT as debug-only."
+        },
+        {
+          "id": "ac6",
+          "text": "From built images with AGENT_MODE=scripted: the agent /healthz reports ok; scripts/smoke.py passes over HTTP transport; with MCP_ENABLED=True the built MCP image serves the tools and the smoke run passes with tools_transport=mcp; the frontend container runs its final runtime stage with OTel enabled (frontend service spans appear in .runtime/telemetry).",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "`demo.py up` without built images names each missing image and the build command, exiting non-zero before invoking compose."
+        }
+      ],
+      "notes": "Resolve digests with `docker buildx imagetools inspect ghcr.io/open-telemetry/demo:3.0.0-agent` (and -mcp, -frontend-proxy). The released envoy.tmpl.yaml is rendered with envsubst at container start; copy it into docker/ and edit, keeping ${VAR} placeholders. compose.agent.yaml (upstream) adds frontend-proxy.depends_on.chatbot; use `!reset` in the override. The existing compose.concierge.yaml mounts become compose.dev.yaml; keep the collector, flagd, and proxy port overrides in compose.concierge.yaml. Only this task runs in its wave; nothing else touches the Docker stack concurrently."
+    },
+    {
+      "id": "5",
+      "title": "Connect the storefront panel to the agent through same-origin API routes",
+      "status": "pending",
+      "depends_on": [
+        "4"
+      ],
+      "files": [
+        "frontend/overlay/pages/api/assistant/message.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "frontend/overlay/pages/api/assistant/feedback.ts",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "frontend/overlay/utils/assistant/agentClient.ts",
+        "frontend/overlay/utils/assistant/validate.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/DemoDetails.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "compose.native.yaml"
+      ],
+      "why": "First end-to-end value: a real catalog recommendation appears inside the storefront through same-origin routes while the agent address and credentials stay server-side.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "pages/api/assistant/message.ts, action.ts, feedback.ts, and conversation/[conversationId].ts validate browser input (types, lengths, UUID shapes, allow-listed fields only), call AGENT_BASE_URL (server-side env, read at request time) with an explicit upstream deadline between 95 s and the proxy route timeout, map agent 4xx/5xx/timeouts into the typed AssistantError contract, forward no arbitrary headers or body fields, and are wrapped in the existing InstrumentationMiddleware; the built image's .next/static contains no agent, model, or Langfuse URL or key and no NEXT_PUBLIC_ variable carries one.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Assistant.gateway.ts gains the live transport (default) using utils/Request.ts conventions; ASSISTANT_TRANSPORT=fixtures still selects fixtures; the provider sends shop_session_id from SessionGateway.getSession().userId, currency_code from useCurrency, a fresh request_id per turn, and product_context when set, and stores conversation_id and contract_version from the response, treating a contract_version mismatch as a recoverable error.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "In the native stack with AGENT_MODE=scripted, sending 'A telescope for a beginner' renders the Explorascope recommendation with a product card whose name and price come from product_refs inside the storefront at http://localhost:8080/ (Playwright).",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The generic pending indicator shows until the response settles; an agent 5xx or timeout renders the inline recoverable error keeping transcript and composer text with a Retry control that reuses the same request_id; with the agent container stopped, catalog and cart browsing keep working and the panel shows the outage error."
+        },
+        {
+          "id": "ac5",
+          "text": "Each completed assistant answer shows Helpful / Not helpful; a click posts to /api/assistant/feedback with that answer's trace_id and conversation_id and reflects saved vs not saved; the agent's 503 'Configure Langfuse' surfaces as not saved, never as saved."
+        },
+        {
+          "id": "ac6",
+          "text": "Captured telemetry shows one trace in which the frontend /api/assistant/message server span is the parent of the Node HTTP/undici client span for the AGENT_BASE_URL request, and that client span is the parent of the agent /assistant/message server span; trace context is propagated by the released Node auto-instrumentation, not by hand-built headers."
+        },
+        {
+          "id": "ac7",
+          "text": "Demo details, when ASSISTANT_DEMO_DETAILS is on, shows scenario, prompt version and source, tool names, and trace links from the response demo object; it stays hidden by default."
+        }
+      ],
+      "notes": "Upstream pages/api/cart.ts shows the handler + InstrumentationMiddleware pattern; the collector's transform/sanitize_spans sets http.route for known frontend API paths by http.target match and will need a /api/assistant statement (task 7 owns collector config). AGENT_BASE_URL is a runtime env of the frontend service in compose.native.yaml (http://agent:8010); it must not be added to next.config.js env{} which would inline it into the client bundle. Add no npm dependencies; hand-written validation is enough for this contract."
+    },
+    {
+      "id": "6",
+      "title": "Unify shopping state: shared cart actions, currency, retries, resume",
+      "status": "pending",
+      "depends_on": [
+        "5"
+      ],
+      "files": [
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/AssistantProductCard.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "concierge/agent.py",
+        "concierge/scripted_model.py",
+        "tests/test_contract.py"
+      ],
+      "why": "The assistant must act on the shopper's own cart and currency, and repeated clicks or reloads must never double-add or show a transcript the agent no longer remembers.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "A card's Add to cart calls POST /api/assistant/action exactly once per click with a request_id and never the storefront cart mutation; on cart_changed the provider invalidates React Query ['cart'] so the header count, dropdown, and cart page update without reload (Playwright: header count increments by one after a single add).",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Repeating the click while in flight or retrying after a timeout adds nothing twice (control disabled while pending; agent dedupes by request_id); a timed-out mutation is never auto-retried: the UI refetches the cart and shows an explicit 'uncertain' state until the cart confirms or the shopper retries.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "Conversation and cart are separate: New conversation starts a fresh conversation_id, clears the transcript, and leaves cart contents intact; a second browser context (different localStorage session) has its own cart and cannot use the first's conversation id (agent 409 rendered as a new-conversation state).",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Navigating home -> product -> cart and closing or reopening the panel preserves the transcript; on page reload the provider resumes only after GET /api/assistant/conversation/{id} confirms the conversation is alive, otherwise it starts fresh with a visible 'previous conversation expired' note; restarting the agent container triggers that path."
+        },
+        {
+          "id": "ac5",
+          "text": "Switching currency in the header refetches card prices in the new currency and sends currency_code on the next turn; with EUR selected the scripted recommendation's card price and the reply amount equal the product page price for the same item in EUR; original USD amounts are never relabeled as another currency.",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "View product navigates to /product/{id} keeping panel state; the product page's Ask about this product sets the product context, and 'Explain this product' produces a get_product for that id visible in demo details."
+        },
+        {
+          "id": "ac7",
+          "text": "One in-flight turn per conversation is enforced client-side (composer and card actions disabled) and a server 409 renders as a recoverable message rather than an unhandled error."
+        }
+      ],
+      "notes": "CartProvider (upstream providers/Cart.provider.tsx) queries ['cart', selectedCurrency]; invalidate with queryClient.invalidateQueries({ queryKey: ['cart'] }) from the assistant provider, which sits inside QueryClientProvider. Agent-side changes here are limited to what the UI flow exposes (status endpoint fields, 409 messages, scripted product-context replies); the contract shape itself is task 2's."
+    },
+    {
+      "id": "7",
+      "title": "Observability: browser-to-agent trace, identity mappings, Langfuse filter",
+      "status": "pending",
+      "depends_on": [
+        "6"
+      ],
+      "files": [
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/utils/assistant/tracing.ts",
+        "frontend/overlay/pages/api/assistant/message.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "scripts/demo.py",
+        "scripts/smoke.py",
+        "tests/test_integration_config.py",
+        "tests/test_telemetry.py",
+        "concierge/telemetry.py",
+        "concierge/agent.py",
+        "README.md"
+      ],
+      "why": "The demo's point is one correlated trace per assistant turn across browser, storefront, agent, and shop, visible in ClickStack and Langfuse with distinct storefront-session and conversation identities.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "Each submitted turn is wrapped in an assistant.turn span obtained from @opentelemetry/api's global tracer (the existing WebTracerProvider; no new provider or exporter) with attributes gen_ai.conversation.id and langfuse.session.id (conversation id), session.id (storefront session id), and assistant.request_id; the fetch span is its child because the request runs inside context.with(trace.setSpan(...)), and the span ends only after the response resolves or rejects, with ERROR status on failure.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Captured telemetry for one turn is a single trace containing browser assistant.turn -> browser fetch -> frontend-proxy request -> frontend /api/assistant/message server span (http.route set, via the collector transform if Next leaves it empty) -> agent concierge.turn -> tool spans -> shop service spans; the frontend API span carries the same conversation and storefront session attributes plus assistant.contract_version.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The Langfuse-bound collector pipeline (traces/langfuse in scripts/demo.py collector_config) keeps agent and mcp spans; browser assistant.turn spans by span name plus assistant.request_id; browser fetch, frontend-proxy, and frontend inbound server spans whose route or URL attribute matches /api/assistant; and frontend outbound client spans whose URL matches the agent /assistant/message or /assistant/actions endpoints. It still drops unrelated storefront traffic and /healthz, and always also exports the filtered result to .runtime/telemetry/langfuse-preview.jsonl (with or without Langfuse credentials) so the retained set can be inspected.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "scripts/smoke.py gains a native check that creates and exports a real synthetic browser-parent span through the local OTLP route (http://localhost:8080/otlp-http/v1/traces, resource service.name frontend-web), injects that span context as traceparent into one turn through http://localhost:8080/api/assistant/message, flushes, reads the preview file, and asserts that the exported synthetic parent and every other parent span of that trace are present in the same file (no orphans) with exactly one concierge.turn; tests/test_integration_config.py asserts the filter statements and the preview exporter exist in the generated config.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "Feedback scores attach to the answer's trace_id through the existing /feedback path, the agent's langfuse.observation input/output stay populated, and README states the capture behavior (synthetic demo data; composer text and replies are captured in full, no masking)."
+        },
+        {
+          "id": "ac6",
+          "text": "No duplicate browser instrumentation: the staged frontend source registers exactly one WebTracerProvider and one fetch instrumentation (grep), and utils/telemetry/FrontendTracer.ts is either unchanged or changed only through a checked patch."
+        }
+      ],
+      "notes": "Envoy emits a frontend-proxy span per request (envoy.tracers.opentelemetry) that sits between the browser fetch and the Next server span, so the filter must retain frontend-proxy spans for assistant paths too. Filter approach: OTTL span conditions on resource service.name plus attributes[\"http.route\"]/[\"http.target\"]/[\"url.path\"]/[\"http.url\"] containing /api/assistant; the browser fetch span exposes http.url. The agent already stamps gen_ai.conversation.id and langfuse.session.id via ConversationProcessor; the storefront session id arrives as W3C baggage session.id from the frontend's Api.gateway pattern or explicitly from the assistant gateway. A Langfuse instance is not required to pass this task; the preview file is the proof."
+    },
+    {
+      "id": "8",
+      "title": "Validate the packaged app and document the native run",
+      "status": "pending",
+      "depends_on": [
+        "7"
+      ],
+      "files": [
+        "frontend/overlay/cypress/e2e/Assistant.cy.ts",
+        "frontend/patches/0007-cypress-config-base-url.patch",
+        "README.md",
+        "NATIVE_AGENT_UI_PLAN.md",
+        "scripts/smoke.py",
+        "scripts/demo.py",
+        "tests/test_build.py",
+        "docker/README.md"
+      ],
+      "why": "The deliverable is a clean bootstrap -> build -> up that produces the whole native experience from recorded images, proven by browser and smoke tests and documented for the next person.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "From a clean state (demo.py down; .runtime/build and .runtime/images removed) bootstrap -> build -> up produces the native storefront with the assistant at http://localhost:8080/ using only images listed in the manifest, with no application-code bind mounts and no chatbot container.",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "frontend/overlay/cypress/e2e/Assistant.cy.ts covers: open the panel from the header, send 'A telescope for a beginner', see a product card, add to cart, header count increments, the cart page shows the item, close/reopen preserves the transcript, New conversation keeps the cart; it runs green with `npx cypress run --spec` from .runtime/build/src/frontend against http://localhost:8080, and the existing Home, ProductDetail, and Checkout specs still pass.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "On the final images both smoke runs pass (HTTP transport and MCP_ENABLED=True), and ruff, pytest, and scripts/check-frontend.sh pass.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Build hygiene: the build-context listing contains no .env, .venv, credentials, or captures; docker inspect of each custom image shows no LANGFUSE_* or API_KEY values baked into env or layers; the manifest records base digests, platform, image IDs, and contract_version; editing prompts/concierge-v1.txt changes the tag.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The host platform (linux/arm64 on this machine) is built and smoke-tested; `build --platform linux/amd64` either completes and is recorded in the manifest or README states amd64 as untested; README claims exactly what was run."
+        },
+        {
+          "id": "ac6",
+          "text": "README replaces the Gradio-first Start section with bootstrap -> build -> up -> open http://localhost:8080/, documents --dev, --debug-chatbot, the assistant env vars, conversation lifetime and restart behavior, currency behavior, and the Langfuse filter and preview file; the Gradio client is described as optional debug only; NATIVE_AGENT_UI_PLAN.md gets a status line recording completion and any deviations.",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "Accessibility on the final image at 390 px and 1440 px: keyboard open, submit, and close work; the mobile dialog traps focus and returns it to the trigger; the live region announces the pending and completed states (asserted in Cypress or Playwright)."
+        }
+      ],
+      "notes": "Cypress is a devDependency of the upstream frontend (cypress.config.ts reads FRONTEND_ADDR/FRONTEND_PORT from ../../.env); run it from the staged tree with baseUrl http://localhost:8080. Cypress specs import from ../../utils/Cypress and CypressFields. Keep README edits in the style already used (Google developer style, tables, short sentences)."
+    }
+  ],
+  "deferrals": [],
+  "gap_notes": [],
+  "log": [
+    {
+      "timestamp": "2026-09-11T15:44:47-04:00",
+      "note": "Codex review round 1: 7 findings, all applied. Transcription fix: disposition_reason for pr2-pr7 was mis-paired by a 1-based shell array at first write and corrected by hand-edit before round 2."
+    },
+    {
+      "timestamp": "2026-09-11T15:53:27-04:00",
+      "note": "Codex review stopped: round 2 timed out after 482s (artifacts: /var/folders/_p/gmpmw18x2rxdkgvm10f00jyc0000gn/T//plan-review.feat-native-assistant-ui.r2.GCRgy5); plan keeps round 1's 7 applied changes."
+    },
+    {
+      "timestamp": "2026-09-11T15:53:27-04:00",
+      "note": "Parallelization analysis: 7 waves for 8 tasks. Only wave 2 (tasks 2, 3) is parallel: disjoint files (Python vs frontend overlay) and task 2 never uses the Docker stack. Every other pairing is serialized by class-4 interference on the single compose project astronomy-concierge / port 8080 (tasks 3-8 all need demo.py up for their checks) plus lexical overlap: scripts/demo.py (tasks 1,2,4,7,8), compose.native.yaml (1,3,4,5), Assistant.provider/gateway/types (3,5,6,7), smoke.py (7,8). Base branch main has no commits yet; cycle_base_sha is set at first dispatch after the initial commit."
+    },
+    {
+      "timestamp": "2026-09-11T16:02:14-04:00",
+      "note": "Plan echoed and accepted by the user as-is (interactive /harness plan). Charter creation offer answered no (not never); may re-offer after ~30 days."
+    }
+  ],
+  "plan_review_state": {
+    "rounds": [
+      {
+        "round": 1,
+        "started_at": "2026-09-11T15:35:17-04:00",
+        "duration_s": 468,
+        "model_resolved": null,
+        "verdict": "revise",
+        "findings": 7,
+        "applied": 7,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-11T15:44:20-04:00"
+      },
+      {
+        "round": 2,
+        "started_at": "2026-09-11T15:44:47-04:00",
+        "duration_s": 482,
+        "model_resolved": null,
+        "verdict": null,
+        "findings": 0,
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "timeout",
+        "recorded_at": "2026-09-11T15:53:27-04:00"
+      }
+    ],
+    "threshold": "medium",
+    "max_rounds": 3,
+    "time_budget_s": 1200,
+    "round_timeout_s": 480,
+    "enabled_by": "auto",
+    "stop_reason": "timeout",
+    "summary": "2 rounds; round 1 verdict revise, 7 applied / 0 deferred / 0 rejected; round 2 timed out after 482s and the 1200s budget left no room for round 3",
+    "last_run_at": "2026-09-11T15:53:27-04:00"
+  },
+  "plan_review_findings": [
+    {
+      "id": "pr1",
+      "reviewer_ref": "f1",
+      "status": "applied",
+      "disposition_reason": "Pinned instead of serializing: contract_version is the string \"1\" (CONTRACT_VERSION in concierge/contract.py, ASSISTANT_CONTRACT_VERSION in types/Assistant.ts) now stated in task 2 ac2 and task 3 ac1; the depends_on edge was not taken because it would serialize the only parallel wave.",
+      "dispositioned_at": "2026-09-11T15:44:46-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:19-04:00",
+      "severity": "medium",
+      "confidence": 0.96,
+      "category": "hidden-dependency",
+      "target": "tasks[2].depends_on",
+      "title": "Task 3 consumes an undefined output from parallel task 2",
+      "description": "Task 3 must mirror the agent's contract-version constant, but no current constant or exact value/type exists. Because tasks 2 and 3 are planned in parallel, a fresh task-3 implementer cannot inspect task 2's result.",
+      "evidence": "`rg -n 'contract_version|CONTRACT_VERSION|ASSISTANT_CONTRACT_VERSION' concierge tests scripts .upstream/opentelemetry-demo/src/frontend` returned no hits. The current agent routes at concierge/agent.py:68-70 also expose no versioned assistant contract.",
+      "recommendation": "Make task 3 depend on task 2, or state the exact version value and representation in both tasks. The dependency is safer because the frontend is explicitly required to mirror the backend constant.",
+      "suggested_change": {
+        "op": "add",
+        "target": "tasks[2].depends_on",
+        "proposed": "\"2\""
+      },
+      "round": 1
+    },
+    {
+      "id": "pr2",
+      "reviewer_ref": "f2",
+      "status": "applied",
+      "disposition_reason": "Correct: Node auto-instrumentation inserts an undici client span between the Next server span and the agent; task 5 ac6 now asserts the two-hop chain.",
+      "dispositioned_at": "2026-09-11T15:44:19-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:19-04:00",
+      "severity": "high",
+      "confidence": 0.97,
+      "category": "wrong-verification",
+      "target": "tasks[4].acceptance_criteria[5]",
+      "title": "The agent server span will not be a direct child of the frontend server span",
+      "description": "The released frontend enables Node auto-instrumentation. Its outgoing fetch to the agent creates an HTTP/undici client span, so the agent server span's direct parent is that client span, not the Next.js API server span required by this AC. A correct trace would fail this criterion.",
+      "evidence": ".upstream/opentelemetry-demo/src/frontend/utils/telemetry/Instrumentation.js:15-23 starts NodeSDK with all Node auto-instrumentations except filesystem. The frontend image preloads that file at .upstream/opentelemetry-demo/src/frontend/Dockerfile:56-60. InstrumentationMiddleware preserves the active server context around handlers at .upstream/opentelemetry-demo/src/frontend/utils/telemetry/InstrumentationMiddleware.ts:8-29.",
+      "recommendation": "Assert the complete two-hop frontend relationship: Next server span -> outbound Node client span -> agent server span.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[4].acceptance_criteria[5]",
+        "proposed": "Captured telemetry shows one trace in which the frontend's /api/assistant/message server span is the parent of the Node HTTP/undici client span for the AGENT_BASE_URL request, and that client span is the parent of the agent's /assistant/message server span; trace context is propagated by the released Node auto-instrumentation."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr3",
+      "reviewer_ref": "f3",
+      "status": "applied",
+      "disposition_reason": "Correct: a traceparent header alone exports no parent span; task 7 ac4 now requires smoke.py to export the synthetic browser-parent span via /otlp-http/ before the no-orphans assertion.",
+      "dispositioned_at": "2026-09-11T15:44:20-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:19-04:00",
+      "severity": "high",
+      "confidence": 0.96,
+      "category": "untestable-ac",
+      "target": "tasks[6].acceptance_criteria[3]",
+      "title": "A traceparent header does not create the parent span that the orphan assertion requires",
+      "description": "Sending a synthetic traceparent only gives the first recorded server span a remote parent ID. It does not export a span with that ID. The proposed assertion that every parent is present in the preview therefore fails unless smoke.py also creates and exports the synthetic browser-parent span.",
+      "evidence": "The current orphan check builds the recorded span-id set and requires every parentSpanId to be present at scripts/smoke.py:99-101. Current smoke.py:48-53 sends ordinary HTTP requests and contains no synthetic span export. The collector accepts browser OTLP through the proxy according to .upstream/opentelemetry-demo/.env:40 and the /otlp-http route at .upstream/opentelemetry-demo/src/frontend-proxy/envoy.tmpl.yaml:39-40.",
+      "recommendation": "Require smoke.py to emit a real synthetic browser span to the collector, inject that span's context into the assistant request, flush it, and then perform the no-orphans assertion.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[6].acceptance_criteria[3]",
+        "proposed": "scripts/smoke.py gains a native check that creates and exports a real synthetic browser-parent span through the local OTLP route, injects that span's traceparent into one turn through http://localhost:8080/api/assistant/message, flushes telemetry, reads the preview file, and asserts that the exported synthetic parent and every other parent span are present in the same trace with exactly one concierge.turn; tests/test_integration_config.py asserts the filter statements and preview exporter exist."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr4",
+      "reviewer_ref": "f4",
+      "status": "applied",
+      "disposition_reason": "Correct: retention predicates now enumerate assistant.turn by name plus assistant.request_id, fetch/proxy/inbound spans by /api/assistant, and outbound client spans by agent URL; task 7 ac3 replaced.",
+      "dispositioned_at": "2026-09-11T15:44:20-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:20-04:00",
+      "severity": "high",
+      "confidence": 0.92,
+      "category": "missing-constraint",
+      "target": "tasks[6].acceptance_criteria[2]",
+      "title": "The specified Langfuse filter drops two spans needed for the claimed complete trace",
+      "description": "Filtering frontend spans only by `/api/assistant` route or URL cannot retain the browser `assistant.turn` span, which has no route/URL attribute in AC1, or the frontend's outbound client span, whose URL is the agent's `/assistant/...` endpoint. Dropping either produces the orphaned chain that AC4 forbids.",
+      "evidence": "The browser instrumentation creates a distinct fetch span at .upstream/opentelemetry-demo/src/frontend/utils/telemetry/FrontendTracer.ts:56-67. Node auto-instrumentation is enabled at .upstream/opentelemetry-demo/src/frontend/utils/telemetry/Instrumentation.js:15-23. The current collector filtering is span-local at scripts/demo.py:120-133; it has no trace-level ancestor closure mechanism.",
+      "recommendation": "Enumerate retention predicates for the semantic root and internal outbound client spans, not just public-route spans.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[6].acceptance_criteria[2]",
+        "proposed": "The Langfuse-bound collector pipeline keeps agent and MCP spans; browser assistant.turn spans by span name plus assistant.request_id; browser fetch, frontend-proxy, and frontend inbound spans whose route or URL matches /api/assistant; and frontend outbound client spans whose URL matches the agent's /assistant/message or /assistant/actions endpoints. It drops unrelated storefront traffic and /healthz, and always exports the filtered result to .runtime/telemetry/langfuse-preview.jsonl with or without Langfuse credentials."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr5",
+      "reviewer_ref": "f5",
+      "status": "applied",
+      "disposition_reason": "768 px is desktop under Theme.breakpoints.desktop; task 3 ac2 now tests 1440/1024/768 as the side panel and 767/390 as the dialog.",
+      "dispositioned_at": "2026-09-11T15:44:20-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:20-04:00",
+      "severity": "medium",
+      "confidence": 0.98,
+      "category": "unstated-assumption",
+      "target": "tasks[2].acceptance_criteria[1]",
+      "title": "The 768 px expectation conflicts with the released theme breakpoint",
+      "description": "The AC classifies 768 px as mobile/full-screen while requiring use of the existing desktop breakpoint, which activates at exactly 768 px. An implementer must either violate the screenshot expectation or bypass/hack around the shared token.",
+      "evidence": ".upstream/opentelemetry-demo/src/frontend/styles/Theme.ts:19-21 defines `desktop` as `@media (min-width: 768px)`. NATIVE_AGENT_UI_PLAN.md:26 says to use that existing breakpoint.",
+      "recommendation": "Choose one boundary explicitly. Preserve the released token by treating 768 px as desktop and add a 767 px mobile check.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[2].acceptance_criteria[1]",
+        "proposed": "With the built frontend image at http://localhost:8080/: at 1440, 1024, and 768 px the panel opens as a right-side panel 400-440 px wide (capped by the viewport) leaving the catalog visible; at 767 and 390 px it opens as a full-screen dialog with title, close control, scrollable transcript, and a composer pinned above the keyboard area; at all five widths the header logo and cart control stay visible and the document does not scroll horizontally (Playwright screenshots at each width)."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr6",
+      "reviewer_ref": "f6",
+      "status": "applied",
+      "disposition_reason": "Split into 0002-layout-assistant-host.patch and 0003-header-assistant-trigger.patch; later patch hints renumbered (0004-0006 in task 3, 0007 in task 8).",
+      "dispositioned_at": "2026-09-11T15:44:20-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:20-04:00",
+      "severity": "medium",
+      "confidence": 0.96,
+      "category": "file-hint-wrong",
+      "target": "tasks[2].files[14]",
+      "title": "One planned patch necessarily covers two upstream files despite the one-file-per-patch AC",
+      "description": "The combined `0002-layout-header-assistant.patch` is assigned both the Layout host and Header trigger changes, but AC8 requires one patch per modified upstream file. A fresh implementer following files[] literally will fail AC8.",
+      "evidence": "Layout and Header are separate upstream files: .upstream/opentelemetry-demo/src/frontend/components/Layout/Layout.tsx:11-18 owns the page shell, while .upstream/opentelemetry-demo/src/frontend/components/Header/Header.tsx:8-23 owns the controls. Neither currently contains an assistant host or trigger.",
+      "recommendation": "Split the combined patch hint into separate Layout and Header patches and renumber later patch names if desired.",
+      "suggested_change": {
+        "op": "split",
+        "target": "tasks[2].files[14]",
+        "proposed": "[\"frontend/patches/0002-layout-assistant-host.patch\", \"frontend/patches/0003-header-assistant-trigger.patch\"]"
+      },
+      "round": 1
+    },
+    {
+      "id": "pr7",
+      "reviewer_ref": "f7",
+      "status": "applied",
+      "disposition_reason": "Folded into constraints 4 and 5 to keep the list at five: no token streaming or session replay (constraint 4), no registry publishing, EKS, or deployment automation (constraint 5).",
+      "dispositioned_at": "2026-09-11T15:44:20-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-11T15:44:20-04:00",
+      "severity": "medium",
+      "confidence": 0.99,
+      "category": "missing-constraint",
+      "target": "constraints",
+      "title": "Three explicit out-of-scope limits exist only in context",
+      "description": "The evaluator checks constraints on every task, but EKS/registry publishing, token streaming, and session replay are only stated in context. They should be an enforceable plan constraint.",
+      "evidence": "NATIVE_AGENT_UI_PLAN.md:3 defers EKS, lines 70-72 defer token streaming, lines 101-103 exclude session replay, and lines 109-111 defer registry publishing/deployment automation. None of the five current constraints excludes all four areas.",
+      "recommendation": "Add the source document's explicit non-goals to constraints.",
+      "suggested_change": {
+        "op": "add",
+        "target": "constraints",
+        "proposed": "\"No EKS or other deployment automation, registry publishing, token streaming, or session replay is added in this cycle.\""
+      },
+      "round": 1
+    }
+  ],
+  "parallel_plan": {
+    "computed_at": "2026-09-11T15:53:27-04:00",
+    "base_branch": "main",
+    "waves": [
+      {
+        "id": 1,
+        "tasks": [
+          "1"
+        ],
+        "notes": "Alone: creates scripts/dev-setup.sh and the stage/build path every other worktree needs; also edits scripts/demo.py which task 2 touches."
+      },
+      {
+        "id": 2,
+        "tasks": [
+          "2",
+          "3"
+        ],
+        "notes": "Parallel: task 2 is Python (concierge/, tests/, bootstrap tools patch in scripts/demo.py); task 3 is the frontend overlay plus compose.native.yaml env and the Docker stack. No shared file, no shared identifier, and task 2 never touches the Docker stack, so no port-8080 interference."
+      },
+      {
+        "id": 3,
+        "tasks": [
+          "4"
+        ],
+        "notes": "Alone: depends on 1-3; edits scripts/demo.py, compose.native.yaml, compose.concierge.yaml and rebuilds/starts the shared stack."
+      },
+      {
+        "id": 4,
+        "tasks": [
+          "5"
+        ],
+        "notes": "Alone: depends on 4; needs the running native stack for its Playwright check."
+      },
+      {
+        "id": 5,
+        "tasks": [
+          "6"
+        ],
+        "notes": "Alone: depends on 5; shares Assistant.provider/gateway/types with task 7 (lexical) and needs the stack."
+      },
+      {
+        "id": 6,
+        "tasks": [
+          "7"
+        ],
+        "notes": "Alone: depends on 6; edits Assistant.gateway.ts (shared with task 6), scripts/demo.py collector config, smoke.py; needs the stack."
+      },
+      {
+        "id": 7,
+        "tasks": [
+          "8"
+        ],
+        "notes": "Alone: final validation over the running stack; edits README and smoke.py."
+      }
+    ],
+    "predicted_files": {
+      "1": [
+        "scripts/dev-setup.sh",
+        "scripts/check-frontend.sh",
+        "scripts/demo.py",
+        "compose.native.yaml",
+        ".dockerignore",
+        ".gitignore",
+        "frontend/overlay/README.md",
+        "frontend/patches/README.md",
+        "tests/test_build.py"
+      ],
+      "2": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "concierge/scripted_model.py",
+        "concierge/telemetry.py",
+        "scripts/demo.py",
+        "tests/test_agent.py",
+        "tests/test_contract.py"
+      ],
+      "3": [
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.styled.ts",
+        "frontend/overlay/components/Assistant/AssistantTrigger.tsx",
+        "frontend/overlay/components/Assistant/Composer.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/components/Assistant/AssistantProductCard.tsx",
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/DemoDetails.tsx",
+        "frontend/overlay/components/Assistant/index.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/patches/0001-app-assistant-provider.patch",
+        "frontend/patches/0002-layout-assistant-host.patch",
+        "frontend/patches/0003-header-assistant-trigger.patch",
+        "frontend/patches/0004-product-page-ask-assistant.patch",
+        "frontend/patches/0005-cypress-fields-assistant.patch",
+        "frontend/patches/0006-document-assistant-env.patch",
+        "compose.native.yaml"
+      ],
+      "4": [
+        "docker/agent.Dockerfile",
+        "docker/mcp.Dockerfile",
+        "docker/frontend-proxy.Dockerfile",
+        "docker/envoy.tmpl.yaml",
+        "docker/base-images.json",
+        "docker/README.md",
+        "compose.native.yaml",
+        "compose.dev.yaml",
+        "compose.concierge.yaml",
+        "scripts/demo.py",
+        ".env.example",
+        ".dockerignore",
+        "tests/test_build.py",
+        "tests/test_integration_config.py"
+      ],
+      "5": [
+        "frontend/overlay/pages/api/assistant/message.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "frontend/overlay/pages/api/assistant/feedback.ts",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "frontend/overlay/utils/assistant/agentClient.ts",
+        "frontend/overlay/utils/assistant/validate.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/DemoDetails.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "compose.native.yaml"
+      ],
+      "6": [
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/components/Assistant/AssistantProductCard.tsx",
+        "frontend/overlay/components/Assistant/AssistantPanel.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "concierge/agent.py",
+        "concierge/scripted_model.py",
+        "tests/test_contract.py"
+      ],
+      "7": [
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/utils/assistant/tracing.ts",
+        "frontend/overlay/pages/api/assistant/message.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "scripts/demo.py",
+        "scripts/smoke.py",
+        "tests/test_integration_config.py",
+        "tests/test_telemetry.py",
+        "concierge/telemetry.py",
+        "concierge/agent.py",
+        "README.md"
+      ],
+      "8": [
+        "frontend/overlay/cypress/e2e/Assistant.cy.ts",
+        "frontend/patches/0007-cypress-config-base-url.patch",
+        "README.md",
+        "NATIVE_AGENT_UI_PLAN.md",
+        "scripts/smoke.py",
+        "scripts/demo.py",
+        "tests/test_build.py",
+        "docker/README.md"
+      ]
+    },
+    "post_merge_build": []
+  }
+}

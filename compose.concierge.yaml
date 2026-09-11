@@ -1,0 +1,76 @@
+services:
+  agent:
+    build: !reset null
+    command: [python, -m, concierge.run_agent]
+    volumes: !override
+      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
+      - ${CONCIERGE_ROOT}/prompts:/app/prompts:ro
+      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/agents/tools.py:ro
+    ports: !override
+      - 127.0.0.1:${AGENT_HOST_PORT:-8010}:8010
+    environment:
+      AGENT_BIND: 0.0.0.0
+      AGENT_MODE: ${AGENT_MODE:-scripted}
+      USE_VCR: "False"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LANGFUSE_PROJECT_ID: ${LANGFUSE_PROJECT_ID:-}
+      LANGFUSE_PUBLIC_URL: ${LANGFUSE_PUBLIC_URL:-}
+      LANGFUSE_PROMPT_LABEL: ${LANGFUSE_PROMPT_LABEL:-production}
+      CLICKSTACK_TRACE_URL_TEMPLATE: ${CLICKSTACK_TRACE_URL_TEMPLATE:-}
+    deploy:
+      resources:
+        limits:
+          memory: 750M
+
+  chatbot:
+    build: !reset null
+    command: [python, -m, concierge.run_chatbot]
+    volumes:
+      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
+    ports: !override
+      - 127.0.0.1:${CHAT_PORT:-7860}:7860
+    environment:
+      AGENT_MODE: ${AGENT_MODE:-scripted}
+      GRADIO_ANALYTICS_ENABLED: "False"
+      CHATBOT_ROOT_PATH: ""
+    deploy:
+      resources:
+        limits:
+          memory: 750M
+
+  mcp:
+    build: !reset null
+    command: [python, -m, concierge.run_mcp]
+    volumes:
+      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
+      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/mcp_server/tools.py:ro
+
+  frontend-proxy:
+    ports: !override
+      - 127.0.0.1:${SHOP_PORT:-8080}:8080
+
+  flagd:
+    volumes: !override
+      - ${CONCIERGE_ROOT}/.runtime/flagd:/etc/flagd
+
+  flagd-ui:
+    volumes: !override
+      - ${CONCIERGE_ROOT}/.runtime/flagd:/app/data
+
+  otel-collector:
+    command: !override
+      - --config=/etc/concierge-collector.yaml
+      - --feature-gates=service.profilesSupport
+    volumes: !override
+      - ${HOST_FILESYSTEM}:/hostfs:ro
+      - ${DOCKER_SOCK}:/var/run/docker.sock:ro
+      - ${CONCIERGE_ROOT}/.runtime/collector.yaml:/etc/concierge-collector.yaml:ro
+      - ${CONCIERGE_ROOT}/.runtime/telemetry:/var/lib/otel
+    environment:
+      CLICKSTACK_OTLP_ENDPOINT: ${CLICKSTACK_OTLP_ENDPOINT:-}
+      CLICKSTACK_API_KEY: ${CLICKSTACK_API_KEY:-}
+      LANGFUSE_BASE_URL: ${LANGFUSE_BASE_URL:-}
+      LANGFUSE_AUTH_HEADER: ${LANGFUSE_AUTH_HEADER:-}

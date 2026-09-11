@@ -1,0 +1,373 @@
+import asyncio
+import logging
+import os
+import time
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
+from typing import Annotated, Literal
+from urllib.parse import quote
+from uuid import UUID
+
+import httpx
+from fastapi import FastAPI, HTTPException
+from langchain.agents import create_agent
+from langchain.agents.middleware import wrap_model_call
+from langchain.tools import tool
+from langchain_core.messages import HumanMessage
+from langchain_core.utils.function_calling import convert_to_openai_tool
+from opentelemetry import trace
+from opentelemetry.trace import SpanKind, Status, StatusCode
+from pydantic import BaseModel, Field
+from src.agents.agents import Agent
+from src.agents.llm import ChatLLM
+
+from concierge.langfuse_api import PROMPT_NAME, LangfuseAPI
+from concierge.scripted_model import ScriptedModel, price, tool_data
+from concierge.telemetry import conversation, encoded, trace_id, tracer
+
+logger = logging.getLogger(__name__)
+Scenario = Literal["shopping", "backend-failure", "budget-violation"]
+
+
+class ChatRequest(BaseModel):
+    session_id: UUID
+    message: str = Field(min_length=1, max_length=4000)
+    scenario: Scenario = "shopping"
+    budget_usd: float = Field(default=150, gt=0, le=100000, allow_inf_nan=False)
+
+
+class FeedbackRequest(BaseModel):
+    session_id: UUID
+    trace_id: str = Field(pattern=r"^[a-f0-9]{32}$")
+    value: Literal[0, 1]
+    comment: str = Field(default="", max_length=1000)
+
+
+@dataclass
+class Session:
+    scenario: str
+    budget: float
+    messages: list = field(default_factory=list)
+    traces: set = field(default_factory=set)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    touched: float = field(default_factory=time.monotonic)
+    turns: int = 0
+
+
+class ConciergeAgent(Agent):
+    def __init__(self):
+        super().__init__()
+        self.sessions = {}
+        self.langfuse = LangfuseAPI()
+        self.mode = os.getenv("AGENT_MODE", "scripted")
+        if self.mode not in {"scripted", "live"}:
+            raise ValueError("AGENT_MODE must be scripted or live")
+        if self.mode == "live" and not os.getenv("API_KEY"):
+            raise ValueError("Set API_KEY before starting AGENT_MODE=live")
+        self.app = FastAPI(title="Astronomy Concierge", lifespan=self.lifespan)
+        self.app.post("/prompt")(self.handle_prompt)
+        self.app.post("/feedback")(self.feedback)
+        self.app.get("/healthz")(self.health)
+
+    @asynccontextmanager
+    async def lifespan(self, app):
+        async with super().lifespan(app):
+            yield
+        trace.get_tracer_provider().force_flush()
+
+    async def health(self):
+        return {
+            "status": "ok",
+            "mode": self.mode,
+            "langfuse_configured": self.langfuse.enabled,
+            "tools_transport": "mcp" if self.mcp_server else "http",
+        }
+
+    def session(self, request):
+        now = time.monotonic()
+        expired = [
+            key
+            for key, state in self.sessions.items()
+            if now - state.touched > 3600 and not state.lock.locked()
+        ]
+        for key in expired:
+            del self.sessions[key]
+        key = str(request.session_id)
+        if key not in self.sessions:
+            if len(self.sessions) >= 256:
+                raise HTTPException(503, "Conversation capacity reached. Try again later.")
+            self.sessions[key] = Session(request.scenario, request.budget_usd)
+        state = self.sessions[key]
+        if state.scenario != request.scenario or state.budget != request.budget_usd:
+            raise HTTPException(409, "Start a new conversation to change scenario or budget.")
+        state.touched = now
+        return state
+
+    async def scoped_tools(self, session_id, calls):
+        upstream = {t.name: t for t in await self.get_tool_list()}
+
+        async def invoke(name, args):
+            with tracer.start_as_current_span(
+                name,
+                attributes={
+                    "langfuse.observation.type": "tool",
+                    "langfuse.observation.input": encoded(args),
+                    "gen_ai.tool.name": name,
+                    "gen_ai.operation.name": "execute_tool",
+                    "gen_ai.tool.call.arguments": encoded(args),
+                },
+            ) as span:
+                try:
+                    result = tool_data(await upstream[name].ainvoke(args))
+                    if isinstance(result, str) and result.lower().startswith(
+                        ("error", "checkout failed")
+                    ):
+                        result = {"error": result}
+                except Exception as exc:
+                    span.record_exception(exc)
+                    result = {"error": f"{name} could not reach the shop"}
+                if isinstance(result, dict) and result.get("error"):
+                    span.set_attribute("error.type", "shop_tool_error")
+                    span.set_status(Status(StatusCode.ERROR, str(result["error"])[:300]))
+                    span.set_attribute("langfuse.observation.level", "ERROR")
+                span.set_attribute("langfuse.observation.output", encoded(result))
+                span.set_attribute("gen_ai.tool.call.result", encoded(result))
+                calls.append({"name": name, "arguments": args, "result": result})
+                return result
+
+        @tool
+        async def list_products():
+            """List the Astronomy Shop catalog and current USD prices."""
+            return await invoke("list_products", {})
+
+        @tool
+        async def get_product(product_id: str):
+            """Look up one catalog product by ID before recommending it."""
+            return await invoke("get_product", {"product_id": product_id})
+
+        @tool
+        async def get_cart():
+            """Read this conversation's cart."""
+            return await invoke("get_cart", {"user_id": session_id})
+
+        @tool
+        async def add_to_cart(product_id: str, quantity: Annotated[int, Field(ge=1, le=10)] = 1):
+            """Add an item to this conversation's cart, only when the shopper requests it."""
+            return await invoke(
+                "add_to_cart",
+                {
+                    "user_id": session_id,
+                    "product_id": product_id,
+                    "quantity": quantity,
+                },
+            )
+
+        return [list_products, get_product, get_cart, add_to_cart]
+
+    async def handle_prompt(self, request: ChatRequest):
+        if not request.message.strip():
+            raise HTTPException(422, "Enter a message.")
+        state = self.session(request)
+        async with state.lock:
+            if state.turns >= 20:
+                raise HTTPException(409, "This conversation reached 20 turns. Start a new one.")
+            session_id = str(request.session_id)
+            with conversation(session_id, request.scenario, self.mode):
+                request_span = trace.get_current_span()
+                request_span.set_attribute("langfuse.observation.input", request.message)
+                with tracer.start_as_current_span(
+                    "concierge.turn",
+                    attributes={
+                        "langfuse.observation.type": "agent",
+                        "gen_ai.operation.name": "invoke_agent",
+                        "gen_ai.agent.name": "astronomy-concierge",
+                        "langfuse.observation.input": encoded({"message": request.message}),
+                        "langfuse.trace.metadata.budget_usd": request.budget_usd,
+                    },
+                ) as span:
+                    current_trace = trace_id()
+                    try:
+                        async with asyncio.timeout(90):
+                            result = await self.run_turn(request, state)
+                    except Exception:
+                        logger.exception("Conversation failed; trace_id=%s", current_trace)
+                        span.set_status(Status(StatusCode.ERROR, "Agent turn failed"))
+                        raise HTTPException(
+                            502,
+                            {
+                                "message": "The agent could not finish. Check the trace or start a new conversation.",
+                                "trace_id": current_trace,
+                            },
+                        ) from None
+                    span.set_attribute("langfuse.observation.output", result["reply"])
+                    request_span.set_attribute("langfuse.observation.output", result["reply"])
+                    result.update(
+                        {
+                            "trace_id": current_trace,
+                            "session_id": session_id,
+                            "mode": self.mode,
+                            "links": self.links(current_trace),
+                        }
+                    )
+                    state.traces.add(current_trace)
+                    state.turns += 1
+                    state.touched = time.monotonic()
+                    return result
+
+    async def run_turn(self, request, state):
+        prompt = await self.langfuse.prompt()
+        calls = []
+        tools = await self.scoped_tools(str(request.session_id), calls)
+        if self.mode == "scripted":
+            model = ScriptedModel(scenario=request.scenario)
+        else:
+            model = ChatLLM(timeout=30, max_retries=1)
+
+        @wrap_model_call
+        async def observe_model(model_request, handler):
+            model_name = "scripted-demo" if self.mode == "scripted" else os.getenv("LLM_MODEL", "")
+            span_attrs = {
+                "langfuse.observation.type": "generation",
+                "langfuse.observation.model.name": model_name,
+                "gen_ai.request.model": model_name,
+                "gen_ai.operation.name": "chat",
+                "gen_ai.prompt.name": PROMPT_NAME,
+                "gen_ai.prompt.version": str(prompt.version),
+                "langfuse.observation.input": encoded(
+                    {
+                        "system": system_prompt,
+                        "messages": [m.model_dump() for m in model_request.messages],
+                        "tools": [convert_to_openai_tool(t) for t in model_request.tools],
+                    }
+                ),
+                "langfuse.observation.metadata.prompt_source": "langfuse"
+                if prompt.managed
+                else "bundled",
+                "langfuse.observation.metadata.prompt_version": prompt.version,
+            }
+            if prompt.managed:
+                span_attrs.update(
+                    {
+                        "langfuse.observation.prompt.name": PROMPT_NAME,
+                        "langfuse.observation.prompt.version": prompt.version,
+                    }
+                )
+            with tracer.start_as_current_span(
+                "model.generate",
+                attributes=span_attrs,
+                kind=SpanKind.CLIENT if self.mode == "live" else SpanKind.INTERNAL,
+            ) as span:
+                response = await handler(model_request)
+                span.set_attribute(
+                    "langfuse.observation.output",
+                    encoded([m.model_dump() for m in response.result]),
+                )
+                message = response.result[-1]
+                metadata = message.response_metadata
+                for source, target in (("model_name", "model"), ("id", "id")):
+                    if metadata.get(source):
+                        span.set_attribute(f"gen_ai.response.{target}", metadata[source])
+                if metadata.get("finish_reason"):
+                    span.set_attribute(
+                        "gen_ai.response.finish_reasons", [metadata["finish_reason"]]
+                    )
+                usage = getattr(message, "usage_metadata", None)
+                if usage and self.mode == "live":
+                    # Langfuse maps standard usage attributes; missing usage stays unknown.
+                    for key in ("input_tokens", "output_tokens"):
+                        if key in usage:
+                            span.set_attribute(f"gen_ai.usage.{key}", usage[key])
+                    for group, source, target in (
+                        ("input_token_details", "cache_read", "cache_read.input_tokens"),
+                        ("input_token_details", "cache_creation", "cache_write.input_tokens"),
+                        ("output_token_details", "reasoning", "reasoning.output_tokens"),
+                    ):
+                        value = usage.get(group, {}).get(source)
+                        if value is not None:
+                            span.set_attribute(f"gen_ai.usage.{target}", value)
+                return response
+
+        system_prompt = prompt.text + f"\nThe shopper's budget is USD {request.budget_usd:.2f}."
+        graph = create_agent(
+            model, tools=tools, system_prompt=system_prompt, middleware=[observe_model]
+        )
+        try:
+            result = await graph.ainvoke(
+                {"messages": [*state.messages, HumanMessage(content=request.message)]},
+                config={"recursion_limit": self.agentRecursionLimit},
+            )
+        finally:
+            if self.mode == "live":
+                await model.http_async_client.aclose()
+        state.messages = result["messages"]
+        content = state.messages[-1].content
+        reply = content if isinstance(content, str) else encoded(content)
+        scores = {}
+        # This evaluator has known fixture semantics; live replies use human feedback.
+        if self.mode == "scripted":
+            products = [
+                call["result"]
+                for call in calls
+                if call["name"] == "get_product"
+                and isinstance(call["result"], dict)
+                and "id" in call["result"]
+            ]
+            if products:
+                scores["budget_adherence"] = int(price(products[-1]) <= request.budget_usd)
+        for name, value in scores.items():
+            with tracer.start_as_current_span(
+                "evaluate.budget",
+                attributes={
+                    "langfuse.observation.type": "evaluator",
+                    "langfuse.observation.input": encoded(
+                        {
+                            "budget_usd": request.budget_usd,
+                            "product": products[-1],
+                        }
+                    ),
+                    "langfuse.observation.output": encoded({name: value}),
+                },
+            ):
+                try:
+                    await self.langfuse.score(
+                        trace_id(), name, value, "Deterministic scripted recommendation check"
+                    )
+                except httpx.HTTPError:
+                    logger.warning("Could not submit evaluation score; trace_id=%s", trace_id())
+        return {
+            "reply": reply,
+            "response": {"messages": [{"content": reply}]},
+            "tools": calls,
+            "scores": scores,
+            "prompt_version": prompt.version,
+            "prompt_source": "langfuse" if prompt.managed else "bundled",
+        }
+
+    async def feedback(self, request: FeedbackRequest):
+        state = self.sessions.get(str(request.session_id))
+        if not state or request.trace_id not in state.traces:
+            raise HTTPException(404, "That response does not belong to this conversation.")
+        if not self.langfuse.enabled:
+            raise HTTPException(503, "Configure Langfuse to save feedback.")
+        try:
+            await self.langfuse.score(
+                request.trace_id, "user_helpfulness", request.value, request.comment
+            )
+        except httpx.HTTPError:
+            raise HTTPException(
+                502, "Langfuse could not save feedback. Please try again."
+            ) from None
+        return {"saved": True}
+
+    def links(self, current_trace):
+        links = {}
+        public_url = os.getenv("LANGFUSE_PUBLIC_URL") or os.getenv("LANGFUSE_BASE_URL", "")
+        project_id = os.getenv("LANGFUSE_PROJECT_ID", "")
+        if public_url and project_id:
+            links["Langfuse"] = (
+                f"{public_url.rstrip('/')}/project/{quote(project_id, safe='')}/traces/{current_trace}"
+            )
+        template = os.getenv("CLICKSTACK_TRACE_URL_TEMPLATE", "")
+        if template:
+            links["ClickStack"] = template.replace("{trace_id}", current_trace)
+        return links
