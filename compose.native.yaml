@@ -1,15 +1,40 @@
-# Native storefront: the frontend runs from the locally built image recorded in
-# .runtime/images/manifest.json (scripts/demo.py build). Every other shop service keeps the
-# released ghcr.io/open-telemetry/demo:3.0.0-* image selected by scripts/demo.py.
+# Native storefront: frontend, agent, mcp, and frontend-proxy run from the locally built images
+# recorded in .runtime/images/manifest.json (scripts/demo.py build), with no source bind mounts.
+# Every other shop service keeps the released ghcr.io/open-telemetry/demo:3.0.0-* image selected
+# by scripts/demo.py. Source mounts for development are in compose.dev.yaml (`demo.py up --dev`).
 services:
   frontend:
     image: ${CONCIERGE_FRONTEND_IMAGE}
     build: !reset null
     pull_policy: never
     environment:
+      # Server-side only: the Next.js API routes call the agent here. Never NEXT_PUBLIC_.
+      - AGENT_BASE_URL=${AGENT_BASE_URL:-http://agent:8010}
       # Read by pages/_document.tsx when the frontend server starts and handed to the browser as
       # window.ENV (a change needs `demo.py up` to recreate the container, not a rebuild).
-      # fixtures: canned assistant responses, no agent call. Demo details show the scenario,
-      # prompt, tools, and trace links under each answer.
-      - ASSISTANT_TRANSPORT=${ASSISTANT_TRANSPORT:-fixtures}
+      # live: same-origin /api/assistant routes. fixtures: canned answers, no agent call.
+      # Demo details show the scenario, prompt, tools, and trace links under each answer.
+      - ASSISTANT_TRANSPORT=${ASSISTANT_TRANSPORT:-live}
       - ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-true}
+
+  agent:
+    image: ${CONCIERGE_AGENT_IMAGE}
+    pull_policy: never
+    # compose.agent.yaml mounts upstream's VCR fixtures; the image runs with USE_VCR=False.
+    volumes: !reset []
+
+  mcp:
+    image: ${CONCIERGE_MCP_IMAGE}
+    pull_policy: never
+
+  frontend-proxy:
+    image: ${CONCIERGE_FRONTEND_PROXY_IMAGE}
+    build: !reset null
+    pull_policy: never
+    depends_on:
+      # compose.agent.yaml makes the proxy wait for the chatbot; the proxy no longer routes to it.
+      chatbot: !reset null
+
+  chatbot:
+    # Debug-only Gradio client, started by `demo.py up --debug-chatbot`.
+    profiles: [debug]

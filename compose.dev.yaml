@@ -1,0 +1,14 @@
+# Development: bind the working tree's package, prompts, and corrected tools over the built
+# agent and mcp images so Python edits need a container restart instead of a rebuild.
+# Applied only by `scripts/demo.py up --dev`; the frontend image has no source mount.
+services:
+  agent:
+    volumes:
+      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
+      - ${CONCIERGE_ROOT}/prompts:/app/prompts:ro
+      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/agents/tools.py:ro
+
+  mcp:
+    volumes:
+      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
+      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/mcp_server/tools.py:ro

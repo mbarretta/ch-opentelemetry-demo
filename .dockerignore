@@ -1,8 +1,10 @@
-# Build contexts rooted at this repository never receive secrets, the virtualenv, the upstream
-# checkout, caches, or telemetry captures. Only bootstrap's staged tool wrapper is let through.
+# Build contexts rooted at this repository (docker/*.Dockerfile) receive only what those images
+# copy: concierge/, prompts/, docker/, and bootstrap's patched tools.py. Secrets, the example
+# env (it names model and agent addresses), the virtualenv, the upstream checkout, caches,
+# telemetry captures, compose files, docs, tests, and scripts stay out.
 .env
 .env.*
-!.env.example
+.env.example
 .venv
 .upstream
 .cache
@@ -16,3 +18,10 @@
 **/*.pyc
 .pytest_cache
 .ruff_cache
+compose*.yaml
+**/*.md
+frontend
+tests
+scripts
+pyproject.toml
+requirements*

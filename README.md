@@ -12,10 +12,11 @@ Requirements: Docker with Compose 2.24.4 or later, Git, Python 3.14, and [uv](ht
 python3 scripts/demo.py bootstrap
 uv venv --python 3.14
 uv pip install -r requirements.txt
+.venv/bin/python scripts/demo.py build
 .venv/bin/python scripts/demo.py up
 ```
 
-Open the [chat UI](http://localhost:7860) or [Astronomy Shop](http://localhost:8080). Choose **Use sample request**, then **Send**. After the recommendation, use **Add it to my cart** and **Show my cart**. The assistant's cart belongs to its conversation; it is separate from the storefront browser's cart.
+`build` produces the frontend, agent, mcp, and frontend-proxy images locally (see `docker/README.md`); `up` runs the stack from them. Open the [Astronomy Shop](http://localhost:8080). The Gradio [chat UI](http://localhost:7860) is a debug client, started only by `up --debug-chatbot`: choose **Use sample request**, then **Send**. After the recommendation, use **Add it to my cart** and **Show my cart**. The assistant's cart belongs to its conversation; it is separate from the storefront browser's cart.
 
 Bootstrap creates `.env` from `.env.example`, verifies the exact upstream commit, and stages the overlay's cart-wrapper fix. The launcher pins every shop image to `3.0.0`; it does not inherit upstream's `DEMO_VERSION=latest` default. Containers and their network use the `astronomy-concierge` project name.
 
@@ -109,14 +110,14 @@ scripts/check-frontend.sh
 
 The smoke script needs the running scripted demo. It checks recommendation, cart isolation, budget failure, the actual catalog fault, and cross-service trace correlation. It restores the prior catalog flag even if a check fails. Detailed results go to `.runtime/smoke-results.json`.
 
-The package and prompts are mounted read-only into the released agent/chatbot images. After editing Python code, restart those containers; changing mounted files alone does not reload their processes. The `up` command recreates containers when their configuration changes.
+The agent and mcp images bake in the package, prompts, and corrected tools, so a Python change needs `demo.py build` and `up`. For faster iteration, `up --dev` bind-mounts `concierge/`, `prompts/`, and `.runtime/tools.py` read-only over those images; after editing, restart the containers, because changing mounted files alone does not reload their processes. The `up` command recreates containers when their configuration changes.
 
-The default Gradio interface is served directly on port 7860. Use this URL for the overlay rather than the upstream proxy's `/chatbot` route.
+The Gradio interface (`up --debug-chatbot`) is served directly on port 7860; the native proxy has no `/chatbot` route.
 
 ## Source and integration notes
 
 - Upstream: [3.0.0](https://github.com/open-telemetry/opentelemetry-demo/releases/tag/3.0.0), commit `1755859a9de82c2e5e225be68abc401a5ebf2b4f`.
-- The only staged upstream tool change corrects `get_cart` from `user_id` to the frontend's `sessionId` query parameter and supplies `currencyCode=USD`. It is applied to both built-in and MCP wrappers.
+- The only staged upstream tool change (`TOOLS_PATCH` in `scripts/demo.py`) corrects `get_cart` from `user_id` to the frontend's `sessionId` query parameter and gives `list_products`, `get_product`, and `get_cart` a `currency_code` parameter forwarded as `currencyCode`. The corrected file is baked into both the agent and MCP images.
 - The overlay subclasses the released `Agent` and `ChatAgentUI`. It uses one OpenTelemetry provider in each overlay process, with explicit model/tool spans, to avoid duplicate LLM instrumentation.
 - ClickStack dashboards written for older `app.*` attributes may need the release's `demo.*` names.
 - This is a local demo with in-memory sessions, not a production authentication or persistence design. Keep its unauthenticated chat/API listeners local.
