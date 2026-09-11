@@ -7,8 +7,8 @@ import * as S from './AssistantPanel.styled';
 export const MESSAGE_MAX_LENGTH = 500;
 
 const Composer = () => {
-  const { draft, setDraft, sendMessage, pending, productContext, clearProductContext } = useAssistant();
-  const busy = pending !== null;
+  const { draft, setDraft, sendMessage, pending, resuming, productContext, clearProductContext } = useAssistant();
+  const busy = pending !== null || resuming;
   // The product id is always shown; the name joins it once the product page has loaded it.
   const contextLabel = productContext
     ? productContext.name

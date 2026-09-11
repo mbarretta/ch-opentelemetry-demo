@@ -1,8 +1,8 @@
 diff --git a/src/frontend/utils/enums/CypressFields.ts b/src/frontend/utils/enums/CypressFields.ts
-index be85b82..6f5a34d 100644
+index be85b82..9064d06 100644
 --- a/src/frontend/utils/enums/CypressFields.ts
 +++ b/src/frontend/utils/enums/CypressFields.ts
-@@ -25,4 +25,20 @@ export enum CypressFields {
+@@ -25,4 +25,23 @@ export enum CypressFields {
    ProductDescription = 'product-description',
    ProductQuantity = 'product-quantity',
    ProductAddToCart = 'product-add-to-cart',
@@ -22,4 +22,7 @@ index be85b82..6f5a34d 100644
 +  AssistantAskProduct = 'assistant-ask-product',
 +  AssistantFeedback = 'assistant-feedback',
 +  AssistantDemoDetails = 'assistant-demo-details',
++  AssistantNewConversation = 'assistant-new-conversation',
++  AssistantNotice = 'assistant-notice',
++  AssistantUncertain = 'assistant-uncertain',
  }

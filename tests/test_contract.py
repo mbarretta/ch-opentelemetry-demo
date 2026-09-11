@@ -343,6 +343,44 @@ async def test_failed_add_to_cart_action_is_not_a_success_and_can_be_retried(age
     assert retried.json()["cart_changed"] is True
 
 
+async def test_add_to_cart_action_awaits_nothing_after_it_changes_the_cart(agent, client):
+    """The prompt lookup runs before the cart call, so a failure there leaves both untouched."""
+    shop_session = str(uuid4())
+    first = (await client.post("/assistant/message", json=message(shop_session))).json()
+    state = agent.sessions[first["conversation_id"]]
+    messages_before = len(state.messages)
+    original = agent.langfuse.prompt
+
+    async def prompt():
+        agent.test_calls.append(("prompt", {}))
+        return await original()
+
+    agent.langfuse.prompt = prompt
+    agent.test_calls.clear()
+    action = {
+        "conversation_id": first["conversation_id"],
+        "request_id": str(uuid4()),
+        "product_id": EXPLORASCOPE,
+        "quantity": 1,
+        "currency_code": "USD",
+    }
+    assert (await client.post("/assistant/actions/add-to-cart", json=action)).status_code == 200
+    assert [name for name, _ in agent.test_calls] == ["prompt", "add_to_cart"]
+
+    async def failing_prompt():
+        raise RuntimeError("prompt store down")
+
+    agent.langfuse.prompt = failing_prompt
+    second = {**action, "request_id": str(uuid4())}
+    with pytest.raises(RuntimeError):
+        await client.post("/assistant/actions/add-to-cart", json=second)
+    assert agent.test_carts == {shop_session: [{"productId": EXPLORASCOPE, "quantity": 1}]}
+    assert len(state.messages) == messages_before + 2
+    assert state.turns == 2
+    assert second["request_id"] not in state.replies
+    assert not state.lock.locked()
+
+
 async def test_conversation_status_and_expiry(agent, client):
     shop_session = str(uuid4())
     body = (
@@ -461,6 +499,30 @@ async def test_product_context_explain_calls_get_product_for_that_id(agent, clie
         )
     ).json()
     assert [t["name"] for t in plain["demo"]["tools"]][0] == "list_products"
+
+
+async def test_product_context_add_request_adds_the_viewed_product(agent, client):
+    shop_session = str(uuid4())
+    body = (
+        await client.post(
+            "/assistant/message",
+            json={
+                **message(shop_session, text="Add this to my cart"),
+                "product_context": {"product_id": EXPENSIVE},
+            },
+        )
+    ).json()
+    assert body["cart_changed"] is True
+    assert [t["name"] for t in body["demo"]["tools"]] == ["add_to_cart"]
+    assert body["demo"]["tools"][0]["arguments"] == {"product_id": EXPENSIVE, "quantity": 1}
+    assert agent.test_carts == {shop_session: [{"productId": EXPENSIVE, "quantity": 1}]}
+    plain = (
+        await client.post(
+            "/assistant/message", json=message(str(uuid4()), text="Add this to my cart")
+        )
+    ).json()
+    assert plain["cart_changed"] is False
+    assert "look up a product first" in plain["reply"]
 
 
 def test_scripted_model_without_context_ignores_explain_requests():

@@ -318,6 +318,10 @@ class ConciergeAgent(Agent):
                     },
                 ) as span:
                     current_trace = trace_id()
+                    # Everything that awaits runs before the cart call: once the shop has
+                    # changed the cart, recording the turn below cannot be interrupted, so the
+                    # conversation never misses an action the shop performed.
+                    prompt = await self.langfuse.prompt()
                     add_to_cart = next(
                         t
                         for t in await self.scoped_tools(
@@ -360,7 +364,6 @@ class ConciergeAgent(Agent):
                             AIMessage(content=reply),
                         ]
                     )
-                    prompt = await self.langfuse.prompt()
                     result = {
                         "reply": reply,
                         "calls": calls,

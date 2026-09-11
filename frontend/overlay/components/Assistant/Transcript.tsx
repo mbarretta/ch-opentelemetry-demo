@@ -57,6 +57,13 @@ const EmptyState = () => {
 const Entry = ({ entry }: { entry: TranscriptEntry }) => {
   const { demoDetailsEnabled } = useAssistant();
 
+  if (entry.kind === 'notice') {
+    return (
+      <S.Notice role="note" data-cy={CypressFields.AssistantNotice}>
+        {entry.text}
+      </S.Notice>
+    );
+  }
   if (entry.kind === 'user') {
     return (
       <S.Message $from="user" data-cy={CypressFields.AssistantMessage} data-from="user">
@@ -86,29 +93,65 @@ const Entry = ({ entry }: { entry: TranscriptEntry }) => {
   );
 };
 
+// The refetched cart has not (yet) shown the action; the shopper decides whether to retry.
+const uncertainText = (productName: string) =>
+  `The assistant did not confirm whether ${productName} was added to your cart. ` +
+  'Your cart has been refreshed; check it before retrying.';
+
 const Transcript = () => {
-  const { transcript, pending, error, retry } = useAssistant();
+  const { transcript, pending, resuming, uncertain, error, retry, retryUncertain, dismissUncertain } = useAssistant();
   const ref = useRef<HTMLElement>(null);
 
   // Keep the newest entry in view as the conversation grows.
   useEffect(() => {
     const element = ref.current;
     if (element) element.scrollTop = element.scrollHeight;
-  }, [transcript.length, pending, error]);
+  }, [transcript.length, pending, uncertain, error]);
 
-  const showEmptyState = transcript.length === 0 && !pending && !error;
+  // A fresh conversation may open with notices about the one it replaced; they sit above the empty state.
+  const showEmptyState = !resuming && !pending && !uncertain && !error && transcript.every(entry => entry.kind === 'notice');
+  const busy = pending !== null;
 
   return (
     <S.Transcript ref={ref} tabIndex={0} aria-label="Conversation" data-cy={CypressFields.AssistantTranscript}>
-      {showEmptyState ? <EmptyState /> : null}
       {transcript.map(entry => (
         <Entry key={entry.id} entry={entry} />
       ))}
+      {showEmptyState ? <EmptyState /> : null}
+      {resuming ? (
+        <S.Status>
+          <S.StatusDot aria-hidden="true" />
+          Checking your previous conversation
+        </S.Status>
+      ) : null}
       {pending ? (
         <S.Status>
           <S.StatusDot aria-hidden="true" />
           {pending.kind === 'message' ? 'Looking up products' : `Adding ${pending.productName} to your cart`}
         </S.Status>
+      ) : null}
+      {uncertain ? (
+        <S.UncertainBox
+          role="status"
+          data-cy={CypressFields.AssistantUncertain}
+          data-state={uncertain.confirmed ? 'confirmed' : 'unknown'}
+        >
+          <p>
+            {uncertain.confirmed
+              ? `Your cart confirms ${uncertain.turn.productName} was added.`
+              : uncertainText(uncertain.turn.productName)}
+          </p>
+          <S.ButtonRow>
+            {uncertain.confirmed ? null : (
+              <S.PanelButton type="button" $type="secondary" data-cy={CypressFields.AssistantRetry} disabled={busy} onClick={retryUncertain}>
+                Retry
+              </S.PanelButton>
+            )}
+            <S.PanelButton type="button" $type="secondary" disabled={busy} onClick={dismissUncertain}>
+              Dismiss
+            </S.PanelButton>
+          </S.ButtonRow>
+        </S.UncertainBox>
       ) : null}
       {error ? (
         <S.ErrorBox role="alert" data-cy={CypressFields.AssistantError}>

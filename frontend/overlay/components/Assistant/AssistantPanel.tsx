@@ -40,6 +40,7 @@ interface IPanelProps {
 }
 
 const OpenPanel = ({ isDesktop, onClose }: IPanelProps) => {
+  const { pending, resuming, newConversation } = useAssistant();
   const panelRef = useRef<HTMLElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
 
@@ -109,15 +110,25 @@ const OpenPanel = ({ isDesktop, onClose }: IPanelProps) => {
     >
       <S.PanelHeader>
         <S.Title id={TITLE_ID}>Shopping assistant</S.Title>
-        <S.CloseButton
-          ref={closeRef}
-          type="button"
-          aria-label="Close assistant"
-          data-cy={CypressFields.AssistantClose}
-          onClick={onClose}
-        >
-          <span aria-hidden="true">×</span>
-        </S.CloseButton>
+        <S.HeaderActions>
+          <S.HeaderButton
+            type="button"
+            data-cy={CypressFields.AssistantNewConversation}
+            disabled={pending !== null || resuming}
+            onClick={newConversation}
+          >
+            New conversation
+          </S.HeaderButton>
+          <S.CloseButton
+            ref={closeRef}
+            type="button"
+            aria-label="Close assistant"
+            data-cy={CypressFields.AssistantClose}
+            onClick={onClose}
+          >
+            <span aria-hidden="true">×</span>
+          </S.CloseButton>
+        </S.HeaderActions>
       </S.PanelHeader>
       <Transcript />
       <Composer />

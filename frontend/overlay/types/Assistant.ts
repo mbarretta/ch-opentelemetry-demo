@@ -8,6 +8,8 @@
 import { Money } from '../protos/demo';
 
 export const ASSISTANT_CONTRACT_VERSION = '1';
+// Mirrors MAX_TURNS in concierge/contract.py: a conversation with this many turns answers 409 to every further turn.
+export const ASSISTANT_MAX_TURNS = 20;
 
 // live: the same-origin /api/assistant routes (default). fixtures: canned answers, no agent call.
 export const ASSISTANT_TRANSPORTS = ['live', 'fixtures'] as const;
@@ -136,17 +138,47 @@ export interface AssistantTransport {
   sendMessage(request: AssistantMessageRequest): Promise<AssistantResponse>;
   addToCart(request: AssistantActionRequest): Promise<AssistantResponse>;
   submitFeedback(request: AssistantFeedbackRequest): Promise<AssistantFeedbackResult>;
+  // Is this conversation still alive on the agent, and which shop session does it belong to?
+  getConversation(conversationId: string): Promise<AssistantConversationStatus>;
 }
 
 export type FeedbackState = 'saved' | 'not_saved' | 'pending';
 
 // Transcript entries are what the panel renders. Ids are the request_id prefixed by kind
-// (u:, a:, c:) because a user message and its answer share one request_id.
+// (u:, a:, c:) because a user message and its answer share one request_id; notices (n:) are
+// the storefront's own remarks about the conversation (it expired, a cart action was confirmed).
 export type TranscriptEntry =
   | { kind: 'user'; id: string; text: string; productContext?: AssistantProductContext }
   | { kind: 'assistant'; id: string; response: AssistantResponse; feedback?: FeedbackState; feedbackNote?: string }
-  | { kind: 'cart'; id: string; response: AssistantResponse; productName: string; quantity: number };
+  | { kind: 'cart'; id: string; response: AssistantResponse; productName: string; quantity: number }
+  | { kind: 'notice'; id: string; text: string };
 
-export type PendingTurn =
-  | { kind: 'message'; request: AssistantMessageRequest }
-  | { kind: 'action'; request: AssistantActionRequest; productName: string };
+export interface MessageTurn {
+  kind: 'message';
+  request: AssistantMessageRequest;
+}
+
+export interface ActionTurn {
+  kind: 'action';
+  request: AssistantActionRequest;
+  productName: string;
+  // How many of this product the cart held when the shopper clicked. When the agent does not
+  // answer in time, a refetched cart holding at least quantityBefore + quantity confirms the action.
+  quantityBefore: number;
+}
+
+export type PendingTurn = MessageTurn | ActionTurn;
+
+// What the browser keeps across page loads (gateways/AssistantSession.gateway.ts). A stored
+// conversation is a candidate only: the provider resumes it after the agent confirms it is alive
+// and bound to this shop session. An unresolved cart action travels with it so a reload cannot
+// hide an outcome the shopper still has to check.
+export interface StoredConversation {
+  version: 1;
+  shopSessionId: string;
+  conversationId: string | null;
+  contractVersion: string | null;
+  budget: number;
+  transcript: TranscriptEntry[];
+  uncertain: ActionTurn | null;
+}
