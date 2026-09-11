@@ -30,19 +30,19 @@ def agent(monkeypatch):
     instance.fail_product = False
 
     @tool
-    async def list_products():
+    async def list_products(currency_code: str = "USD"):
         """List products."""
         return [product(EXPLORASCOPE), product(EXPENSIVE)]
 
     @tool
-    async def get_product(product_id: str):
+    async def get_product(product_id: str, currency_code: str = "USD"):
         """Get a product."""
         if instance.fail_product:
             return "Error while fetching product: HTTP 500"
         return product(product_id)
 
     @tool
-    async def get_cart(user_id: str):
+    async def get_cart(user_id: str, currency_code: str = "USD"):
         """Get cart."""
         return {"userId": user_id, "items": carts.get(user_id, [])}
 
@@ -79,7 +79,8 @@ async def test_shopping_runs_real_graph_and_correlates_spans(agent, spans):
     assert "user_id" not in json.dumps(model_input["tools"])
     evaluation = next(s for s in recorded if s.name == "evaluate.budget")
     inputs = json.loads(evaluation.attributes["langfuse.observation.input"])
-    assert inputs["budget_usd"] == 150
+    assert inputs["budget"] == 150
+    assert inputs["currency_code"] == "USD"
     assert inputs["product"]["id"] == EXPLORASCOPE
 
 

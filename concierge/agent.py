@@ -4,16 +4,17 @@ import os
 import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 from urllib.parse import quote
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import httpx
 from fastapi import FastAPI, HTTPException
 from langchain.agents import create_agent
 from langchain.agents.middleware import wrap_model_call
 from langchain.tools import tool
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.utils.function_calling import convert_to_openai_tool
 from opentelemetry import trace
 from opentelemetry.trace import SpanKind, Status, StatusCode
@@ -21,12 +22,25 @@ from pydantic import BaseModel, Field
 from src.agents.agents import Agent
 from src.agents.llm import ChatLLM
 
+from concierge.contract import (
+    CONTRACT_VERSION,
+    IDLE_SECONDS,
+    MAX_TURNS,
+    AddToCartAction,
+    AssistantResponse,
+    ConversationStatus,
+    DemoDetails,
+    MessageRequest,
+    Scenario,
+    cart_changed,
+    demo_tools,
+    product_refs,
+)
 from concierge.langfuse_api import PROMPT_NAME, LangfuseAPI
 from concierge.scripted_model import ScriptedModel, price, tool_data
 from concierge.telemetry import conversation, encoded, trace_id, tracer
 
 logger = logging.getLogger(__name__)
-Scenario = Literal["shopping", "backend-failure", "budget-violation"]
 
 
 class ChatRequest(BaseModel):
@@ -45,13 +59,22 @@ class FeedbackRequest(BaseModel):
 
 @dataclass
 class Session:
+    """One conversation. ``shop_session_id`` is the cart it is bound to for its whole life."""
+
     scenario: str
     budget: float
+    shop_session_id: str
+    currency_code: str = "USD"
     messages: list = field(default_factory=list)
     traces: set = field(default_factory=set)
+    replies: dict = field(default_factory=dict)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     touched: float = field(default_factory=time.monotonic)
     turns: int = 0
+
+    def expires_at(self):
+        remaining = IDLE_SECONDS - (time.monotonic() - self.touched)
+        return datetime.now(UTC) + timedelta(seconds=max(remaining, 0))
 
 
 class ConciergeAgent(Agent):
@@ -68,6 +91,9 @@ class ConciergeAgent(Agent):
         self.app.post("/prompt")(self.handle_prompt)
         self.app.post("/feedback")(self.feedback)
         self.app.get("/healthz")(self.health)
+        self.app.post("/assistant/message")(self.assistant_message)
+        self.app.post("/assistant/actions/add-to-cart")(self.assistant_add_to_cart)
+        self.app.get("/assistant/conversations/{conversation_id}")(self.assistant_conversation)
 
     @asynccontextmanager
     async def lifespan(self, app):
@@ -79,31 +105,69 @@ class ConciergeAgent(Agent):
         return {
             "status": "ok",
             "mode": self.mode,
+            "contract_version": CONTRACT_VERSION,
             "langfuse_configured": self.langfuse.enabled,
             "tools_transport": "mcp" if self.mcp_server else "http",
         }
 
-    def session(self, request):
+    # -- conversation store -----------------------------------------------------------------
+
+    def expire(self):
         now = time.monotonic()
         expired = [
             key
             for key, state in self.sessions.items()
-            if now - state.touched > 3600 and not state.lock.locked()
+            if now - state.touched > IDLE_SECONDS and not state.lock.locked()
         ]
         for key in expired:
             del self.sessions[key]
+
+    def create(self, key, scenario, budget, shop_session_id, currency_code="USD"):
+        if len(self.sessions) >= 256:
+            raise HTTPException(503, "Conversation capacity reached. Try again later.")
+        self.sessions[key] = Session(scenario, budget, shop_session_id, currency_code)
+        return self.sessions[key]
+
+    def session(self, request):
+        """Legacy /prompt lookup: the conversation UUID doubles as the cart id."""
+        self.expire()
         key = str(request.session_id)
-        if key not in self.sessions:
-            if len(self.sessions) >= 256:
-                raise HTTPException(503, "Conversation capacity reached. Try again later.")
-            self.sessions[key] = Session(request.scenario, request.budget_usd)
-        state = self.sessions[key]
+        state = self.sessions.get(key) or self.create(
+            key, request.scenario, request.budget_usd, shop_session_id=key
+        )
         if state.scenario != request.scenario or state.budget != request.budget_usd:
             raise HTTPException(409, "Start a new conversation to change scenario or budget.")
-        state.touched = now
+        state.touched = time.monotonic()
         return state
 
-    async def scoped_tools(self, session_id, calls):
+    def conversation(self, conversation_id):
+        self.expire()
+        state = self.sessions.get(str(conversation_id))
+        if state is None:
+            raise HTTPException(404, "Conversation not found or expired. Start a new one.")
+        return state
+
+    def stored_or_ready(self, state, request_id):
+        """Return the stored reply for a repeated request id, or None once a turn may start."""
+        stored = state.replies.get(str(request_id))
+        if stored is not None:
+            return stored
+        if state.lock.locked():
+            raise HTTPException(409, "A turn is already in flight for this conversation.")
+        if state.turns >= MAX_TURNS:
+            raise HTTPException(
+                409, f"This conversation reached {MAX_TURNS} turns. Start a new one."
+            )
+        return None
+
+    # -- tools -----------------------------------------------------------------------------
+
+    async def scoped_tools(self, user_id, calls, currency_code="USD"):
+        """Model-visible tools.
+
+        The cart identity and currency are injected here, never by the model, and the same
+        wrappers front both the HTTP and the MCP tool transports.
+        """
         upstream = {t.name: t for t in await self.get_tool_list()}
 
         async def invoke(name, args):
@@ -137,89 +201,256 @@ class ConciergeAgent(Agent):
 
         @tool
         async def list_products():
-            """List the Astronomy Shop catalog and current USD prices."""
-            return await invoke("list_products", {})
+            """List the Astronomy Shop catalog with prices in the shopper's currency."""
+            return await invoke("list_products", {"currency_code": currency_code})
 
         @tool
         async def get_product(product_id: str):
             """Look up one catalog product by ID before recommending it."""
-            return await invoke("get_product", {"product_id": product_id})
+            return await invoke(
+                "get_product", {"product_id": product_id, "currency_code": currency_code}
+            )
 
         @tool
         async def get_cart():
-            """Read this conversation's cart."""
-            return await invoke("get_cart", {"user_id": session_id})
+            """Read the shopper's cart."""
+            return await invoke("get_cart", {"user_id": user_id, "currency_code": currency_code})
 
         @tool
         async def add_to_cart(product_id: str, quantity: Annotated[int, Field(ge=1, le=10)] = 1):
-            """Add an item to this conversation's cart, only when the shopper requests it."""
+            """Add an item to the shopper's cart, only when the shopper requests it."""
             return await invoke(
                 "add_to_cart",
-                {
-                    "user_id": session_id,
-                    "product_id": product_id,
-                    "quantity": quantity,
-                },
+                {"user_id": user_id, "product_id": product_id, "quantity": quantity},
             )
 
         return [list_products, get_product, get_cart, add_to_cart]
+
+    # -- legacy endpoint -------------------------------------------------------------------
 
     async def handle_prompt(self, request: ChatRequest):
         if not request.message.strip():
             raise HTTPException(422, "Enter a message.")
         state = self.session(request)
         async with state.lock:
-            if state.turns >= 20:
-                raise HTTPException(409, "This conversation reached 20 turns. Start a new one.")
-            session_id = str(request.session_id)
-            with conversation(session_id, request.scenario, self.mode):
+            if state.turns >= MAX_TURNS:
+                raise HTTPException(
+                    409, f"This conversation reached {MAX_TURNS} turns. Start a new one."
+                )
+            key = str(request.session_id)
+            result = await self.execute_turn(key, state, request.message)
+            return {
+                "reply": result["reply"],
+                "response": {"messages": [{"content": result["reply"]}]},
+                "tools": result["calls"],
+                "scores": result["scores"],
+                "prompt_version": result["prompt_version"],
+                "prompt_source": result["prompt_source"],
+                "trace_id": result["trace_id"],
+                "session_id": key,
+                "mode": self.mode,
+                "links": self.links(result["trace_id"]),
+            }
+
+    # -- storefront contract ---------------------------------------------------------------
+
+    async def assistant_message(self, request: MessageRequest):
+        if not request.message.strip():
+            raise HTTPException(422, "Enter a message.")
+        shop_session_id = str(request.shop_session_id)
+        if request.conversation_id is None:
+            self.expire()
+            key = str(uuid4())
+            state = self.create(
+                key,
+                request.scenario or "shopping",
+                request.budget if request.budget is not None else 150,
+                shop_session_id,
+                request.currency_code,
+            )
+        else:
+            key = str(request.conversation_id)
+            state = self.conversation(key)
+            if state.shop_session_id != shop_session_id:
+                raise HTTPException(
+                    409,
+                    "This conversation belongs to a different storefront session. Start a new one.",
+                )
+            if (request.scenario is not None and request.scenario != state.scenario) or (
+                request.budget is not None and request.budget != state.budget
+            ):
+                raise HTTPException(409, "Start a new conversation to change scenario or budget.")
+        stored = self.stored_or_ready(state, request.request_id)
+        if stored is not None:
+            return stored
+        async with state.lock:
+            state.currency_code = request.currency_code
+            product_id = request.product_context.product_id if request.product_context else None
+            result = await self.execute_turn(
+                key,
+                state,
+                request.message,
+                request_id=str(request.request_id),
+                product_id=product_id,
+            )
+            return self.remember(state, request.request_id, result, key)
+
+    async def assistant_add_to_cart(self, request: AddToCartAction):
+        key = str(request.conversation_id)
+        state = self.conversation(key)
+        stored = self.stored_or_ready(state, request.request_id)
+        if stored is not None:
+            return stored
+        async with state.lock:
+            state.currency_code = request.currency_code
+            calls = []
+            with conversation(key, state.scenario, self.mode, state.shop_session_id):
                 request_span = trace.get_current_span()
-                request_span.set_attribute("langfuse.observation.input", request.message)
                 with tracer.start_as_current_span(
-                    "concierge.turn",
+                    "concierge.action",
                     attributes={
-                        "langfuse.observation.type": "agent",
-                        "gen_ai.operation.name": "invoke_agent",
-                        "gen_ai.agent.name": "astronomy-concierge",
-                        "langfuse.observation.input": encoded({"message": request.message}),
-                        "langfuse.trace.metadata.budget_usd": request.budget_usd,
+                        "langfuse.observation.type": "chain",
+                        "assistant.request_id": str(request.request_id),
+                        "langfuse.trace.metadata.currency_code": request.currency_code,
+                        "langfuse.observation.input": encoded(
+                            {"action": "add_to_cart", **request.model_dump(mode="json")}
+                        ),
                     },
                 ) as span:
                     current_trace = trace_id()
+                    add_to_cart = next(
+                        t
+                        for t in await self.scoped_tools(
+                            state.shop_session_id, calls, request.currency_code
+                        )
+                        if t.name == "add_to_cart"
+                    )
                     try:
-                        async with asyncio.timeout(90):
-                            result = await self.run_turn(request, state)
+                        async with asyncio.timeout(30):
+                            await add_to_cart.ainvoke(
+                                {"product_id": request.product_id, "quantity": request.quantity}
+                            )
                     except Exception:
-                        logger.exception("Conversation failed; trace_id=%s", current_trace)
-                        span.set_status(Status(StatusCode.ERROR, "Agent turn failed"))
+                        logger.exception("Cart action failed; trace_id=%s", current_trace)
+                        calls.append(
+                            {
+                                "name": "add_to_cart",
+                                "arguments": {"product_id": request.product_id},
+                                "result": {"error": "add_to_cart did not complete"},
+                            }
+                        )
+                    if not cart_changed(calls):
+                        span.set_status(Status(StatusCode.ERROR, "Cart action failed"))
                         raise HTTPException(
                             502,
                             {
-                                "message": "The agent could not finish. Check the trace or start a new conversation.",
+                                "message": "The shop could not add that item. Check your cart before retrying.",
                                 "trace_id": current_trace,
                             },
-                        ) from None
-                    span.set_attribute("langfuse.observation.output", result["reply"])
-                    request_span.set_attribute("langfuse.observation.output", result["reply"])
-                    result.update(
-                        {
-                            "trace_id": current_trace,
-                            "session_id": session_id,
-                            "mode": self.mode,
-                            "links": self.links(current_trace),
-                        }
+                        )
+                    plural = "item" if request.quantity == 1 else "items"
+                    reply = f"Added {request.quantity} {plural} to your cart."
+                    span.set_attribute("langfuse.observation.output", reply)
+                    request_span.set_attribute("langfuse.observation.output", reply)
+                    state.messages.extend(
+                        [
+                            HumanMessage(
+                                content=f"Add {request.quantity} of product {request.product_id} to my cart."
+                            ),
+                            AIMessage(content=reply),
+                        ]
                     )
+                    prompt = await self.langfuse.prompt()
+                    result = {
+                        "reply": reply,
+                        "calls": calls,
+                        "scores": {},
+                        "trace_id": current_trace,
+                        "prompt_version": prompt.version,
+                        "prompt_source": "langfuse" if prompt.managed else "bundled",
+                    }
                     state.traces.add(current_trace)
                     state.turns += 1
                     state.touched = time.monotonic()
-                    return result
+            return self.remember(state, request.request_id, result, key)
 
-    async def run_turn(self, request, state):
+    async def assistant_conversation(self, conversation_id: UUID):
+        state = self.conversation(conversation_id)
+        return ConversationStatus(
+            conversation_id=str(conversation_id),
+            shop_session_id=state.shop_session_id,
+            turns=state.turns,
+            currency_code=state.currency_code,
+            expires_at=state.expires_at(),
+        )
+
+    def remember(self, state, request_id, result, conversation_id):
+        response = AssistantResponse(
+            conversation_id=conversation_id,
+            request_id=str(request_id),
+            reply=result["reply"],
+            product_refs=product_refs(result["calls"]),
+            cart_changed=cart_changed(result["calls"]),
+            trace_id=result["trace_id"],
+            feedback_enabled=self.langfuse.enabled,
+            demo=DemoDetails(
+                mode=self.mode,
+                scenario=state.scenario,
+                prompt_version=result["prompt_version"],
+                prompt_source=result["prompt_source"],
+                tools=demo_tools(result["calls"]),
+                links=self.links(result["trace_id"]),
+            ),
+        )
+        state.replies[str(request_id)] = response
+        return response
+
+    # -- one traced turn -------------------------------------------------------------------
+
+    async def execute_turn(self, key, state, message, request_id=None, product_id=None):
+        """Run one agent turn for a locked conversation inside its trace context."""
+        with conversation(key, state.scenario, self.mode, state.shop_session_id):
+            request_span = trace.get_current_span()
+            request_span.set_attribute("langfuse.observation.input", message)
+            attributes = {
+                "langfuse.observation.type": "agent",
+                "gen_ai.operation.name": "invoke_agent",
+                "gen_ai.agent.name": "astronomy-concierge",
+                "langfuse.observation.input": encoded({"message": message}),
+                "langfuse.trace.metadata.budget": state.budget,
+                "langfuse.trace.metadata.currency_code": state.currency_code,
+            }
+            if request_id:
+                attributes["assistant.request_id"] = request_id
+            with tracer.start_as_current_span("concierge.turn", attributes=attributes) as span:
+                current_trace = trace_id()
+                try:
+                    async with asyncio.timeout(90):
+                        result = await self.run_turn(state, message, product_id)
+                except Exception:
+                    logger.exception("Conversation failed; trace_id=%s", current_trace)
+                    span.set_status(Status(StatusCode.ERROR, "Agent turn failed"))
+                    raise HTTPException(
+                        502,
+                        {
+                            "message": "The agent could not finish. Check the trace or start a new conversation.",
+                            "trace_id": current_trace,
+                        },
+                    ) from None
+                span.set_attribute("langfuse.observation.output", result["reply"])
+                request_span.set_attribute("langfuse.observation.output", result["reply"])
+                result["trace_id"] = current_trace
+                state.traces.add(current_trace)
+                state.turns += 1
+                state.touched = time.monotonic()
+                return result
+
+    async def run_turn(self, state, message, product_id=None):
         prompt = await self.langfuse.prompt()
         calls = []
-        tools = await self.scoped_tools(str(request.session_id), calls)
+        tools = await self.scoped_tools(state.shop_session_id, calls, state.currency_code)
         if self.mode == "scripted":
-            model = ScriptedModel(scenario=request.scenario)
+            model = ScriptedModel(scenario=state.scenario, product_id=product_id)
         else:
             model = ChatLLM(timeout=30, max_retries=1)
 
@@ -287,13 +518,17 @@ class ConciergeAgent(Agent):
                             span.set_attribute(f"gen_ai.usage.{target}", value)
                 return response
 
-        system_prompt = prompt.text + f"\nThe shopper's budget is USD {request.budget_usd:.2f}."
+        system_prompt = (
+            prompt.text + f"\nThe shopper's budget is {state.currency_code} {state.budget:.2f}."
+        )
+        if product_id:
+            system_prompt += f"\nThe shopper is currently viewing product {product_id}."
         graph = create_agent(
             model, tools=tools, system_prompt=system_prompt, middleware=[observe_model]
         )
         try:
             result = await graph.ainvoke(
-                {"messages": [*state.messages, HumanMessage(content=request.message)]},
+                {"messages": [*state.messages, HumanMessage(content=message)]},
                 config={"recursion_limit": self.agentRecursionLimit},
             )
         finally:
@@ -313,7 +548,7 @@ class ConciergeAgent(Agent):
                 and "id" in call["result"]
             ]
             if products:
-                scores["budget_adherence"] = int(price(products[-1]) <= request.budget_usd)
+                scores["budget_adherence"] = int(price(products[-1]) <= state.budget)
         for name, value in scores.items():
             with tracer.start_as_current_span(
                 "evaluate.budget",
@@ -321,7 +556,8 @@ class ConciergeAgent(Agent):
                     "langfuse.observation.type": "evaluator",
                     "langfuse.observation.input": encoded(
                         {
-                            "budget_usd": request.budget_usd,
+                            "budget": state.budget,
+                            "currency_code": state.currency_code,
                             "product": products[-1],
                         }
                     ),
@@ -336,8 +572,7 @@ class ConciergeAgent(Agent):
                     logger.warning("Could not submit evaluation score; trace_id=%s", trace_id())
         return {
             "reply": reply,
-            "response": {"messages": [{"content": reply}]},
-            "tools": calls,
+            "calls": calls,
             "scores": scores,
             "prompt_version": prompt.version,
             "prompt_source": "langfuse" if prompt.managed else "bundled",
