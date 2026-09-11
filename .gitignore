@@ -1,8 +1,9 @@
 .env
-.upstream/
-.runtime/
-.venv/
-.cache/
+# No trailing slash: in a linked worktree these are symlinks to the main checkout.
+.upstream
+.runtime
+.venv
+.cache
 __pycache__/
 .pytest_cache/
 .ruff_cache/

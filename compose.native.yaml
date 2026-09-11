@@ -1,0 +1,8 @@
+# Native storefront: the frontend runs from the locally built image recorded in
+# .runtime/images/manifest.json (scripts/demo.py build). Every other shop service keeps the
+# released ghcr.io/open-telemetry/demo:3.0.0-* image selected by scripts/demo.py.
+services:
+  frontend:
+    image: ${CONCIERGE_FRONTEND_IMAGE}
+    build: !reset null
+    pull_policy: never

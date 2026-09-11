@@ -98,11 +98,14 @@ Set `MCP_ENABLED=True` in `.env` and run `up`. The agent exposes the same four s
 ## Test and develop
 
 ```sh
-uv pip install -r requirements-dev.lock
+scripts/dev-setup.sh
 .venv/bin/pytest -q
 .venv/bin/ruff check concierge scripts tests
+scripts/check-frontend.sh
 .venv/bin/python scripts/smoke.py
 ```
+
+`dev-setup.sh` creates `.venv` from `requirements-dev.lock` when it is missing and runs `bootstrap`. In a linked git worktree it symlinks `.upstream` and `.venv` from the main checkout and copies its `.env`, so a fresh worktree passes the same checks. `check-frontend.sh` stages the frontend build tree (see `frontend/overlay/README.md`) and type-checks and lints it.
 
 The smoke script needs the running scripted demo. It checks recommendation, cart isolation, budget failure, the actual catalog fault, and cross-service trace correlation. It restores the prior catalog flag even if a check fails. Detailed results go to `.runtime/smoke-results.json`.
 

@@ -1,0 +1,18 @@
+# Build contexts rooted at this repository never receive secrets, the virtualenv, the upstream
+# checkout, caches, or telemetry captures. Only bootstrap's staged tool wrapper is let through.
+.env
+.env.*
+!.env.example
+.venv
+.upstream
+.cache
+.runtime/**
+!.runtime/tools.py
+.runtime/telemetry
+**/*.jsonl
+.git
+.claude
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.ruff_cache
