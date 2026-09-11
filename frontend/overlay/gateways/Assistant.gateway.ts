@@ -6,6 +6,7 @@
 
 import FixtureTransport from './AssistantFixtures';
 import {
+  AssistantConversationStatus,
   AssistantError,
   AssistantErrorPayload,
   AssistantFeedbackResult,
@@ -24,14 +25,19 @@ export const isDemoDetailsEnabled = () => /^(1|true|on|yes)$/i.test(assistantEnv
 
 // The routes answer every failure with an AssistantErrorPayload; anything else that is not a
 // JSON object (an empty body, a proxy error page) means the storefront itself did not answer.
-const post = async <T extends object>(path: string, body: object): Promise<T> => {
-  const payload = await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'POST', body });
+const unwrap = <T extends object>(payload: T | AssistantErrorPayload | undefined): T => {
   if (isAssistantErrorPayload(payload)) {
     throw new AssistantError(payload.error.code, payload.error.message, payload.error.retryable);
   }
   if (typeof payload !== 'object' || payload === null) throw new AssistantError('unavailable', UNREACHABLE);
   return payload;
 };
+
+const post = async <T extends object>(path: string, body: object): Promise<T> =>
+  unwrap(await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'POST', body }));
+
+const get = async <T extends object>(path: string): Promise<T> =>
+  unwrap(await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'GET' }));
 
 const LiveTransport: AssistantTransport = {
   name: 'live',
@@ -50,6 +56,9 @@ const LiveTransport: AssistantTransport = {
       if (error instanceof AssistantError) return { saved: false, message: error.message };
       throw error;
     }
+  },
+  getConversation(conversationId) {
+    return get<AssistantConversationStatus>(`conversation/${encodeURIComponent(conversationId)}`);
   },
 };
 

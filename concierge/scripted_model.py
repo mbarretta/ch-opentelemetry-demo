@@ -95,6 +95,9 @@ class ScriptedModel(BaseChatModel):
                 selected = previous[-1] if previous else None
                 if isinstance(selected, dict) and selected.get("id") and not selected.get("error"):
                     reply = call("add_to_cart", product_id=selected["id"], quantity=1)
+                elif self.product_id:
+                    # Nothing looked up yet: "add this" means the product the shopper is viewing.
+                    reply = call("add_to_cart", product_id=self.product_id, quantity=1)
                 else:
                     reply = AIMessage(
                         content="Let's look up a product first. Use the sample shopping request, then ask me to add the recommendation."

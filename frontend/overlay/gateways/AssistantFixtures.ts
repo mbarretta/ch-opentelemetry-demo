@@ -13,6 +13,7 @@
 //   anything else           a text-only reply
 
 import { v4 } from 'uuid';
+import SessionGateway from './Session.gateway';
 import {
   AssistantActionRequest,
   AssistantDemoToolCall,
@@ -198,6 +199,18 @@ const FixtureTransport: AssistantTransport = {
   async submitFeedback() {
     await wait(300);
     return { saved: true };
+  },
+
+  // Fixture conversations exist only in this browser, so every id is alive and bound to this shopper.
+  async getConversation(conversationId) {
+    await wait(300);
+    return {
+      conversation_id: conversationId,
+      shop_session_id: SessionGateway.getSession().userId,
+      turns: 1,
+      currency_code: 'USD',
+      expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    };
   },
 };
 

@@ -29,10 +29,12 @@ const agentBaseUrl = (): string => {
   return configured;
 };
 
-// FastAPI reports HTTPException reasons as { detail: string }; validation errors carry a list.
+// FastAPI reports HTTPException reasons as { detail: string }; the agent's own turn and cart
+// failures carry { detail: { message, trace_id } }; validation errors carry a list (ignored).
 const agentDetail = (payload: unknown): string | undefined => {
   const detail = typeof payload === 'object' && payload !== null ? (payload as { detail?: unknown }).detail : undefined;
-  return typeof detail === 'string' && detail.length > 0 && detail.length <= DETAIL_MAX_LENGTH ? detail : undefined;
+  const message = typeof detail === 'object' && detail !== null ? (detail as { message?: unknown }).message : detail;
+  return typeof message === 'string' && message.length > 0 && message.length <= DETAIL_MAX_LENGTH ? message : undefined;
 };
 
 const failureFor = (status: number, payload: unknown): AssistantRouteError => {

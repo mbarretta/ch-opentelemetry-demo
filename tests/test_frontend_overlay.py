@@ -49,6 +49,10 @@ REQUIRED_CYPRESS_HOOKS = {
     "AssistantProductCard": "assistant-product-card",
     "AssistantSuggestion": "assistant-suggestion",
     "AssistantClose": "assistant-close",
+    "AssistantCardAddToCart": "assistant-card-add-to-cart",
+    "AssistantNewConversation": "assistant-new-conversation",
+    "AssistantNotice": "assistant-notice",
+    "AssistantUncertain": "assistant-uncertain",
 }
 
 EXPECTED_PATCH_TARGETS = {
@@ -72,6 +76,7 @@ def patch_targets(patch: Path) -> list[str]:
 def test_contract_version_mirrors_the_agent_constant():
     types = (OVERLAY / "types/Assistant.ts").read_text()
     assert re.search(r"export const ASSISTANT_CONTRACT_VERSION = ['\"]1['\"]", types)
+    assert re.search(rf"export const ASSISTANT_MAX_TURNS = {contract.MAX_TURNS};", types)
 
 
 def test_assistant_sources_exist_and_use_theme_tokens_instead_of_theme_hex_values():
@@ -231,3 +236,83 @@ def test_every_assistant_answer_offers_feedback():
     transcript = (OVERLAY / "components/Assistant/Transcript.tsx").read_text()
     assert re.search(r"entry\.kind === 'assistant' \? <Feedback", transcript)
     assert "feedback_enabled ? <Feedback" not in transcript
+
+
+# -- shared shopping state (task 6) ----------------------------------------------------------
+
+PROVIDER = OVERLAY / "providers/Assistant.provider.tsx"
+BROWSER_GATEWAY = OVERLAY / "gateways/Assistant.gateway.ts"
+SESSION_GATEWAY = OVERLAY / "gateways/AssistantSession.gateway.ts"
+CARD = OVERLAY / "components/Assistant/AssistantProductCard.tsx"
+TRANSCRIPT = OVERLAY / "components/Assistant/Transcript.tsx"
+PANEL = OVERLAY / "components/Assistant/AssistantPanel.tsx"
+
+
+def test_cards_add_through_the_action_route_and_never_the_storefront_cart_mutation():
+    card = CARD.read_text()
+    assert "onClick={() => addToCart(product)}" in card
+    assert "post<AssistantResponse>('action', action)" in BROWSER_GATEWAY.read_text()
+    joined = "\n".join(path.read_text() for path in ASSISTANT_SOURCES)
+    # The storefront's own cart mutation (CartProvider.addItem -> ApiGateway.addCartItem) is never called.
+    assert "addCartItem" not in joined
+    assert not re.search(r"\baddItem\(", joined)
+    provider = PROVIDER.read_text()
+    # A second click before React re-renders the disabled control must not start a second request.
+    assert "inFlightRef" in provider
+
+
+def test_provider_refetches_the_cart_when_it_changed_and_when_an_action_is_uncertain():
+    provider = PROVIDER.read_text()
+    assert "response.cart_changed" in provider
+    assert provider.count("invalidateQueries({ queryKey: ['cart'] })") >= 2
+
+
+def test_timed_out_cart_action_is_shown_as_uncertain_and_never_retried_automatically():
+    provider = PROVIDER.read_text()
+    assert "failure.code === 'timeout'" in provider
+    assert "setUnresolved(turn)" in provider
+    # Nothing schedules a retry; the only retry paths are the shopper's controls.
+    assert "setTimeout" not in provider and "setInterval" not in provider
+    transcript = TRANSCRIPT.read_text()
+    assert "CypressFields.AssistantUncertain" in transcript
+    assert "onClick={retryUncertain}" in transcript
+    assert "onClick={dismissUncertain}" in transcript
+    # The cart snapshot taken before the action is what confirms it afterwards.
+    assert "quantityBefore" in provider
+
+
+def test_conversation_is_resumed_only_after_the_status_route_confirms_it():
+    types = (OVERLAY / "types/Assistant.ts").read_text()
+    assert "getConversation(conversationId: string): Promise<AssistantConversationStatus>" in types
+    gateway = BROWSER_GATEWAY.read_text()
+    assert "conversation/${encodeURIComponent(conversationId)}" in gateway
+    provider = PROVIDER.read_text()
+    assert ".getConversation(" in provider
+    assert "previous conversation expired" in provider
+    # A conversation bound to another shopper session is never resumed and a 409 for it starts fresh.
+    assert "shop_session_id !==" in provider
+    # Persistence goes through one gateway, like the storefront's Session.gateway.
+    assert SESSION_GATEWAY.is_file()
+    assert "localStorage" in SESSION_GATEWAY.read_text()
+    assert "localStorage" not in provider
+
+
+def test_new_conversation_clears_the_transcript_and_leaves_the_cart_alone():
+    panel = PANEL.read_text()
+    assert "CypressFields.AssistantNewConversation" in panel
+    assert "onClick={newConversation}" in panel
+    provider = PROVIDER.read_text()
+    start = re.search(r"const startFresh = useCallback\((.*?)\n  \);", provider, flags=re.DOTALL)
+    assert start, "startFresh not found"
+    assert "setConversationId(null)" in start.group(1)
+    assert "setTranscript(" in start.group(1)
+    assert "cart" not in start.group(1)
+
+
+def test_card_prices_follow_the_selected_currency_from_the_catalog():
+    card = CARD.read_text()
+    # Same query key as the product page, so the two share one cache entry per currency.
+    assert "['product', product.id, 'selectedCurrency', currencyCode]" in card
+    assert "ApiGateway.getProduct(product.id, currencyCode)" in card
+    # The agent's amount is shown with its own currency until the catalog answers; never relabeled.
+    assert "product.price.currencyCode === currencyCode" in card

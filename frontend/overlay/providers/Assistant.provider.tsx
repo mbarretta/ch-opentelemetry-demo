@@ -1,26 +1,52 @@
 // Conversation state for the shopping assistant. It sits above the pages (inside CartProvider in
-// pages/_app.tsx) so the transcript survives closing the panel and navigating between pages.
+// pages/_app.tsx) so the transcript survives closing the panel and navigating between pages, and
+// it is kept in the browser (gateways/AssistantSession.gateway.ts) so a page load can resume it
+// once the agent confirms the conversation is still alive.
+//
+// The cart is the shop's. A card's Add to cart goes through POST /api/assistant/action, which the
+// agent performs on the bound shop session; this provider only refetches React Query ['cart'] so
+// the header count, dropdown, and cart page follow. It never calls the storefront cart mutation.
 
-import { createContext, useCallback, useContext, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { v4 } from 'uuid';
 import { getAssistantTransport, isDemoDetailsEnabled, toAssistantError, UNREACHABLE } from '../gateways/Assistant.gateway';
+import AssistantSessionGateway from '../gateways/AssistantSession.gateway';
 import SessionGateway from '../gateways/Session.gateway';
 import {
+  ActionTurn,
   ASSISTANT_CONTRACT_VERSION,
+  ASSISTANT_MAX_TURNS,
   AssistantError,
   AssistantProductRef,
   FeedbackState,
   PendingTurn,
+  StoredConversation,
   TranscriptEntry,
 } from '../types/Assistant';
+import { IProductCartItem } from '../types/Cart';
+import { useCart } from './Cart.provider';
 import { useCurrency } from './Currency.provider';
 
 export const DEFAULT_BUDGET = 150;
 
+// Notes the transcript opens with when a conversation is replaced.
+const EXPIRED_NOTE = 'Your previous conversation expired, so this is a new one. Your cart is unchanged.';
+const FOREIGN_NOTE = 'Your previous conversation belonged to another shopper session and was not restored. This is a new one.';
+const UNREACHABLE_NOTE = 'The assistant could not be reached to restore your previous conversation, so this is a new one.';
+const unresolvedNote = (turn: ActionTurn) =>
+  `The assistant did not confirm whether ${turn.productName} was added to your cart. Check your cart before adding it again.`;
+
 export interface AssistantProductContext {
   productId: string;
   name?: string;
+}
+
+// A cart action the agent did not answer in time. Its outcome is unknown until the refetched
+// cart holds what the click asked for (confirmed) or the shopper retries with the same request_id.
+export interface UncertainAction {
+  turn: ActionTurn;
+  confirmed: boolean;
 }
 
 interface OpenOptions {
@@ -36,6 +62,9 @@ interface IContext {
   contractVersion: string | null;
   transcript: TranscriptEntry[];
   pending: PendingTurn | null;
+  // True while a stored conversation is being confirmed with the agent after a page load.
+  resuming: boolean;
+  uncertain: UncertainAction | null;
   error: AssistantError | null;
   draft: string;
   setDraft(text: string): void;
@@ -47,6 +76,10 @@ interface IContext {
   sendMessage(text: string): Promise<void>;
   retry(): Promise<void>;
   addToCart(product: AssistantProductRef, quantity?: number): Promise<void>;
+  retryUncertain(): Promise<void>;
+  dismissUncertain(): void;
+  // A fresh conversation_id and an empty transcript; the cart is untouched.
+  newConversation(): void;
   submitFeedback(entryId: string, helpful: boolean): Promise<void>;
   announcement: string;
   demoDetailsEnabled: boolean;
@@ -65,6 +98,8 @@ export const Context = createContext<IContext>({
   contractVersion: null,
   transcript: [],
   pending: null,
+  resuming: false,
+  uncertain: null,
   error: null,
   draft: '',
   setDraft: () => {},
@@ -76,6 +111,9 @@ export const Context = createContext<IContext>({
   sendMessage: noop,
   retry: noop,
   addToCart: noop,
+  retryUncertain: noop,
+  dismissUncertain: () => {},
+  newConversation: () => {},
   submitFeedback: noop,
   announcement: '',
   demoDetailsEnabled: false,
@@ -84,12 +122,57 @@ export const Context = createContext<IContext>({
 
 export const useAssistant = () => useContext(Context);
 
+const quantityOf = (items: IProductCartItem[], productId: string) =>
+  items.filter(item => item.productId === productId).reduce((total, item) => total + item.quantity, 0);
+
+const notice = (text: string): TranscriptEntry => ({ kind: 'notice', id: `n:${v4()}`, text });
+
+// The transcript a replaced conversation starts with: the reason it was replaced, then the cart
+// action the old conversation never confirmed, if any. That action cannot be retried against a
+// conversation the agent no longer has (the retry could not be deduplicated), so it becomes a note.
+const freshTranscript = (notes: string[], unresolved: ActionTurn | null): TranscriptEntry[] =>
+  [...notes, ...(unresolved ? [unresolvedNote(unresolved)] : [])].map(notice);
+
+// What a stored conversation becomes on this page load. Only a conversation the agent confirms
+// as alive and bound to this shop session is restored; anything else starts fresh with a note.
+const resolveStored = async (
+  stored: StoredConversation | null,
+  shopSessionId: string
+): Promise<{ restore: boolean; notes: string[] }> => {
+  if (!stored) return { restore: false, notes: [] };
+  if (stored.shopSessionId !== shopSessionId) return { restore: false, notes: [FOREIGN_NOTE] };
+  if (stored.conversationId === null) return { restore: true, notes: [] };
+  try {
+    const status = await getAssistantTransport().getConversation(stored.conversationId);
+    if (status.shop_session_id !== shopSessionId) return { restore: false, notes: [FOREIGN_NOTE] };
+    return { restore: true, notes: [] };
+  } catch (caught) {
+    return { restore: false, notes: [toAssistantError(caught).code === 'expired' ? EXPIRED_NOTE : UNREACHABLE_NOTE] };
+  }
+};
+
+// Why the agent answered 409 for this conversation, read from its status route: it belongs to
+// another shop session ('foreign'), the agent no longer has it ('expired'), it reached its turn
+// limit ('exhausted'), or a turn is still in flight ('busy'). null when the status could not be read.
+const conflictKind = async (conversationId: string): Promise<'foreign' | 'expired' | 'exhausted' | 'busy' | null> => {
+  try {
+    const status = await getAssistantTransport().getConversation(conversationId);
+    if (status.shop_session_id !== SessionGateway.getSession().userId) return 'foreign';
+    return status.turns >= ASSISTANT_MAX_TURNS ? 'exhausted' : 'busy';
+  } catch (caught) {
+    return toAssistantError(caught).code === 'expired' ? 'expired' : null;
+  }
+};
+
 interface IProps {
   children: React.ReactNode;
 }
 
 const AssistantProvider = ({ children }: IProps) => {
   const { selectedCurrency } = useCurrency();
+  const {
+    cart: { items: cartItems },
+  } = useCart();
   const queryClient = useQueryClient();
   const [isOpen, setIsOpen] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
@@ -97,15 +180,71 @@ const AssistantProvider = ({ children }: IProps) => {
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
   const [pending, setPending] = useState<PendingTurn | null>(null);
   const [failedTurn, setFailedTurn] = useState<PendingTurn | null>(null);
+  const [unresolved, setUnresolved] = useState<ActionTurn | null>(null);
+  // True until the stored conversation has been resolved; nothing is stored back before then.
+  const [resuming, setResuming] = useState(true);
   const [error, setError] = useState<AssistantError | null>(null);
   const [draft, setDraft] = useState('');
   const [budget, setBudget] = useState(DEFAULT_BUDGET);
   const [productContext, setProductContext] = useState<AssistantProductContext | null>(null);
   const [announcement, setAnnouncement] = useState('');
   const openerRef = useRef<HTMLElement | null>(null);
+  // Set synchronously when a turn starts: two clicks in one frame both still see pending === null.
+  const inFlightRef = useRef(false);
   const currencyCode = selectedCurrency || 'USD';
   // window.ENV exists only in the browser; the server snapshot is "off" and never changes.
   const demoDetailsEnabled = useSyncExternalStore(subscribeToNothing, isDemoDetailsEnabled, () => false);
+
+  // Page load: resume the stored conversation only once the agent confirms it.
+  useEffect(() => {
+    let cancelled = false;
+    const stored = AssistantSessionGateway.load();
+    const shopSessionId = SessionGateway.getSession().userId;
+    resolveStored(stored, shopSessionId).then(({ restore, notes }) => {
+      if (cancelled) return;
+      const ours = stored !== null && stored.shopSessionId === shopSessionId;
+      if (ours) setBudget(stored.budget);
+      if (restore && ours) {
+        setConversationId(stored.conversationId);
+        setContractVersion(stored.contractVersion);
+        setUnresolved(stored.uncertain);
+        // A score that was still being sent when the page unloaded is offered again.
+        setTranscript(
+          stored.transcript.map(entry =>
+            entry.kind === 'assistant' && entry.feedback === 'pending' ? { ...entry, feedback: undefined } : entry
+          )
+        );
+      } else {
+        setTranscript(freshTranscript(notes, ours ? stored.uncertain : null));
+      }
+      setResuming(false);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (resuming) return;
+    AssistantSessionGateway.save({
+      shopSessionId: SessionGateway.getSession().userId,
+      conversationId,
+      contractVersion,
+      budget,
+      transcript,
+      uncertain: unresolved,
+    });
+  }, [resuming, conversationId, contractVersion, budget, transcript, unresolved]);
+
+  // The refetched cart settles an unresolved action once it holds what the click asked for.
+  const uncertain = useMemo<UncertainAction | null>(
+    () =>
+      unresolved && {
+        turn: unresolved,
+        confirmed: quantityOf(cartItems, unresolved.request.product_id) >= unresolved.quantityBefore + unresolved.request.quantity,
+      },
+    [cartItems, unresolved]
+  );
 
   const open = useCallback((options?: OpenOptions) => {
     openerRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
@@ -118,9 +257,57 @@ const AssistantProvider = ({ children }: IProps) => {
   const close = useCallback(() => setIsOpen(false), []);
   const clearProductContext = useCallback(() => setProductContext(null), []);
 
+  const startFresh = useCallback(
+    (notes: string[] = []) => {
+      setConversationId(null);
+      setContractVersion(null);
+      setError(null);
+      setFailedTurn(null);
+      setUnresolved(null);
+      setTranscript(freshTranscript(notes, unresolved));
+    },
+    [unresolved]
+  );
+
+  // One failed turn. The failure decides what the shopper sees: a cart action the agent did not
+  // answer in time is uncertain (the cart is refetched, nothing is retried until the shopper asks;
+  // the agent deduplicates by request_id); an expired conversation, or one bound to another shop
+  // session, is replaced by a fresh one and the message returns to the composer; a message the
+  // agent will never accept as sent returns to the composer too; everything else offers Retry.
+  const fail = useCallback(
+    async (turn: PendingTurn, failure: AssistantError) => {
+      setAnnouncement(failure.message);
+      if (turn.kind === 'action' && failure.code === 'timeout') {
+        setUnresolved(turn);
+        queryClient.invalidateQueries({ queryKey: ['cart'] });
+        return;
+      }
+      const message = turn.kind === 'message' ? turn.request.message : null;
+      const conflict =
+        failure.code === 'conflict' && turn.request.conversation_id ? await conflictKind(turn.request.conversation_id) : null;
+      if (failure.code === 'expired' || conflict === 'expired' || conflict === 'foreign') {
+        startFresh([conflict === 'foreign' ? FOREIGN_NOTE : EXPIRED_NOTE]);
+        if (message !== null) setDraft(message);
+        return;
+      }
+      // A conversation at its turn limit answers 409 to every retry; the agent's message says to start a new one.
+      const final = conflict === 'exhausted' ? new AssistantError(failure.code, failure.message, false) : failure;
+      if (message !== null && !final.retryable) {
+        setTranscript(entries => entries.filter(entry => entry.id !== `u:${turn.request.request_id}`));
+        setDraft(message);
+        setError(final);
+        return;
+      }
+      setError(final);
+      if (final.retryable) setFailedTurn(turn);
+    },
+    [queryClient, startFresh]
+  );
+
   const run = useCallback(
     async (turn: PendingTurn) => {
       const transport = getAssistantTransport();
+      inFlightRef.current = true;
       setPending(turn);
       setError(null);
       setFailedTurn(null);
@@ -149,28 +336,26 @@ const AssistantProvider = ({ children }: IProps) => {
                 quantity: turn.request.quantity,
               },
         ]);
+        // An uncertain action retried with its request_id is settled by whatever the agent answers.
+        setUnresolved(current => (current && current.request.request_id === response.request_id ? null : current));
         if (response.cart_changed) {
           queryClient.invalidateQueries({ queryKey: ['cart'] });
         }
         setAnnouncement(turn.kind === 'message' ? 'The assistant replied' : `Added ${turn.productName} to your cart`);
       } catch (caught) {
-        const failure = toAssistantError(caught);
-        // The agent no longer knows this conversation (idle timeout or restart): the next message starts a new one.
-        if (failure.code === 'expired') setConversationId(null);
-        setError(failure);
-        setFailedTurn(turn);
-        setAnnouncement(failure.message);
+        await fail(turn, toAssistantError(caught));
       } finally {
+        inFlightRef.current = false;
         setPending(null);
       }
     },
-    [queryClient]
+    [fail, queryClient]
   );
 
   const sendMessage = useCallback(
     async (text: string) => {
       const message = text.trim();
-      if (!message || pending) return;
+      if (!message || inFlightRef.current || resuming) return;
       const requestId = v4();
       setTranscript(entries => [
         ...entries,
@@ -195,25 +380,26 @@ const AssistantProvider = ({ children }: IProps) => {
         },
       });
     },
-    [budget, conversationId, currencyCode, pending, productContext, run]
+    [budget, conversationId, currencyCode, productContext, resuming, run]
   );
 
   const retry = useCallback(async () => {
     // Same request_id: the agent deduplicates a repeated turn instead of running it twice.
-    if (failedTurn && !pending) await run(failedTurn);
-  }, [failedTurn, pending, run]);
+    if (failedTurn && !inFlightRef.current) await run(failedTurn);
+  }, [failedTurn, run]);
 
   const addToCart = useCallback(
     async (product: AssistantProductRef, quantity = 1) => {
-      if (pending) return;
+      if (inFlightRef.current || resuming) return;
       if (!conversationId) {
-        // The conversation these cards came from has expired; a cart action needs a live one.
-        setError(new AssistantError('expired', 'This conversation has expired. Ask the assistant again to add a product.', false));
+        // Cards belong to the conversation that produced them; a cart action needs a live one.
+        setError(new AssistantError('expired', 'This conversation has ended. Ask the assistant again to add a product.', false));
         return;
       }
       await run({
         kind: 'action',
         productName: product.name,
+        quantityBefore: quantityOf(cartItems, product.id),
         request: {
           conversation_id: conversationId,
           request_id: v4(),
@@ -223,8 +409,19 @@ const AssistantProvider = ({ children }: IProps) => {
         },
       });
     },
-    [conversationId, currencyCode, pending, run]
+    [cartItems, conversationId, currencyCode, resuming, run]
   );
+
+  const retryUncertain = useCallback(async () => {
+    // Same request_id: an action the agent did complete comes back as its stored result.
+    if (unresolved && !inFlightRef.current) await run(unresolved);
+  }, [run, unresolved]);
+
+  const dismissUncertain = useCallback(() => setUnresolved(null), []);
+
+  const newConversation = useCallback(() => {
+    if (!inFlightRef.current) startFresh();
+  }, [startFresh]);
 
   const submitFeedback = useCallback(
     async (entryId: string, helpful: boolean) => {
@@ -262,6 +459,8 @@ const AssistantProvider = ({ children }: IProps) => {
       contractVersion,
       transcript,
       pending,
+      resuming,
+      uncertain,
       error,
       draft,
       setDraft,
@@ -273,6 +472,9 @@ const AssistantProvider = ({ children }: IProps) => {
       sendMessage,
       retry,
       addToCart,
+      retryUncertain,
+      dismissUncertain,
+      newConversation,
       submitFeedback,
       announcement,
       demoDetailsEnabled,
@@ -286,6 +488,8 @@ const AssistantProvider = ({ children }: IProps) => {
       contractVersion,
       transcript,
       pending,
+      resuming,
+      uncertain,
       error,
       draft,
       budget,
@@ -295,6 +499,9 @@ const AssistantProvider = ({ children }: IProps) => {
       sendMessage,
       retry,
       addToCart,
+      retryUncertain,
+      dismissUncertain,
+      newConversation,
       submitFeedback,
       announcement,
       demoDetailsEnabled,

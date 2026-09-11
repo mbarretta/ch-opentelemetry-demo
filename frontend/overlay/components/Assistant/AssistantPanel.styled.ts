@@ -147,9 +147,28 @@ export const PanelHeader = styled.header`
 
 export const Title = styled.h2`
   margin: 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-size: ${({ theme }) => theme.sizes.dMedium};
   font-weight: ${({ theme }) => theme.fonts.bold};
   color: ${({ theme }) => theme.colors.textGray};
+`;
+
+export const HeaderActions = styled.div`
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+`;
+
+// Compact so the title, this control, and Close share the panel width without truncation.
+export const HeaderButton = styled(PanelButton).attrs({ $type: 'secondary' })`
+  height: 32px;
+  padding: 0 10px;
+  font-size: ${({ theme }) => theme.sizes.mSmall};
+  border-color: ${({ theme }) => theme.colors.lightBorderGray};
 `;
 
 export const CloseButton = styled.button`
@@ -348,6 +367,28 @@ export const ErrorBox = styled.div`
   p {
     margin: 0;
   }
+`;
+
+// The panel's own remark about the conversation (it expired, an action was confirmed).
+export const Notice = styled.p`
+  margin: 0;
+  padding: 10px 14px;
+  border: 1px dashed ${({ theme }) => theme.colors.lightBorderGray};
+  border-radius: 8px;
+  font-size: ${({ theme }) => theme.sizes.mMedium};
+  font-weight: ${({ theme }) => theme.fonts.regular};
+  color: ${({ theme }) => theme.colors.textGray};
+`;
+
+// A cart action whose outcome is not known yet: a warning, not a failure.
+export const UncertainBox = styled(ErrorBox)`
+  border-left-color: ${({ theme }) => theme.colors.otelYellow};
+`;
+
+export const ButtonRow = styled.div`
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
 `;
 
 /* Product card ---------------------------------------------------------------------------- */
