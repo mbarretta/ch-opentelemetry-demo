@@ -1,0 +1,20 @@
+diff --git a/src/frontend/components/Layout/Layout.tsx b/src/frontend/components/Layout/Layout.tsx
+index 6a487e7..35bc956 100644
+--- a/src/frontend/components/Layout/Layout.tsx
++++ b/src/frontend/components/Layout/Layout.tsx
+@@ -3,6 +3,7 @@
+ 
+ import Header from '../Header';
+ import Footer from '../Footer';
++import { AssistantPanel } from '../Assistant';
+ 
+ interface IProps {
+   children: React.ReactNode;
+@@ -14,6 +15,7 @@ const Layout = ({ children }: IProps) => {
+       <Header />
+       <main>{children}</main>
+       <Footer />
++      <AssistantPanel />
+     </>
+   );
+ };

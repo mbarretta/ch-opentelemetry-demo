@@ -1,0 +1,20 @@
+diff --git a/src/frontend/pages/product/[productId]/index.tsx b/src/frontend/pages/product/[productId]/index.tsx
+index d3b0b9f..f731fdd 100644
+--- a/src/frontend/pages/product/[productId]/index.tsx
++++ b/src/frontend/pages/product/[productId]/index.tsx
+@@ -8,6 +8,7 @@ import { useRouter } from 'next/router';
+ import { useCallback, useState, useEffect } from 'react';
+ import { useQuery } from '@tanstack/react-query';
+ import Ad from '../../../components/Ad';
++import { AskAboutProduct } from '../../../components/Assistant';
+ import Layout from '../../../components/Layout';
+ import ProductPrice from '../../../components/ProductPrice';
+ import Recommendations from '../../../components/Recommendations';
+@@ -97,6 +98,7 @@ const ProductDetail: NextPage = () => {
+               <S.AddToCart data-cy={CypressFields.ProductAddToCart} onClick={onAddItem}>
+                 <Image src="/icons/Cart.svg" height="15" width="15" alt="cart" /> Add To Cart
+               </S.AddToCart>
++              <AskAboutProduct productId={productId} name={name} />
+             </S.Details>
+           </S.Container>
+           <Recommendations />

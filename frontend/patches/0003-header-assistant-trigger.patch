@@ -1,0 +1,20 @@
+diff --git a/src/frontend/components/Header/Header.tsx b/src/frontend/components/Header/Header.tsx
+index 857fc7b..c45be94 100644
+--- a/src/frontend/components/Header/Header.tsx
++++ b/src/frontend/components/Header/Header.tsx
+@@ -3,6 +3,7 @@
+ 
+ import CartIcon from '../CartIcon';
+ import CurrencySwitcher from '../CurrencySwitcher';
++import { AssistantTrigger } from '../Assistant';
+ import * as S from './Header.styled';
+ 
+ const Header = () => {
+@@ -15,6 +16,7 @@ const Header = () => {
+           </S.NavBarBrand>
+           <S.Controls>
+             <CurrencySwitcher />
++            <AssistantTrigger />
+             <CartIcon />
+           </S.Controls>
+         </S.Container>

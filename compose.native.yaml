@@ -6,3 +6,10 @@ services:
     image: ${CONCIERGE_FRONTEND_IMAGE}
     build: !reset null
     pull_policy: never
+    environment:
+      # Read by pages/_document.tsx when the frontend server starts and handed to the browser as
+      # window.ENV (a change needs `demo.py up` to recreate the container, not a rebuild).
+      # fixtures: canned assistant responses, no agent call. Demo details show the scenario,
+      # prompt, tools, and trace links under each answer.
+      - ASSISTANT_TRANSPORT=${ASSISTANT_TRANSPORT:-fixtures}
+      - ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-true}
