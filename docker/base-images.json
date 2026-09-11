@@ -1,0 +1,31 @@
+{
+  "resolved_with": "docker buildx imagetools inspect ghcr.io/open-telemetry/demo:3.0.0-<service>",
+  "resolved_on": "2026-09-11",
+  "note": "digest is the multi-platform index digest used in the FROM line; platforms lists the per-platform manifest digests it points to.",
+  "images": {
+    "agent": {
+      "image": "ghcr.io/open-telemetry/demo:3.0.0-agent",
+      "digest": "sha256:df5ee05e23e3bac13ce07e74a25f5c963a83387b3d50c27c17a476c71d0e4612",
+      "platforms": {
+        "linux/amd64": "sha256:f575e2f7e9cac822c1c131a8368ee7b1d60f43a386c6aa9ec2a96f70f50848de",
+        "linux/arm64": "sha256:f2f98ef91794847c1bea7f495f84b104e567a822d4a67d39a5cf11fd68f15238"
+      }
+    },
+    "mcp": {
+      "image": "ghcr.io/open-telemetry/demo:3.0.0-mcp",
+      "digest": "sha256:654f860148baa3d92d1cc89fa7a14848cd7070cd9d7ea5a63773782c9f23fcc1",
+      "platforms": {
+        "linux/amd64": "sha256:4c14ecd7fafe1e3a44b146ce04d67be2346d5f4bc3bb3935777793988fd7fa6d",
+        "linux/arm64": "sha256:088cda5337024751b4521de79e02e60d9f20a5d7b9ea6e9828a030ef8c2a5b3d"
+      }
+    },
+    "frontend-proxy": {
+      "image": "ghcr.io/open-telemetry/demo:3.0.0-frontend-proxy",
+      "digest": "sha256:1c53bfb596970a014682925f804c686762c0c593949ce58a90ac38563f317841",
+      "platforms": {
+        "linux/amd64": "sha256:4620f82e4f38a21fadfe0d1e72b183f8fc0d7151bc91a5f01954df103177a608",
+        "linux/arm64": "sha256:5dca3e6fe127f12a78765428bb86e9aad3ec8ee5b6498095e9d9b258cf8d64d3"
+      }
+    }
+  }
+}

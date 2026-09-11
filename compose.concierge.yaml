@@ -1,11 +1,8 @@
+# Runtime configuration for the concierge services plus the collector, flagd, and proxy port
+# overrides. Images come from compose.native.yaml; source mounts from compose.dev.yaml.
 services:
   agent:
     build: !reset null
-    command: [python, -m, concierge.run_agent]
-    volumes: !override
-      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
-      - ${CONCIERGE_ROOT}/prompts:/app/prompts:ro
-      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/agents/tools.py:ro
     ports: !override
       - 127.0.0.1:${AGENT_HOST_PORT:-8010}:8010
     environment:
@@ -26,6 +23,9 @@ services:
           memory: 750M
 
   chatbot:
+    # The Gradio client is a debug tool without an image of its own: the released chatbot image
+    # runs the overlay package from a read-only mount (compose.native.yaml puts it behind the
+    # `debug` profile, started by `demo.py up --debug-chatbot`).
     build: !reset null
     command: [python, -m, concierge.run_chatbot]
     volumes:
@@ -43,10 +43,6 @@ services:
 
   mcp:
     build: !reset null
-    command: [python, -m, concierge.run_mcp]
-    volumes:
-      - ${CONCIERGE_ROOT}/concierge:/app/concierge:ro
-      - ${CONCIERGE_ROOT}/.runtime/tools.py:/app/src/mcp_server/tools.py:ro
 
   frontend-proxy:
     ports: !override

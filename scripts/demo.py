@@ -20,9 +20,21 @@ REPO = "https://github.com/open-telemetry/opentelemetry-demo.git"
 # New frontend files, relative to src/frontend/. Edits to upstream files are patches.
 OVERLAY = ROOT / "frontend/overlay"
 PATCHES = ROOT / "frontend/patches"
+CONCIERGE = ROOT / "concierge"
+PROMPTS = ROOT / "prompts"
+DOCKER = ROOT / "docker"
 IMAGE_PREFIX = "astronomy-concierge"
-# Images built from the staged tree (.runtime/build) with the released Dockerfiles.
-IMAGES = {"frontend": "src/frontend/Dockerfile"}
+# Images built by `build`, service -> Dockerfile relative to its context. The frontend builds
+# from the staged tree (.runtime/build) with the released Dockerfile; the others build from this
+# repository with docker/*.Dockerfile on top of the released 3.0.0 images pinned by digest in
+# docker/base-images.json. All four share one content-derived tag.
+IMAGES = {
+    "frontend": "src/frontend/Dockerfile",
+    "agent": "docker/agent.Dockerfile",
+    "mcp": "docker/mcp.Dockerfile",
+    "frontend-proxy": "docker/frontend-proxy.Dockerfile",
+}
+STAGED_IMAGES = {"frontend"}
 # Upstream files whose content, together with the overlay and patches, determines the tag.
 FRONTEND_INPUTS = ("src/frontend/Dockerfile", "src/frontend/package-lock.json")
 STAGED_DOCKERIGNORE = """
@@ -104,6 +116,20 @@ def patch_tools(source):
     return source
 
 
+def corrected_tools():
+    """The released src/shared/tools.py at the pinned commit with TOOLS_PATCH applied."""
+    return patch_tools(upstream_file("src/shared/tools.py").decode())
+
+
+def write_tools():
+    """Refresh the corrected tools.py that the images copy and the host-run agent imports."""
+    tools = corrected_tools()
+    (RUNTIME / "tools.py").write_text(tools)
+    host_copy = RUNTIME / "python/src/agents/tools.py"
+    if host_copy.parent.is_dir():
+        host_copy.write_text(tools)
+
+
 def bootstrap():
     if not UPSTREAM.exists():
         run("git", "clone", "--depth", "1", "--branch", TAG, REPO, str(UPSTREAM))
@@ -119,9 +145,7 @@ def bootstrap():
         shutil.copytree(UPSTREAM / "src/flagd", RUNTIME / "flagd")
     for service in ["agent", "chatbot"]:
         shutil.copytree(UPSTREAM / f"src/{service}/src", RUNTIME / "python/src", dirs_exist_ok=True)
-    tools = patch_tools((UPSTREAM / "src/shared/tools.py").read_text())
-    (RUNTIME / "tools.py").write_text(tools)
-    (RUNTIME / "python/src/agents/tools.py").write_text(tools)
+    write_tools()
     if not (ROOT / ".env").exists():
         shutil.copyfile(ROOT / ".env.example", ROOT / ".env")
         (ROOT / ".env").chmod(0o600)
@@ -142,8 +166,32 @@ def patch_files():
     return sorted(PATCHES.glob("*.patch")) if PATCHES.is_dir() else []
 
 
+def source_files(root):
+    """(path relative to root, path) pairs for a directory the images copy.
+
+    Bytecode caches and Markdown are not build inputs: .dockerignore keeps them out of the
+    context, and like the overlay README they must not change the tag.
+    """
+    return sorted(
+        (str(path.relative_to(root)), path)
+        for path in root.rglob("*")
+        if path.is_file() and "__pycache__" not in path.parts and path.suffix not in {".pyc", ".md"}
+    )
+
+
+def base_images():
+    """service -> released image reference pinned by digest, from docker/base-images.json."""
+    recorded = json.loads((DOCKER / "base-images.json").read_text())["images"]
+    return {service: f"{entry['image']}@{entry['digest']}" for service, entry in recorded.items()}
+
+
 def build_tag():
-    """Short digest over everything that shapes the frontend image."""
+    """Short digest over everything that shapes the four images.
+
+    Frontend: upstream commit, released Dockerfile and lockfile, overlay, patches. Agent, mcp,
+    proxy: docker/ (Dockerfiles with their base digests, base-images.json, the Envoy template),
+    concierge/, prompts/, and the corrected tools.py derived from the pin and TOOLS_PATCH.
+    """
     digest = hashlib.sha256()
 
     def add(label, data):
@@ -157,6 +205,10 @@ def build_tag():
         add(f"overlay/{relative}", path.read_bytes())
     for path in patch_files():
         add(f"patch/{path.name}", path.read_bytes())
+    add("tools.py", corrected_tools().encode())
+    for label, root in (("docker", DOCKER), ("concierge", CONCIERGE), ("prompts", PROMPTS)):
+        for relative, path in source_files(root):
+            add(f"{label}/{relative}", path.read_bytes())
     return digest.hexdigest()[:12]
 
 
@@ -242,6 +294,19 @@ def read_manifest():
     return json.loads(path.read_text()) if path.exists() else None
 
 
+def import_root():
+    """Make the concierge package importable when this file runs as a script."""
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+
+
+def contract_version():
+    import_root()
+    from concierge.contract import CONTRACT_VERSION
+
+    return CONTRACT_VERSION
+
+
 def write_manifest(tag, platform, image_ids):
     """Record the build; services built separately keep their entries."""
     manifest = read_manifest() or {}
@@ -249,7 +314,14 @@ def write_manifest(tag, platform, image_ids):
     for service, image_id in image_ids.items():
         images[service] = {"image": image_name(service, tag), "id": image_id}
     manifest.update(
-        {"tag": tag, "platform": platform, "upstream_commit": COMMIT, "images": images}
+        {
+            "tag": tag,
+            "platform": platform,
+            "upstream_commit": COMMIT,
+            "contract_version": contract_version(),
+            "base_images": base_images(),
+            "images": images,
+        }
     )
     path = manifest_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -257,28 +329,36 @@ def write_manifest(tag, platform, image_ids):
     return manifest
 
 
+def build_context(service):
+    return RUNTIME / "build" if service in STAGED_IMAGES else ROOT
+
+
 def build(services, platform=None):
     unknown = sorted(set(services) - set(IMAGES))
     if unknown:
-        raise SystemExit(f"Unknown service(s) {', '.join(unknown)}; choose from {', '.join(IMAGES)}.")
-    stage()
+        raise SystemExit(
+            f"Unknown service(s) {', '.join(unknown)}; choose from {', '.join(IMAGES)}."
+        )
+    if STAGED_IMAGES & set(services):
+        stage()
+    write_tools()
     tag = build_tag()
     platform = platform or host_platform()
-    build_root = RUNTIME / "build"
     image_ids = {}
     for service in services:
         image = image_name(service, tag)
-        print(f"Building {image} for {platform} from {build_root}/{IMAGES[service]}")
+        context = build_context(service)
+        print(f"Building {image} for {platform} from {context}/{IMAGES[service]}")
         run(
             "docker",
             "build",
             "--platform",
             platform,
             "--file",
-            str(build_root / IMAGES[service]),
+            str(context / IMAGES[service]),
             "--tag",
             image,
-            str(build_root),
+            str(context),
         )
         image_ids[service] = subprocess.check_output(
             ["docker", "image", "inspect", "--format", "{{.Id}}", image], text=True
@@ -295,11 +375,13 @@ def require_images():
     hint = "run `scripts/demo.py build` first."
     if manifest is None:
         raise SystemExit(f"No build manifest at {manifest_path()}; {hint}")
-    missing = [
-        manifest["images"][service]["image"] if service in manifest["images"] else service
-        for service in IMAGES
-        if service not in manifest["images"] or not image_exists(manifest["images"][service]["image"])
-    ]
+    missing = []
+    for service in IMAGES:
+        recorded = manifest["images"].get(service)
+        if recorded is None:
+            missing.append(f"{service} (never built)")
+        elif not image_exists(recorded["image"]):
+            missing.append(recorded["image"])
     if missing:
         raise SystemExit(f"Missing local image(s): {', '.join(missing)}; {hint}")
     current = build_tag()
@@ -407,8 +489,21 @@ def generate_config(env):
     (RUNTIME / "isolation.yaml").write_text(isolation)
 
 
-def compose(env, args, **kwargs):
+def compose(env, args, dev=False, debug_chatbot=False, **kwargs):
+    """Run a compose command over the pinned stack.
+
+    dev adds compose.dev.yaml (source bind mounts over the built images); debug_chatbot enables
+    the `debug` profile that holds the Gradio client, which `up` leaves out by default.
+    """
     generate_config(env)
+    files = [
+        UPSTREAM / "compose.yaml",
+        UPSTREAM / "compose.agent.yaml",
+        ROOT / "compose.concierge.yaml",
+        ROOT / "compose.native.yaml",
+        *([ROOT / "compose.dev.yaml"] if dev else []),
+        RUNTIME / "isolation.yaml",
+    ]
     return run(
         "docker",
         "compose",
@@ -420,16 +515,8 @@ def compose(env, args, **kwargs):
         str(UPSTREAM / ".env"),
         "--env-file",
         str(ROOT / ".env"),
-        "-f",
-        str(UPSTREAM / "compose.yaml"),
-        "-f",
-        str(UPSTREAM / "compose.agent.yaml"),
-        "-f",
-        str(ROOT / "compose.concierge.yaml"),
-        "-f",
-        str(ROOT / "compose.native.yaml"),
-        "-f",
-        str(RUNTIME / "isolation.yaml"),
+        *(argument for path in files for argument in ("-f", str(path))),
+        *(["--profile", "debug"] if debug_chatbot else []),
         *args,
         env=env,
         **kwargs,
@@ -521,6 +608,16 @@ def main():
         metavar="OS/ARCH",
         help="build: target platform, for example linux/arm64; default is the Docker host's",
     )
+    parser.add_argument(
+        "--dev",
+        action="store_true",
+        help="up/config: bind-mount concierge/, prompts/, and tools.py over the agent and mcp images",
+    )
+    parser.add_argument(
+        "--debug-chatbot",
+        action="store_true",
+        help="up: also start the Gradio chat client on CHAT_PORT",
+    )
     args = parser.parse_args()
     if args.command == "bootstrap":
         bootstrap()
@@ -541,24 +638,38 @@ def main():
         scenario(name)
     elif args.command == "seed-prompts":
         os.environ.update(env)
-        sys.path.insert(0, str(ROOT))
+        import_root()
         asyncio.run(seed_prompts())
     elif args.command == "config":
-        rendered = compose(env, ["config", "--format", "json"], stdout=subprocess.PIPE, text=True)
+        rendered = compose(
+            env,
+            ["config", "--format", "json"],
+            dev=args.dev,
+            debug_chatbot=args.debug_chatbot,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
         services = json.loads(rendered.stdout)["services"]
         for name, service in sorted(services.items()):
             print(f"{name}: {service.get('image', '(no image)')}")
         print("Compose configuration validated; collector config written without credentials.")
     elif args.command == "up":
         require_images()
-        compose(env, ["up", "-d", "--no-build", *args.arguments])
-        print(
-            f"Shop: http://localhost:{env.get('SHOP_PORT', '8080')} · Chat: http://localhost:{env.get('CHAT_PORT', '7860')}"
+        compose(
+            env,
+            ["up", "-d", "--no-build", *args.arguments],
+            dev=args.dev,
+            debug_chatbot=args.debug_chatbot,
         )
+        print(f"Shop: http://localhost:{env.get('SHOP_PORT', '8080')}")
+        if args.debug_chatbot:
+            print(f"Chat (debug): http://localhost:{env.get('CHAT_PORT', '7860')}")
+    # Lifecycle commands cover the debug profile too, so a chatbot started with --debug-chatbot
+    # is listed, followed, restarted, and removed like the rest of the stack.
     elif args.command == "logs":
-        compose(env, ["logs", "--tail", "80", *args.arguments])
+        compose(env, ["logs", "--tail", "80", *args.arguments], debug_chatbot=True)
     else:
-        compose(env, [args.command, *args.arguments])
+        compose(env, [args.command, *args.arguments], debug_chatbot=True)
 
 
 if __name__ == "__main__":

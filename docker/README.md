@@ -1,0 +1,92 @@
+# Native images
+
+`scripts/demo.py build` produces the four images the native stack runs from. Nothing is
+published; the images exist only in the local Docker engine and are recorded in
+`.runtime/images/manifest.json`, which `demo.py up` requires.
+
+| Service | Dockerfile | Context | Base image | Entry point |
+| --- | --- | --- | --- | --- |
+| frontend | released `src/frontend/Dockerfile`, unchanged | `.runtime/build` (staged 3.0.0 tree, see `frontend/overlay/README.md`) | the released Dockerfile's own Node images | released |
+| agent | `docker/agent.Dockerfile` | repository root | `ghcr.io/open-telemetry/demo:3.0.0-agent@sha256:...` | `python -m concierge.run_agent` |
+| mcp | `docker/mcp.Dockerfile` | repository root | `ghcr.io/open-telemetry/demo:3.0.0-mcp@sha256:...` | `python -m concierge.run_mcp` |
+| frontend-proxy | `docker/frontend-proxy.Dockerfile` | repository root | `ghcr.io/open-telemetry/demo:3.0.0-frontend-proxy@sha256:...` | released (`envsubst` then `envoy`) |
+
+The agent and mcp images add `concierge/`, `prompts/`, and the corrected shop tools that
+`bootstrap` writes to `.runtime/tools.py`, at `src/agents/tools.py` (agent) and
+`src/mcp_server/tools.py` (mcp), the paths the released code imports. The proxy image replaces
+only `envoy.tmpl.yaml`. Every other shop service keeps its released
+`ghcr.io/open-telemetry/demo:3.0.0-*` image; `demo.py config` lists them.
+
+## Base image digests
+
+`base-images.json` records the digest each `FROM` line pins and how it was resolved:
+
+```sh
+docker buildx imagetools inspect ghcr.io/open-telemetry/demo:3.0.0-agent
+```
+
+The `FROM` lines use the multi-platform index digest, so `--platform` selects the matching
+manifest; `platforms` in the JSON lists the per-platform digests that index points to. A test
+checks that every Dockerfile matches the JSON. To move to a new release, re-run the inspect
+command, update the JSON and the `FROM` lines together, and let the tag change.
+
+## Tag and manifest
+
+All four images share one tag: the first 12 hex digits of a SHA-256 over the build inputs.
+
+| Input | Covers |
+| --- | --- |
+| upstream commit | the pinned 3.0.0 source |
+| `src/frontend/Dockerfile`, `src/frontend/package-lock.json` (at the pin) | the frontend build and its lockfile |
+| `frontend/overlay/**` (except its README), `frontend/patches/*.patch` | storefront changes |
+| `docker/**` (except this README) | Dockerfiles with their base digests, `base-images.json`, the Envoy template |
+| `concierge/**`, `prompts/**` (no bytecode) | the Python package and prompts |
+| corrected `tools.py` | derived from the pin and `TOOLS_PATCH` in `scripts/demo.py` |
+
+Editing any of them, for example `prompts/concierge-v1.txt`, changes the tag, and `demo.py up`
+warns when the manifest's tag no longer matches the working tree.
+
+`.runtime/images/manifest.json` records `tag`, `platform`, `upstream_commit`,
+`contract_version` (from `concierge/contract.py`), `base_images`, and per-service `image`
+and `id`. Services built separately with `--service` keep their entries.
+
+## Commands
+
+```sh
+.venv/bin/python scripts/demo.py build                       # all four, host platform
+.venv/bin/python scripts/demo.py build --service agent --service mcp
+.venv/bin/python scripts/demo.py build --platform linux/amd64
+.venv/bin/python scripts/demo.py up                          # native stack from the manifest
+.venv/bin/python scripts/demo.py up --dev                    # plus compose.dev.yaml source mounts
+.venv/bin/python scripts/demo.py up --debug-chatbot          # plus the Gradio client on CHAT_PORT
+```
+
+`up` refuses to start before every image in the manifest exists locally and names the missing
+ones. The native stack has no application-code bind mounts on `agent`, `mcp`, or `frontend`;
+`--dev` mounts `concierge/`, `prompts/`, and `.runtime/tools.py` over the agent and mcp images
+so a container restart picks up Python edits. The chatbot has no image of its own: it is the
+released chatbot image with the package mounted, kept behind the Compose `debug` profile.
+
+## Envoy template
+
+`envoy.tmpl.yaml` is the released `src/frontend-proxy/envoy.tmpl.yaml` with two changes:
+
+- a `/api/assistant/` route to the `frontend` cluster with a 120 s timeout, ahead of the
+  catch-all, so an agent turn is not cut off by Envoy's 15 s default;
+- the `/chatbot` routes and the `chatbot` cluster removed, so the proxy starts without the
+  Gradio service.
+
+Every other route, cluster, and timeout is unchanged, and the `${VAR}` placeholders are still
+rendered by `envsubst` at container start. `tests/test_build.py` compares the template against
+the released one.
+
+## Build context
+
+The root `.dockerignore` limits the agent, mcp, and proxy contexts to `concierge/`, `prompts/`,
+`docker/`, and `.runtime/tools.py`. Secrets (`.env`), the example env, the virtualenv, the
+upstream checkout, caches, telemetry captures, compose files, docs, tests, and scripts stay out.
+To list a context:
+
+```sh
+printf 'FROM busybox\nCOPY . /ctx\nRUN find /ctx -type f | sort\n' | docker build --no-cache --progress=plain -f - .
+```
