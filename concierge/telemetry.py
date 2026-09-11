@@ -84,10 +84,15 @@ def configure(service):
 
 
 @contextmanager
-def conversation(session_id, scenario, mode):
+def conversation(session_id, scenario, mode, shop_session_id=None):
+    """Stamp conversation identity on every span and propagate it as baggage.
+
+    ``session.id`` is the storefront session (the cart) so agent spans line up with the
+    frontend's own session attribute; legacy /prompt conversations use one id for both.
+    """
     token = attributes.set(
         {
-            "session.id": session_id,
+            "session.id": shop_session_id or session_id,
             "gen_ai.conversation.id": session_id,
             "langfuse.session.id": session_id,
             "langfuse.trace.name": "astronomy-concierge",

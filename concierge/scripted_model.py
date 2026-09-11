@@ -28,15 +28,36 @@ def tool_data(content):
     return content
 
 
+SYMBOLS = {"USD": "$", "EUR": "€", "GBP": "£", "JPY": "¥", "CAD": "$", "INR": "₹"}
+EXPLAIN_WORDS = ("explain", "tell me about", "this product")
+
+
+def money(product):
+    return product.get("priceUsd") or product.get("price") or {}
+
+
+def amount(money_value):
+    return float(money_value.get("units", 0)) + float(money_value.get("nanos", 0)) / 1_000_000_000
+
+
 def price(product):
-    money = product.get("priceUsd") or product.get("price") or {}
-    return float(money.get("units", 0)) + float(money.get("nanos", 0)) / 1_000_000_000
+    return amount(money(product))
+
+
+def format_amount(value, code):
+    return f"{SYMBOLS.get(code, '')}{value:.2f} {code}"
+
+
+def format_money(money_value):
+    """Format a shop Money value with the currency code the shop returned."""
+    return format_amount(amount(money_value), money_value.get("currencyCode") or "USD")
 
 
 class ScriptedModel(BaseChatModel):
     """A deterministic tool-calling fixture. It never calls a model provider."""
 
     scenario: str = "shopping"
+    product_id: str | None = None
 
     @property
     def _llm_type(self):
@@ -80,6 +101,8 @@ class ScriptedModel(BaseChatModel):
                     )
             elif "cart" in text:
                 reply = call("get_cart")
+            elif self.product_id and any(word in text for word in EXPLAIN_WORDS):
+                reply = call("get_product", product_id=self.product_id)
             elif self.scenario == "backend-failure":
                 reply = call("get_product", product_id=EXPLORASCOPE)
             elif "gift" in text and len(messages) <= 2 and "beginner" not in text:
@@ -100,11 +123,16 @@ class ScriptedModel(BaseChatModel):
                 reply = call("get_product", product_id=selected)
             elif last.name == "get_product" and isinstance(data, dict):
                 name = data.get("name", "the selected product")
-                amount = price(data)
+                cost = format_money(money(data))
                 description = data.get("description", "").split(". ")[0].rstrip(".")
-                reply = AIMessage(
-                    content=f"I recommend the **{name}** for **${amount:.2f} USD**. {description}. Shipping and taxes are additional. Would you like me to add one to your cart?"
-                )
+                if self.product_id and data.get("id") == self.product_id:
+                    reply = AIMessage(
+                        content=f"The **{name}** costs **{cost}**. {data.get('description', description)} Shipping and taxes are additional. Would you like me to add one to your cart?"
+                    )
+                else:
+                    reply = AIMessage(
+                        content=f"I recommend the **{name}** for **{cost}**. {description}. Shipping and taxes are additional. Would you like me to add one to your cart?"
+                    )
             elif last.name == "add_to_cart":
                 reply = AIMessage(
                     content="Added one to this conversation's cart. Ask me to show your cart to review it."
@@ -117,19 +145,20 @@ class ScriptedModel(BaseChatModel):
                     )
                 else:
                     lines = []
-                    total = 0
+                    total = 0.0
+                    code = money(items[0].get("product", {})).get("currencyCode") or "USD"
                     for item in items:
                         product = item.get("product", {})
                         quantity = item.get("quantity", 1)
-                        amount = price(product) * quantity
-                        total += amount
+                        line = price(product) * quantity
+                        total += line
                         lines.append(
-                            f"- {quantity} × {product.get('name', item.get('productId', 'Item'))} — ${amount:.2f}"
+                            f"- {quantity} × {product.get('name', item.get('productId', 'Item'))} — {format_amount(line, code)}"
                         )
                     reply = AIMessage(
                         content="Your cart:\n\n"
                         + "\n".join(lines)
-                        + f"\n\n**Subtotal: ${total:.2f} USD.** Shipping and taxes are additional."
+                        + f"\n\n**Subtotal: {format_amount(total, code)}.** Shipping and taxes are additional."
                     )
             else:
                 reply = AIMessage(

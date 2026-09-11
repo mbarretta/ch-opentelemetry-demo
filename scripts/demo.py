@@ -63,6 +63,47 @@ def upstream_file(path):
     return subprocess.check_output(["git", "-C", str(UPSTREAM), "show", f"{COMMIT}:{path}"])
 
 
+# The released shop tools hard-code USD and pass the cart id under the wrong query key.
+# These edits let the agent forward the conversation's currency and reach the right cart.
+TOOLS_PATCH = (
+    (
+        "async def list_products():",
+        'async def list_products(currency_code: str = "USD"):',
+    ),
+    (
+        'url = f"http://{BASE_URL}/api/products"\n    try:\n        async with httpx.AsyncClient(timeout=TIMEOUT) as client:\n            res = await client.get(url)',
+        'url = f"http://{BASE_URL}/api/products"\n    try:\n        async with httpx.AsyncClient(timeout=TIMEOUT) as client:\n            res = await client.get(url, params={"currencyCode": currency_code})',
+    ),
+    (
+        "async def get_product(product_id: str):",
+        'async def get_product(product_id: str, currency_code: str = "USD"):',
+    ),
+    (
+        'url = f"http://{BASE_URL}/api/products/{product_id}"\n    try:\n        async with httpx.AsyncClient(timeout=TIMEOUT) as client:\n            res = await client.get(url)',
+        'url = f"http://{BASE_URL}/api/products/{product_id}"\n    try:\n        async with httpx.AsyncClient(timeout=TIMEOUT) as client:\n            res = await client.get(url, params={"currencyCode": currency_code})',
+    ),
+    (
+        "async def get_cart(user_id: str):",
+        'async def get_cart(user_id: str, currency_code: str = "USD"):',
+    ),
+    (
+        'params={"user_id": user_id}',
+        'params={"sessionId": user_id, "currencyCode": currency_code}',
+    ),
+)
+
+
+def patch_tools(source):
+    """Apply TOOLS_PATCH to the released src/shared/tools.py text; fail on any drift."""
+    for old, new in TOOLS_PATCH:
+        if source.count(old) != 1:
+            raise SystemExit(
+                f"Upstream tools.py changed around {old.splitlines()[0]!r}; review TOOLS_PATCH."
+            )
+        source = source.replace(old, new)
+    return source
+
+
 def bootstrap():
     if not UPSTREAM.exists():
         run("git", "clone", "--depth", "1", "--branch", TAG, REPO, str(UPSTREAM))
@@ -78,11 +119,7 @@ def bootstrap():
         shutil.copytree(UPSTREAM / "src/flagd", RUNTIME / "flagd")
     for service in ["agent", "chatbot"]:
         shutil.copytree(UPSTREAM / f"src/{service}/src", RUNTIME / "python/src", dirs_exist_ok=True)
-    tools = (UPSTREAM / "src/shared/tools.py").read_text()
-    old = 'params={"user_id": user_id}'
-    if tools.count(old) != 1:
-        raise SystemExit("Upstream cart wrapper changed; review the overlay patch.")
-    tools = tools.replace(old, 'params={"sessionId": user_id, "currencyCode": "USD"}')
+    tools = patch_tools((UPSTREAM / "src/shared/tools.py").read_text())
     (RUNTIME / "tools.py").write_text(tools)
     (RUNTIME / "python/src/agents/tools.py").write_text(tools)
     if not (ROOT / ".env").exists():
