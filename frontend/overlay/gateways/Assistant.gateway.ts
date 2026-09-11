@@ -2,9 +2,12 @@
 // renders from the frontend service's environment when the server starts, not from a build-time variable.
 //
 // The live transport (default) talks only to the storefront's own /api/assistant routes, which
-// call the agent server-side; the browser never learns the agent address.
+// call the agent server-side; the browser never learns the agent address. Each turn runs inside
+// an assistant.turn span (utils/telemetry/AssistantTracing.ts) so the storefront, agent, and shop
+// spans it causes belong to one trace with the conversation and storefront session on it.
 
 import FixtureTransport from './AssistantFixtures';
+import SessionGateway from './Session.gateway';
 import {
   AssistantConversationStatus,
   AssistantError,
@@ -15,6 +18,7 @@ import {
   isAssistantErrorPayload,
 } from '../types/Assistant';
 import request from '../utils/Request';
+import { withAssistantTurn } from '../utils/telemetry/AssistantTracing';
 
 const basePath = '/api/assistant';
 export const UNREACHABLE = 'The assistant could not be reached. Your message is kept; try again.';
@@ -42,10 +46,13 @@ const get = async <T extends object>(path: string): Promise<T> =>
 const LiveTransport: AssistantTransport = {
   name: 'live',
   sendMessage(message) {
-    return post<AssistantResponse>('message', message);
+    const identity = { conversationId: message.conversation_id, shopSessionId: message.shop_session_id, requestId: message.request_id };
+    return withAssistantTurn('message', identity, () => post<AssistantResponse>('message', message));
   },
   addToCart(action) {
-    return post<AssistantResponse>('action', action);
+    // The action body names the conversation only; the storefront session it is bound to is this browser's.
+    const identity = { conversationId: action.conversation_id, shopSessionId: SessionGateway.getSession().userId, requestId: action.request_id };
+    return withAssistantTurn('action', identity, () => post<AssistantResponse>('action', action));
   },
   async submitFeedback(feedback) {
     try {

@@ -398,7 +398,7 @@ def test_envoy_template_adds_the_assistant_route_and_keeps_the_rest():
     routes = envoy_routes(ours)
     assistant = [route for route in routes if route["match"] == {"prefix": "/api/assistant/"}]
     assert len(assistant) == 1
-    assert assistant[0]["route"]["cluster"] == "frontend"
+    assert assistant[0]["route"]["cluster"] == "frontend-assistant"
     timeout = assistant[0]["route"]["timeout"]
     assert timeout.endswith("s") and float(timeout[:-1]) >= 100
     catch_all = [index for index, route in enumerate(routes) if route["match"] == {"prefix": "/"}]
@@ -409,9 +409,23 @@ def test_envoy_template_adds_the_assistant_route_and_keeps_the_rest():
     expected = [route for route in envoy_routes(upstream) if "chatbot" not in json.dumps(route)]
     assert kept == expected, "every non-chatbot upstream route survives with the same timeout"
 
-    assert set(envoy_clusters(ours)) == set(envoy_clusters(upstream)) - {"chatbot"}
-    for name, cluster in envoy_clusters(ours).items():
-        assert cluster == envoy_clusters(upstream)[name], name
+    clusters, released = envoy_clusters(ours), envoy_clusters(upstream)
+    assert set(clusters) == set(released) - {"chatbot"} | {"frontend-assistant"}
+    for name, cluster in clusters.items():
+        if name == "frontend-assistant":
+            # The storefront under a second cluster name, so the egress span Envoy emits for an
+            # assistant request (which carries no URL) can be told apart by the collector.
+            expected = {
+                **released["frontend"],
+                "name": "frontend-assistant",
+                "load_assignment": {
+                    **released["frontend"]["load_assignment"],
+                    "cluster_name": "frontend-assistant",
+                },
+            }
+            assert cluster == expected
+        else:
+            assert cluster == released[name], name
 
     placeholders = set(re.findall(r"\$\{[A-Z_]+\}", ours_text))
     assert placeholders == set(re.findall(r"\$\{[A-Z_]+\}", upstream_text)) - {

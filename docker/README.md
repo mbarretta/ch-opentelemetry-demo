@@ -71,8 +71,12 @@ released chatbot image with the package mounted, kept behind the Compose `debug`
 
 `envoy.tmpl.yaml` is the released `src/frontend-proxy/envoy.tmpl.yaml` with two changes:
 
-- a `/api/assistant/` route to the `frontend` cluster with a 120 s timeout, ahead of the
-  catch-all, so an agent turn is not cut off by Envoy's 15 s default;
+- a `/api/assistant/` route with a 120 s timeout, ahead of the catch-all, so an agent turn is
+  not cut off by Envoy's 15 s default. It points at `frontend-assistant`, a copy of the
+  `frontend` cluster under a second name: with `spawn_upstream_span`, Envoy emits a
+  `router <cluster> egress` span per request that carries the cluster name and no URL, and the
+  name is what lets the collector's Langfuse filter keep the assistant route's egress span
+  (`langfuse_span_filter` in `scripts/demo.py`) while dropping the rest of the storefront's;
 - the `/chatbot` routes and the `chatbot` cluster removed, so the proxy starts without the
   Gradio service.
 
