@@ -1,0 +1,35 @@
+diff --git a/src/frontend/components/CurrencySwitcher/CurrencySwitcher.styled.ts b/src/frontend/components/CurrencySwitcher/CurrencySwitcher.styled.ts
+index 6ea0669..f9e2a04 100644
+--- a/src/frontend/components/CurrencySwitcher/CurrencySwitcher.styled.ts
++++ b/src/frontend/components/CurrencySwitcher/CurrencySwitcher.styled.ts
+@@ -12,9 +12,13 @@ export const Container = styled.div`
+   display: flex;
+   align-items: center;
+   position: relative;
+-  margin-left: 40px;
++  margin-left: 12px;
+   color: #605f64;
+ 
++  ${({ theme }) => theme.breakpoints.desktop} {
++    margin-left: 40px;
++  }
++
+   &::-webkit-input-placeholder,
+   &::-moz-placeholder,
+   :-ms-input-placeholder,
+@@ -56,10 +60,14 @@ export const Select = styled.select`
+   background: transparent;
+   font-weight: ${({ theme }) => theme.fonts.regular};
+   border: 1px solid ${({ theme }) => theme.colors.borderGray};
+-  width: 130px;
++  width: 105px;
+   height: 40px;
+   flex-shrink: 0;
+   padding: 1px 0 0 45px;
+   font-size: 16px;
+   border-radius: 10px;
++
++  ${({ theme }) => theme.breakpoints.desktop} {
++    width: 130px;
++  }
+ `;

@@ -1,0 +1,31 @@
+diff --git a/src/frontend/pages/_document.tsx b/src/frontend/pages/_document.tsx
+index 8a68bc0..a71baf7 100644
+--- a/src/frontend/pages/_document.tsx
++++ b/src/frontend/pages/_document.tsx
+@@ -5,7 +5,16 @@ import Document, { DocumentContext, Html, Head, Main, NextScript } from 'next/do
+ import { ServerStyleSheet } from 'styled-components';
+ import {context, propagation} from "@opentelemetry/api";
+ 
+-const { ENV_PLATFORM, WEB_OTEL_SERVICE_NAME, PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_COLLECTOR_HOST} = process.env;
++const {
++  ENV_PLATFORM,
++  WEB_OTEL_SERVICE_NAME,
++  PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT,
++  OTEL_COLLECTOR_HOST,
++  // Assistant runtime switches for the browser: read from the frontend service environment
++  // when the server starts, never from a NEXT_PUBLIC_ build variable.
++  ASSISTANT_TRANSPORT = '',
++  ASSISTANT_DEMO_DETAILS = '',
++} = process.env;
+ 
+ export default class MyDocument extends Document<{ envString: string }> {
+   static async getInitialProps(ctx: DocumentContext) {
+@@ -32,6 +41,8 @@ export default class MyDocument extends Document<{ envString: string }> {
+           NEXT_PUBLIC_OTEL_SERVICE_NAME: '${WEB_OTEL_SERVICE_NAME}',
+           NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '${otlpTracesEndpoint}',
+           IS_SYNTHETIC_REQUEST: '${isSyntheticRequest}',
++          ASSISTANT_TRANSPORT: '${ASSISTANT_TRANSPORT}',
++          ASSISTANT_DEMO_DETAILS: '${ASSISTANT_DEMO_DETAILS}',
+         };`;
+       return {
+         ...initialProps,

@@ -1,0 +1,25 @@
+diff --git a/src/frontend/utils/enums/CypressFields.ts b/src/frontend/utils/enums/CypressFields.ts
+index be85b82..6f5a34d 100644
+--- a/src/frontend/utils/enums/CypressFields.ts
++++ b/src/frontend/utils/enums/CypressFields.ts
+@@ -25,4 +25,20 @@ export enum CypressFields {
+   ProductDescription = 'product-description',
+   ProductQuantity = 'product-quantity',
+   ProductAddToCart = 'product-add-to-cart',
++  AssistantTrigger = 'assistant-trigger',
++  AssistantPanel = 'assistant-panel',
++  AssistantClose = 'assistant-close',
++  AssistantTranscript = 'assistant-transcript',
++  AssistantComposer = 'assistant-composer',
++  AssistantSend = 'assistant-send',
++  AssistantMessage = 'assistant-message',
++  AssistantProductCard = 'assistant-product-card',
++  AssistantCardAddToCart = 'assistant-card-add-to-cart',
++  AssistantSuggestion = 'assistant-suggestion',
++  AssistantContextChip = 'assistant-context-chip',
++  AssistantError = 'assistant-error',
++  AssistantRetry = 'assistant-retry',
++  AssistantAskProduct = 'assistant-ask-product',
++  AssistantFeedback = 'assistant-feedback',
++  AssistantDemoDetails = 'assistant-demo-details',
+ }
