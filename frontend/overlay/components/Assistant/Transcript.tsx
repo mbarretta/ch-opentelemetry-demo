@@ -80,7 +80,7 @@ const Entry = ({ entry }: { entry: TranscriptEntry }) => {
           ))}
         </S.Cards>
       ) : null}
-      {entry.kind === 'assistant' && response.feedback_enabled ? <Feedback entryId={entry.id} state={entry.feedback} /> : null}
+      {entry.kind === 'assistant' ? <Feedback entryId={entry.id} state={entry.feedback} note={entry.feedbackNote} /> : null}
       {demoDetailsEnabled ? <DemoDetails demo={response.demo} traceId={response.trace_id} /> : null}
     </>
   );
