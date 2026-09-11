@@ -2,10 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 #
 # astronomy-concierge: the released 3.0.0 template with two changes. A /api/assistant/ route
-# sends the storefront's assistant API to the frontend cluster with a timeout long enough for an
-# agent turn (the catch-all keeps Envoy's 15 s default), and the chatbot route and cluster are
-# gone because the native stack does not run the Gradio service (with `demo.py up --debug-chatbot`
-# it is served directly on CHAT_PORT). envsubst renders the placeholders at container start.
+# sends the storefront's assistant API to the frontend-assistant cluster (the frontend service
+# under a second cluster name) with a timeout long enough for an agent turn (the catch-all keeps
+# Envoy's 15 s default), and the chatbot route and cluster are gone because the native stack does
+# not run the Gradio service (with `demo.py up --debug-chatbot` it is served directly on
+# CHAT_PORT). envsubst renders the placeholders at container start.
+#
+# The separate cluster exists for tracing: with spawn_upstream_span, Envoy emits a
+# "router <cluster> egress" span for every request that carries the cluster name but no URL, so
+# the collector's Langfuse filter can keep the assistant route's egress span only by that name.
 
 static_resources:
   listeners:
@@ -75,7 +80,7 @@ static_resources:
                         - match: { prefix: "/profiles/" }
                           route: { cluster: profiles }
                         - match: { prefix: "/api/assistant/" }
-                          route: { cluster: frontend, timeout: 120s }
+                          route: { cluster: frontend-assistant, timeout: 120s }
                         - match: { prefix: "/" }  # Default/catch-all route - keep last since prefix:"/" matches everything
                           route: { cluster: frontend }
                 http_filters:
@@ -186,6 +191,21 @@ static_resources:
       typed_dns_resolver_config: *dns_resolver
       load_assignment:
         cluster_name: frontend
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: ${FRONTEND_HOST}
+                      port_value: ${FRONTEND_PORT}
+    # The same storefront as `frontend`, addressed as its own cluster by the /api/assistant/ route
+    # so the egress span Envoy emits for assistant requests names it (see the header comment).
+    - name: frontend-assistant
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      typed_dns_resolver_config: *dns_resolver
+      load_assignment:
+        cluster_name: frontend-assistant
         endpoints:
           - lb_endpoints:
               - endpoint:

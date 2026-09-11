@@ -23,9 +23,25 @@ ENVOY_TEMPLATE = ROOT / "docker/envoy.tmpl.yaml"
 # Browser code: everything here is compiled into the client bundle.
 ASSISTANT_SOURCES = sorted(
     path
-    for pattern in ("components/Assistant/*", "providers/Assistant*", "gateways/Assistant*", "types/Assistant*")
+    for pattern in (
+        "components/Assistant/*",
+        "providers/Assistant*",
+        "gateways/Assistant*",
+        "types/Assistant*",
+        "utils/telemetry/Assistant*",
+    )
     for path in OVERLAY.glob(pattern)
     if path.suffix in {".ts", ".tsx"}
+)
+
+# An agent, model, or Langfuse address or credential, in the forms one would take in source. The
+# Langfuse span attribute names (langfuse.session.id, langfuse.observation.*) are not addresses;
+# ac1 of the observability task puts them on browser spans.
+ADDRESS_OR_CREDENTIAL = re.compile(
+    r"agent:8010|localhost:8010|https?://[a-z]|NEXT_PUBLIC_"
+    r"|LANGFUSE_(BASE_URL|PUBLIC_URL|PUBLIC_KEY|SECRET_KEY|AUTH_HEADER)|pk-lf-|sk-lf-|langfuse\.(com|io)"
+    r"|LLM_BASE_URL|LLM_MODEL|api\.openai\.com|gpt-4",
+    flags=re.IGNORECASE,
 )
 
 # Server code: the same-origin API routes and what they call. The released Dockerfile copies
@@ -38,7 +54,9 @@ API_ROUTES = {
 }
 AGENT_GATEWAY = OVERLAY / "gateways/http/Agent.gateway.ts"
 ASSISTANT_SERVICE = OVERLAY / "services/Assistant.service.ts"
-SERVER_SOURCES = [*API_ROUTES.values(), AGENT_GATEWAY, ASSISTANT_SERVICE]
+# Shared by the browser gateway and the API routes (utils/telemetry/ is copied by the Dockerfile).
+TRACING = OVERLAY / "utils/telemetry/AssistantTracing.ts"
+SERVER_SOURCES = [*API_ROUTES.values(), AGENT_GATEWAY, ASSISTANT_SERVICE, TRACING]
 
 REQUIRED_CYPRESS_HOOKS = {
     "AssistantTrigger": "assistant-trigger",
@@ -104,15 +122,31 @@ def test_empty_state_copy_and_suggestion_chips():
 
 
 def test_no_agent_or_langfuse_address_reaches_the_browser_bundle():
-    joined = "\n".join(path.read_text() for path in ASSISTANT_SOURCES)
-    assert "NEXT_PUBLIC_" not in joined
-    assert not re.search(r"agent:8010|localhost:8010|langfuse", joined, flags=re.IGNORECASE)
+    assert TRACING in ASSISTANT_SOURCES
+    for path in ASSISTANT_SOURCES:
+        found = ADDRESS_OR_CREDENTIAL.search(path.read_text())
+        assert not found, f"{path.relative_to(OVERLAY)} contains {found.group(0)!r}"
 
 
 def test_server_sources_hard_code_no_agent_or_observability_address():
-    joined = "\n".join(path.read_text() for path in SERVER_SOURCES if path.is_file())
-    assert "NEXT_PUBLIC_" not in joined
-    assert not re.search(r"agent:8010|localhost:8010|langfuse|https?://[a-z]", joined, flags=re.IGNORECASE)
+    for path in SERVER_SOURCES:
+        assert path.is_file(), f"missing {path.relative_to(OVERLAY)}"
+        found = ADDRESS_OR_CREDENTIAL.search(path.read_text())
+        assert not found, f"{path.relative_to(OVERLAY)} contains {found.group(0)!r}"
+
+
+def test_address_guard_catches_the_forms_it_exists_for():
+    for sample in (
+        "fetch('http://agent:8010/assistant/message')",
+        "const url = process.env.LANGFUSE_BASE_URL",
+        "const key = 'pk-lf-0123'",
+        "https://cloud.langfuse.com",
+        "window.ENV.NEXT_PUBLIC_AGENT_URL",
+        "model: 'gpt-4o-mini'",
+    ):
+        assert ADDRESS_OR_CREDENTIAL.search(sample), sample
+    for sample in ("span.setAttribute('langfuse.session.id', id)", "attributes['langfuse.observation.output']"):
+        assert not ADDRESS_OR_CREDENTIAL.search(sample), sample
 
 
 @pytest.mark.parametrize("name,target", sorted(EXPECTED_PATCH_TARGETS.items()))
@@ -184,7 +218,9 @@ def test_agent_deadline_sits_between_95s_and_the_proxy_route_timeout():
     deadline = re.search(r"AGENT_TIMEOUT_MS = ([\d_]+)", gateway)
     assert deadline, "AGENT_TIMEOUT_MS constant not found"
     deadline_ms = int(deadline.group(1).replace("_", ""))
-    route = re.search(r'prefix: "/api/assistant/" \}\s*\n\s*route: \{ cluster: frontend, timeout: (\d+)s', ENVOY_TEMPLATE.read_text())
+    route = re.search(
+        r'prefix: "/api/assistant/" \}\s*\n\s*route: \{ cluster: frontend-assistant, timeout: (\d+)s', ENVOY_TEMPLATE.read_text()
+    )
     assert route, "Envoy /api/assistant/ route timeout not found"
     proxy_ms = int(route.group(1)) * 1000
     assert 95_000 <= deadline_ms < proxy_ms, f"deadline {deadline_ms} ms not in [95000, {proxy_ms})"
@@ -316,3 +352,76 @@ def test_card_prices_follow_the_selected_currency_from_the_catalog():
     assert "ApiGateway.getProduct(product.id, currencyCode)" in card
     # The agent's amount is shown with its own currency until the catalog answers; never relabeled.
     assert "product.price.currencyCode === currencyCode" in card
+
+
+# -- observability (task 7) ------------------------------------------------------------------
+
+UPSTREAM_TRACER = UPSTREAM_FRONTEND / "utils/telemetry/FrontendTracer.ts"
+TURN_ATTRIBUTES = ("gen_ai.conversation.id", "langfuse.session.id", "assistant.request_id", "assistant.contract_version")
+
+
+def test_turn_span_comes_from_the_global_tracer_and_wraps_the_request():
+    tracing = TRACING.read_text()
+    assert re.search(r"import \{[^}]*\btrace\b[^}]*\} from '@opentelemetry/api'", tracing)
+    assert "TURN_SPAN_NAME = 'assistant.turn'" in tracing
+    assert re.search(r"trace\s*\.getTracer\('[^']+'\)\s*\.startSpan\(TURN_SPAN_NAME", tracing)
+    # The request runs inside the span's context, so the fetch span is its child.
+    assert "trace.setSpan(context.active(), span)" in tracing
+    assert "await context.with(turnContext, run)" in tracing
+    # Ends only once the request settled; a rejection is an ERROR and is rethrown.
+    assert "SpanStatusCode.ERROR" in tracing
+    assert re.search(r"throw error;\s*\} finally \{\s*span\.end\(\);", tracing)
+    for attribute in TURN_ATTRIBUTES:
+        assert f"'{attribute}'" in tracing, attribute
+    assert "AttributeNames.SESSION_ID" in tracing
+    # Both browser turns go through it; nothing else in the browser sources starts a span.
+    gateway = BROWSER_GATEWAY.read_text()
+    assert "withAssistantTurn('message', identity, () => post<AssistantResponse>('message', message))" in gateway
+    assert "withAssistantTurn('action', identity, () => post<AssistantResponse>('action', action))" in gateway
+    assert "shopSessionId: message.shop_session_id" in gateway
+    assert "shopSessionId: SessionGateway.getSession().userId" in gateway
+    for path in ASSISTANT_SOURCES:
+        if path != TRACING:
+            assert "startSpan(" not in path.read_text(), f"{path.relative_to(OVERLAY)} starts its own span"
+
+
+def test_api_routes_record_the_turn_identity_and_contract_version():
+    message = API_ROUTES["message"].read_text()
+    assert "shopSessionId: message.shop_session_id, requestId: message.request_id" in message
+    assert "recordTurnOnActiveSpan({ conversationId: response.conversation_id, contractVersion: response.contract_version })" in message
+    action = API_ROUTES["action"].read_text()
+    assert "shopSessionId: baggageSessionId(), requestId: action.request_id" in action
+    assert "recordTurnOnActiveSpan({ contractVersion: response.contract_version })" in action
+    tracing = TRACING.read_text()
+    assert "trace.getSpan(context.active())?.setAttributes(turnAttributes(identity))" in tracing
+    assert "propagation.getActiveBaggage()?.getEntry(AttributeNames.SESSION_ID)" in tracing
+
+
+def test_no_second_browser_tracing_provider_or_fetch_instrumentation():
+    released = UPSTREAM_TRACER.read_text()
+    assert released.count("new WebTracerProvider(") == 1
+    assert released.count("'@opentelemetry/instrumentation-fetch'") == 1
+    # The released tracer is changed, if at all, by a checked patch, never shadowed by an overlay file.
+    assert not (OVERLAY / "utils/telemetry/FrontendTracer.ts").exists()
+    # Code forms, not words: comments may name the released provider they rely on.
+    setup_markers = (
+        "new WebTracerProvider(",
+        "registerInstrumentations(",
+        "getWebAutoInstrumentations(",
+        "new OTLPTraceExporter(",
+        "new BatchSpanProcessor(",
+        "new ZoneContextManager(",
+        "'@opentelemetry/instrumentation-fetch'",
+        "'@opentelemetry/sdk-trace-web'",
+        "'@opentelemetry/sdk-trace-base'",
+        "'@opentelemetry/exporter-trace-otlp-http'",
+        ".register({",
+    )
+    for path in OVERLAY.rglob("*.ts*"):
+        source = path.read_text()
+        for marker in setup_markers:
+            assert marker not in source, f"{path.relative_to(OVERLAY)} sets up browser tracing ({marker})"
+    for patch in PATCHES.glob("*.patch"):
+        added = "\n".join(line for line in patch.read_text().splitlines() if line.startswith("+") and not line.startswith("+++"))
+        for marker in setup_markers:
+            assert marker not in added, f"{patch.name} adds browser tracing setup ({marker})"
