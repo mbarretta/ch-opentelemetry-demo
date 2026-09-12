@@ -50,6 +50,18 @@ warns when the manifest's tag no longer matches the working tree.
 `contract_version` (from `concierge/contract.py`), `base_images`, and per-service `image`
 and `id`. Services built separately with `--service` keep their entries.
 
+## Platforms
+
+`build` targets the Docker host's platform unless `--platform` says otherwise. The tag does not
+encode the platform: a second platform's images replace the local images under the same tag,
+and the manifest's `platform` records whichever was built last. Build one platform at a time,
+and build the host platform again before `up`.
+
+| Platform | Status on September 11, 2026 |
+| --- | --- |
+| `linux/arm64` | Built and tested (Docker Desktop on Apple silicon): Cypress, and `scripts/smoke.py` over HTTP and MCP transports. |
+| `linux/amd64` | Untested. `build --platform linux/amd64` was not run; the released base images publish `amd64` manifests, so the build path exists but nothing has been verified. |
+
 ## Commands
 
 ```sh
@@ -89,7 +101,9 @@ the released one.
 The root `.dockerignore` limits the agent, mcp, and proxy contexts to `concierge/`, `prompts/`,
 `docker/`, and `.runtime/tools.py`. Secrets (`.env`), the example env, the virtualenv, the
 upstream checkout, caches, telemetry captures, compose files, docs, tests, and scripts stay out.
-To list a context:
+The staged tree's `.dockerignore` (upstream's plus the rules `stage` appends) keeps `.env`
+files, `node_modules`, `.next`, and Cypress run artifacts out of the frontend context. To list a
+context:
 
 ```sh
 printf 'FROM busybox\nCOPY . /ctx\nRUN find /ctx -type f | sort\n' | docker build --no-cache --progress=plain -f - .

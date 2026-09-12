@@ -96,6 +96,9 @@ def test_stage_exports_pin_copies_overlay_and_applies_patches(inputs):
     for rule in (".git", "**/.env", ".venv", ".runtime", ".upstream", ".cache", "**/*.jsonl"):
         assert rule in ignored, rule
     assert "src/frontend/node_modules" in ignored
+    # Cypress runs from the staged tree and writes its artifacts there; they are not build inputs.
+    for rule in ("src/frontend/cypress/screenshots", "src/frontend/cypress/videos", "src/frontend/cypress/downloads"):
+        assert rule in ignored, rule
 
 
 def test_stage_rejects_upstream_pin_mismatch(inputs, monkeypatch):

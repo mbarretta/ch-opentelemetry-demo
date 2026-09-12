@@ -1,6 +1,15 @@
 # Native Astronomy Shop assistant
 
-Status: implementation plan, September 11, 2026. Scope: native storefront UI, the agent contract changes it needs, and locally runnable container images. EKS and other deployment work are deferred.
+Status: implemented, September 11, 2026 (harness plan `feat-native-assistant-ui`, tasks 1–8). Scope was native storefront UI, the agent contract changes it needs, and locally runnable container images; EKS and other deployment work remain deferred. `README.md` documents the run; `docker/README.md` the images. Deviations from the text below:
+
+- The proxy image is `astronomy-concierge-frontend-proxy` (the service name), not `astronomy-concierge-proxy`.
+- The storefront API has four routes, not two: `message`, `action` (card **Add to cart**, so a mutation is one instrumented, deduplicated agent action), `feedback`, and `conversation/[id]` (the status route that page reload resumes from).
+- The browser turn span lives in `utils/telemetry/AssistantTracing.ts`, because the released frontend Dockerfile copies fixed directories and `utils/assistant/` would not reach the image.
+- The turn's identity attributes land on Next's `executing api route` span, the only span a handler can reach; the HTTP server span carries `http.route`. Both stay in one trace and both are retained for Langfuse.
+- The Envoy template routes `/api/assistant/` through a second cluster, `frontend-assistant` (same address as `frontend`), because the proxy's egress span carries no URL and the cluster name is what lets the Langfuse filter keep it.
+- The panel has no scenario selector: `backend-failure` and `budget-violation` are chosen in the optional Gradio debug client; the native panel sends the default `shopping` scenario, and the CLI still toggles the real catalog fault.
+- Sending a message clears the composer (the text stays in the transcript and **Retry** reuses the request id); the draft is restored only when the failure is not retryable.
+- Images were built and tested for `linux/arm64` only; `linux/amd64` is untested. Token streaming and session replay were not added, as planned.
 
 ## Outcome
 

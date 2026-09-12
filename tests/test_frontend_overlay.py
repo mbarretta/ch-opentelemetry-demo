@@ -164,6 +164,31 @@ def test_patches_touch_distinct_upstream_files():
             seen[target] = patch.name
 
 
+def test_assistant_cypress_spec_covers_the_native_flow_with_the_shared_hooks():
+    """The browser test lands beside the released specs and drives the panel through the same
+    data-cy hooks; it is run against the native stack, not here (see README, Browser tests)."""
+    source = (OVERLAY / "cypress/e2e/Assistant.cy.ts").read_text()
+    assert "from '../../utils/Cypress'" in source
+    assert "from '../../utils/enums/CypressFields'" in source
+    for member in (
+        "AssistantTrigger",
+        "AssistantSend",
+        "AssistantMessage",
+        "AssistantProductCard",
+        "AssistantCardAddToCart",
+        "CartItemCount",
+        "CartGoToShopping",
+        "AssistantClose",
+        "AssistantNewConversation",
+    ):
+        assert f"CypressFields.{member}" in source, member
+    assert "A telescope for a beginner" in source
+    # Keyboard and live-region coverage at the two widths the plan names.
+    assert 'aria-live="polite"' in source and "aria-modal" in source
+    assert "{enter}" in source and "{esc}" in source and "key: 'Tab'" in source
+    assert "width: 1440" in source and "width: 390" in source
+
+
 def test_cypress_fields_patch_adds_the_assistant_hooks():
     added = "\n".join(
         line[1:]
