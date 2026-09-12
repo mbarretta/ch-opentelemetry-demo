@@ -146,9 +146,14 @@ export const parseMessageRequest = (value: unknown): AssistantMessageRequest => 
 };
 
 export const parseActionRequest = (value: unknown): AssistantActionRequest => {
-  const body = fields(value, ['conversation_id', 'request_id', 'product_id', 'quantity', 'currency_code'], 'the cart action');
+  const body = fields(
+    value,
+    ['conversation_id', 'shop_session_id', 'request_id', 'product_id', 'quantity', 'currency_code'],
+    'the cart action'
+  );
   return {
     conversation_id: uuid(body, 'conversation_id'),
+    shop_session_id: uuid(body, 'shop_session_id'),
     request_id: uuid(body, 'request_id'),
     product_id: productId(body),
     quantity: body.quantity === undefined ? 1 : wholeNumber(body, 'quantity', 1, QUANTITY_MAX),

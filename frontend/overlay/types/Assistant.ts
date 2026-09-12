@@ -35,6 +35,7 @@ export interface AssistantMessageRequest {
 
 export interface AssistantActionRequest {
   conversation_id: string;
+  shop_session_id: string;
   request_id: string;
   product_id: string;
   quantity: number;

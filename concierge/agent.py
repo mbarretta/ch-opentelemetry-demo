@@ -147,6 +147,16 @@ class ConciergeAgent(Agent):
             raise HTTPException(404, "Conversation not found or expired. Start a new one.")
         return state
 
+    def owned_conversation(self, conversation_id, shop_session_id):
+        """The live conversation with this id, only for the storefront session it is bound to."""
+        state = self.conversation(conversation_id)
+        if state.shop_session_id != str(shop_session_id):
+            raise HTTPException(
+                409,
+                "This conversation belongs to a different storefront session. Start a new one.",
+            )
+        return state
+
     def stored_or_ready(self, state, request_id):
         """Return the stored reply for a repeated request id, or None once a turn may start."""
         stored = state.replies.get(str(request_id))
@@ -270,12 +280,7 @@ class ConciergeAgent(Agent):
             )
         else:
             key = str(request.conversation_id)
-            state = self.conversation(key)
-            if state.shop_session_id != shop_session_id:
-                raise HTTPException(
-                    409,
-                    "This conversation belongs to a different storefront session. Start a new one.",
-                )
+            state = self.owned_conversation(key, shop_session_id)
             if (request.scenario is not None and request.scenario != state.scenario) or (
                 request.budget is not None and request.budget != state.budget
             ):
@@ -297,7 +302,8 @@ class ConciergeAgent(Agent):
 
     async def assistant_add_to_cart(self, request: AddToCartAction):
         key = str(request.conversation_id)
-        state = self.conversation(key)
+        # Ownership first: a stored reply is never handed to another storefront session.
+        state = self.owned_conversation(key, request.shop_session_id)
         stored = self.stored_or_ready(state, request.request_id)
         if stored is not None:
             return stored
