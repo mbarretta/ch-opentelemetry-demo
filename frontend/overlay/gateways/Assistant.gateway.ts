@@ -7,7 +7,6 @@
 // spans it causes belong to one trace with the conversation and storefront session on it.
 
 import FixtureTransport from './AssistantFixtures';
-import SessionGateway from './Session.gateway';
 import {
   AssistantConversationStatus,
   AssistantError,
@@ -50,8 +49,7 @@ const LiveTransport: AssistantTransport = {
     return withAssistantTurn('message', identity, () => post<AssistantResponse>('message', message));
   },
   addToCart(action) {
-    // The action body names the conversation only; the storefront session it is bound to is this browser's.
-    const identity = { conversationId: action.conversation_id, shopSessionId: SessionGateway.getSession().userId, requestId: action.request_id };
+    const identity = { conversationId: action.conversation_id, shopSessionId: action.shop_session_id, requestId: action.request_id };
     return withAssistantTurn('action', identity, () => post<AssistantResponse>('action', action));
   },
   async submitFeedback(feedback) {

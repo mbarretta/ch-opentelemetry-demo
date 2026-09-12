@@ -105,6 +105,18 @@ def message(shop_session, conversation_id=None, text="Find a beginner telescope"
     }
 
 
+def cart_action(shop_session, conversation_id, quantity=1, **extra):
+    return {
+        "conversation_id": conversation_id,
+        "shop_session_id": shop_session,
+        "request_id": str(uuid4()),
+        "product_id": EXPLORASCOPE,
+        "quantity": quantity,
+        "currency_code": "USD",
+        **extra,
+    }
+
+
 async def test_message_binds_new_conversation_to_shop_session(agent, client):
     shop_session = str(uuid4())
     response = await client.post("/assistant/message", json=message(shop_session))
@@ -284,13 +296,7 @@ async def test_add_to_cart_action_is_one_scoped_tool_call_in_the_trace(agent, cl
     first = (await client.post("/assistant/message", json=message(shop_session))).json()
     conversation_id = first["conversation_id"]
     spans.clear()
-    action = {
-        "conversation_id": conversation_id,
-        "request_id": str(uuid4()),
-        "product_id": EXPLORASCOPE,
-        "quantity": 2,
-        "currency_code": "USD",
-    }
+    action = cart_action(shop_session, conversation_id, quantity=2)
     response = await client.post("/assistant/actions/add-to-cart", json=action)
     assert response.status_code == 200, response.text
     body = response.json()
@@ -323,16 +329,40 @@ async def test_add_to_cart_action_is_one_scoped_tool_call_in_the_trace(agent, cl
     ).status_code == 422
 
 
+async def test_add_to_cart_action_from_another_shop_session_is_rejected(agent, client):
+    shop_session = str(uuid4())
+    first = (await client.post("/assistant/message", json=message(shop_session))).json()
+    conversation_id = first["conversation_id"]
+    state = agent.sessions[conversation_id]
+    ours = cart_action(shop_session, conversation_id)
+    foreign = {**ours, "shop_session_id": str(uuid4())}
+    rejected = await client.post("/assistant/actions/add-to-cart", json=foreign)
+    assert rejected.status_code == 409, rejected.text
+    assert "storefront session" in rejected.json()["detail"]
+    assert not [c for c in agent.test_calls if c[0] == "add_to_cart"]
+    assert agent.test_carts == {}
+    assert state.turns == 1
+    # The owning session's identical request runs once and is deduplicated by request_id.
+    accepted = await client.post("/assistant/actions/add-to-cart", json=ours)
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["cart_changed"] is True
+    assert agent.test_carts == {shop_session: [{"productId": EXPLORASCOPE, "quantity": 1}]}
+    repeat = await client.post("/assistant/actions/add-to-cart", json=ours)
+    assert repeat.json() == accepted.json()
+    assert len([c for c in agent.test_calls if c[0] == "add_to_cart"]) == 1
+    # Ownership is checked before deduplication: a stored reply is never handed to another session.
+    assert (await client.post("/assistant/actions/add-to-cart", json=foreign)).status_code == 409
+    assert state.turns == 2
+    without_session = {k: v for k, v in ours.items() if k != "shop_session_id"}
+    assert (
+        await client.post("/assistant/actions/add-to-cart", json=without_session)
+    ).status_code == 422
+
+
 async def test_failed_add_to_cart_action_is_not_a_success_and_can_be_retried(agent, client):
     shop_session = str(uuid4())
     first = (await client.post("/assistant/message", json=message(shop_session))).json()
-    action = {
-        "conversation_id": first["conversation_id"],
-        "request_id": str(uuid4()),
-        "product_id": EXPLORASCOPE,
-        "quantity": 1,
-        "currency_code": "USD",
-    }
+    action = cart_action(shop_session, first["conversation_id"])
     agent.fail_cart = True
     failed = await client.post("/assistant/actions/add-to-cart", json=action)
     assert failed.status_code == 502
@@ -357,13 +387,7 @@ async def test_add_to_cart_action_awaits_nothing_after_it_changes_the_cart(agent
 
     agent.langfuse.prompt = prompt
     agent.test_calls.clear()
-    action = {
-        "conversation_id": first["conversation_id"],
-        "request_id": str(uuid4()),
-        "product_id": EXPLORASCOPE,
-        "quantity": 1,
-        "currency_code": "USD",
-    }
+    action = cart_action(shop_session, first["conversation_id"])
     assert (await client.post("/assistant/actions/add-to-cart", json=action)).status_code == 200
     assert [name for name, _ in agent.test_calls] == ["prompt", "add_to_cart"]
 

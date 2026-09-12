@@ -404,7 +404,7 @@ def test_turn_span_comes_from_the_global_tracer_and_wraps_the_request():
     assert "withAssistantTurn('message', identity, () => post<AssistantResponse>('message', message))" in gateway
     assert "withAssistantTurn('action', identity, () => post<AssistantResponse>('action', action))" in gateway
     assert "shopSessionId: message.shop_session_id" in gateway
-    assert "shopSessionId: SessionGateway.getSession().userId" in gateway
+    assert "shopSessionId: action.shop_session_id" in gateway
     for path in ASSISTANT_SOURCES:
         if path != TRACING:
             assert "startSpan(" not in path.read_text(), f"{path.relative_to(OVERLAY)} starts its own span"
@@ -415,11 +415,10 @@ def test_api_routes_record_the_turn_identity_and_contract_version():
     assert "shopSessionId: message.shop_session_id, requestId: message.request_id" in message
     assert "recordTurnOnActiveSpan({ conversationId: response.conversation_id, contractVersion: response.contract_version })" in message
     action = API_ROUTES["action"].read_text()
-    assert "shopSessionId: baggageSessionId(), requestId: action.request_id" in action
+    assert "shopSessionId: action.shop_session_id, requestId: action.request_id" in action
     assert "recordTurnOnActiveSpan({ contractVersion: response.contract_version })" in action
     tracing = TRACING.read_text()
     assert "trace.getSpan(context.active())?.setAttributes(turnAttributes(identity))" in tracing
-    assert "propagation.getActiveBaggage()?.getEntry(AttributeNames.SESSION_ID)" in tracing
 
 
 def test_no_second_browser_tracing_provider_or_fetch_instrumentation():

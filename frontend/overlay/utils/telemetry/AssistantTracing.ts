@@ -21,9 +21,6 @@ const ATTR_LANGFUSE_SESSION_ID = 'langfuse.session.id';
 const ATTR_REQUEST_ID = 'assistant.request_id';
 const ATTR_CONTRACT_VERSION = 'assistant.contract_version';
 const ATTR_TURN_KIND = 'assistant.turn.kind';
-// Same bound as the agent's baggage allow-list; a longer value is not a session id.
-const SESSION_ID_MAX_LENGTH = 128;
-
 type AssistantTurnKind = 'message' | 'action';
 
 export interface AssistantTurnIdentity {
@@ -51,13 +48,6 @@ export const recordTurnOnActiveSpan = (identity: AssistantTurnIdentity) => {
   trace.getSpan(context.active())?.setAttributes(turnAttributes(identity));
 };
 
-// Server side: the storefront session the browser sent as W3C baggage. The cart action request
-// does not carry it in its body; the message request does.
-export const baggageSessionId = (): string | undefined => {
-  const value = propagation.getActiveBaggage()?.getEntry(AttributeNames.SESSION_ID)?.value;
-  return value && value.length <= SESSION_ID_MAX_LENGTH ? value : undefined;
-};
-
 type TurnResponse = Pick<AssistantResponse, 'conversation_id' | 'contract_version'>;
 
 // Browser side. The span ends when the request settles; a rejection sets ERROR status and is rethrown.
@@ -69,8 +59,8 @@ export const withAssistantTurn = async <T extends TurnResponse>(
   const span = trace
     .getTracer('astronomy-shop.assistant')
     .startSpan(TURN_SPAN_NAME, { attributes: { [ATTR_TURN_KIND]: kind, ...turnAttributes(identity) } });
-  // The same baggage the released Api.gateway sets on shop calls, so the storefront's API route
-  // (and the agent's baggage allow-list) see the storefront session without it being in the body.
+  // The same baggage the released Api.gateway sets on shop calls, so the agent's baggage
+  // allow-list sees the storefront session on every hop; the API routes read it from the body.
   const baggage = (propagation.getActiveBaggage() ?? propagation.createBaggage()).setEntry(AttributeNames.SESSION_ID, {
     value: identity.shopSessionId,
   });

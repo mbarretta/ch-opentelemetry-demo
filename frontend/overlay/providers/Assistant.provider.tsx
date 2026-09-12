@@ -402,6 +402,7 @@ const AssistantProvider = ({ children }: IProps) => {
         quantityBefore: quantityOf(cartItems, product.id),
         request: {
           conversation_id: conversationId,
+          shop_session_id: SessionGateway.getSession().userId,
           request_id: v4(),
           product_id: product.id,
           quantity,
@@ -413,8 +414,12 @@ const AssistantProvider = ({ children }: IProps) => {
   );
 
   const retryUncertain = useCallback(async () => {
-    // Same request_id: an action the agent did complete comes back as its stored result.
-    if (unresolved && !inFlightRef.current) await run(unresolved);
+    // Same request_id: an action the agent did complete comes back as its stored result. The
+    // session is this browser's by construction (a stored conversation is only restored for its
+    // own shop session), so an action stored before the field existed is completed here.
+    if (unresolved && !inFlightRef.current) {
+      await run({ ...unresolved, request: { ...unresolved.request, shop_session_id: SessionGateway.getSession().userId } });
+    }
   }, [run, unresolved]);
 
   const dismissUncertain = useCallback(() => setUnresolved(null), []);

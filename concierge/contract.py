@@ -17,7 +17,9 @@ Conversation lifetime
 Conversations live in the agent process memory only:
 
 - A conversation is bound to the storefront ``shop_session_id`` (the cart) when it is created
-  and can never be rebound (409).
+  and can never be rebound (409). Every turn (message or cart action) names that session and
+  is refused (409) when it names another one, so a leaked ``conversation_id`` alone cannot
+  change the cart it is bound to.
 - It expires after one hour without a turn, or after 20 turns (an add-to-cart action counts as
   a turn). Requests for an unknown or expired conversation return 404; the client then starts
   a new conversation.
@@ -65,6 +67,7 @@ class MessageRequest(StrictModel):
 
 class AddToCartAction(StrictModel):
     conversation_id: UUID
+    shop_session_id: UUID
     request_id: UUID
     product_id: str = ProductId
     quantity: int = Field(default=1, ge=1, le=10)
