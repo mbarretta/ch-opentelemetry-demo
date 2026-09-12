@@ -71,6 +71,9 @@ STAGED_DOCKERIGNORE = """
 src/frontend/node_modules
 src/frontend/.next
 src/frontend/tsconfig.tsbuildinfo
+src/frontend/cypress/screenshots
+src/frontend/cypress/videos
+src/frontend/cypress/downloads
 ###################################
 """
 

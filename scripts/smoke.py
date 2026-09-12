@@ -125,11 +125,17 @@ def native_turn(shop_url):
 def check_native_trace(result, shop_session, parent):
     """The preview holds the synthetic parent and every ancestor between it and the agent."""
     trace_id = result["trace_id"]
+    # The preview and the full capture are separate exporters, flushed by separate batches, so
+    # both are polled: the shop-service spans can land after the preview is already complete.
     for _ in range(30):
         preview = preview_spans(trace_id)
+        full = captured_spans(trace_id)
         ids = {s["spanId"] for s in preview}
-        if parent in ids and not orphans(preview) and any(
-            s["name"] == "concierge.turn" for s in preview
+        if (
+            parent in ids
+            and not orphans(preview)
+            and any(s["name"] == "concierge.turn" for s in preview)
+            and "product-catalog" in {s["service"] for s in full}
         ):
             break
         time.sleep(1)
@@ -161,7 +167,6 @@ def check_native_trace(result, shop_session, parent):
     assert attribute(turn, "session.id") == shop_session
     assert attribute(turn, "gen_ai.conversation.id") == result["conversation_id"]
     # The unfiltered capture has the same trace plus the shop services the filter drops.
-    full = captured_spans(trace_id)
     assert {s["spanId"] for s in preview} <= {s["spanId"] for s in full}
     assert "product-catalog" in {s["service"] for s in full}
     print("Native turn retained for Langfuse:", dict(Counter(s["service"] for s in preview)))
