@@ -16,7 +16,6 @@ import SessionGateway from '../gateways/Session.gateway';
 import {
   ActionTurn,
   ASSISTANT_CONTRACT_VERSION,
-  ASSISTANT_MAX_TURNS,
   AssistantError,
   AssistantProductRef,
   FeedbackState,
@@ -151,19 +150,6 @@ const resolveStored = async (
   }
 };
 
-// Why the agent answered 409 for this conversation, read from its status route: it belongs to
-// another shop session ('foreign'), the agent no longer has it ('expired'), it reached its turn
-// limit ('exhausted'), or a turn is still in flight ('busy'). null when the status could not be read.
-const conflictKind = async (conversationId: string): Promise<'foreign' | 'expired' | 'exhausted' | 'busy' | null> => {
-  try {
-    const status = await getAssistantTransport().getConversation(conversationId);
-    if (status.shop_session_id !== SessionGateway.getSession().userId) return 'foreign';
-    return status.turns >= ASSISTANT_MAX_TURNS ? 'exhausted' : 'busy';
-  } catch (caught) {
-    return toAssistantError(caught).code === 'expired' ? 'expired' : null;
-  }
-};
-
 interface IProps {
   children: React.ReactNode;
 }
@@ -271,11 +257,12 @@ const AssistantProvider = ({ children }: IProps) => {
 
   // One failed turn. The failure decides what the shopper sees: a cart action the agent did not
   // answer in time is uncertain (the cart is refetched, nothing is retried until the shopper asks;
-  // the agent deduplicates by request_id); an expired conversation, or one bound to another shop
-  // session, is replaced by a fresh one and the message returns to the composer; a message the
-  // agent will never accept as sent returns to the composer too; everything else offers Retry.
+  // the agent deduplicates by request_id); an expired conversation, or one the agent says belongs
+  // to another shop session (409 reason 'foreign'), is replaced by a fresh one and the message
+  // returns to the composer; a message the agent will never accept as sent (a 409 the gateway
+  // marked not retryable: turn limit, rebind) returns to the composer too; everything else offers Retry.
   const fail = useCallback(
-    async (turn: PendingTurn, failure: AssistantError) => {
+    (turn: PendingTurn, failure: AssistantError) => {
       setAnnouncement(failure.message);
       if (turn.kind === 'action' && failure.code === 'timeout') {
         setUnresolved(turn);
@@ -283,23 +270,19 @@ const AssistantProvider = ({ children }: IProps) => {
         return;
       }
       const message = turn.kind === 'message' ? turn.request.message : null;
-      const conflict =
-        failure.code === 'conflict' && turn.request.conversation_id ? await conflictKind(turn.request.conversation_id) : null;
-      if (failure.code === 'expired' || conflict === 'expired' || conflict === 'foreign') {
-        startFresh([conflict === 'foreign' ? FOREIGN_NOTE : EXPIRED_NOTE]);
+      if (failure.code === 'expired' || failure.reason === 'foreign') {
+        startFresh([failure.reason === 'foreign' ? FOREIGN_NOTE : EXPIRED_NOTE]);
         if (message !== null) setDraft(message);
         return;
       }
-      // A conversation at its turn limit answers 409 to every retry; the agent's message says to start a new one.
-      const final = conflict === 'exhausted' ? new AssistantError(failure.code, failure.message, false) : failure;
-      if (message !== null && !final.retryable) {
+      if (message !== null && !failure.retryable) {
         setTranscript(entries => entries.filter(entry => entry.id !== `u:${turn.request.request_id}`));
         setDraft(message);
-        setError(final);
+        setError(failure);
         return;
       }
-      setError(final);
-      if (final.retryable) setFailedTurn(turn);
+      setError(failure);
+      if (failure.retryable) setFailedTurn(turn);
     },
     [queryClient, startFresh]
   );
@@ -343,7 +326,7 @@ const AssistantProvider = ({ children }: IProps) => {
         }
         setAnnouncement(turn.kind === 'message' ? 'The assistant replied' : `Added ${turn.productName} to your cart`);
       } catch (caught) {
-        await fail(turn, toAssistantError(caught));
+        fail(turn, toAssistantError(caught));
       } finally {
         inFlightRef.current = false;
         setPending(null);

@@ -9,6 +9,8 @@
 //   "beginner" or "under"   recommendation with product cards
 //   "explain" with a product context, or "tell me about"   one card for that product
 //   "fail" or "error"       a recoverable error (transcript and composer are kept)
+//   "busy"                  the agent's turn-in-flight conflict (Retry is offered)
+//   "limit"                 the agent's turn-limit conflict (the message returns to the composer)
 //   "slow"                  a long pending state
 //   anything else           a text-only reply
 
@@ -163,6 +165,12 @@ const FixtureTransport: AssistantTransport = {
     await wait(text.includes('slow') ? SLOW_RESPONSE_DELAY_MS : RESPONSE_DELAY_MS);
     if (text.includes('fail') || text.includes('error')) {
       throw new AssistantError('unavailable', 'The assistant did not answer. Your message is kept; try again.');
+    }
+    if (text.includes('busy')) {
+      throw new AssistantError('conflict', 'A turn is already in flight for this conversation.', true, 'in_flight');
+    }
+    if (text.includes('limit')) {
+      throw new AssistantError('conflict', 'This conversation reached 20 turns. Start a new one.', false, 'turn_limit');
     }
     const conversationId = request.conversation_id ?? newConversationId();
     if (text.includes('explain') || text.includes('tell me about')) {

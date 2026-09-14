@@ -94,7 +94,12 @@ def patch_targets(patch: Path) -> list[str]:
 def test_contract_version_mirrors_the_agent_constant():
     types = (OVERLAY / "types/Assistant.ts").read_text()
     assert re.search(r"export const ASSISTANT_CONTRACT_VERSION = ['\"]1['\"]", types)
-    assert re.search(rf"export const ASSISTANT_MAX_TURNS = {contract.MAX_TURNS};", types)
+    # The 409 reason enum is the contract's; the turn limit itself is the agent's to enforce.
+    reasons = re.search(r"ASSISTANT_CONFLICT_REASONS = \[([^\]]+)\]", types)
+    assert reasons and set(re.findall(r"'([^']+)'", reasons.group(1))) == set(
+        get_args(contract.ConflictReason)
+    )
+    assert "ASSISTANT_MAX_TURNS" not in types
 
 
 def test_assistant_sources_exist_and_use_theme_tokens_instead_of_theme_hex_values():
@@ -356,6 +361,27 @@ def test_conversation_is_resumed_only_after_the_status_route_confirms_it():
     assert SESSION_GATEWAY.is_file()
     assert "localStorage" in SESSION_GATEWAY.read_text()
     assert "localStorage" not in provider
+
+
+def test_conflicts_are_classified_from_the_agent_reason_without_a_status_round_trip():
+    # The server-side gateway reads the agent's structured 409 and decides retryability from
+    # the reason alone: only a turn in flight clears on its own.
+    gateway = AGENT_GATEWAY.read_text()
+    assert "reason === 'in_flight'" in gateway
+    assert re.search(r"new AssistantRouteError\(409, 'conflict', [^;]*, reason\)", gateway)
+    # The reason travels in the route's error envelope and into the browser's AssistantError.
+    assert "if (this.reason) error.reason = this.reason;" in ASSISTANT_SERVICE.read_text()
+    assert "reason?: AssistantConflictReason" in (OVERLAY / "types/Assistant.ts").read_text()
+    assert "payload.error.reason" in BROWSER_GATEWAY.read_text()
+    # The provider branches on it: a foreign conversation starts fresh with the message back in
+    # the composer; every other 409 is shown with the retryability the gateway decided.
+    provider = PROVIDER.read_text()
+    assert "failure.reason === 'foreign'" in provider
+    assert "FOREIGN_NOTE : EXPIRED_NOTE" in provider
+    assert "conflictKind" not in provider
+    assert "ASSISTANT_MAX_TURNS" not in provider
+    # The status route is read once, to resume a stored conversation, never to explain a 409.
+    assert provider.count(".getConversation(") == 1
 
 
 def test_new_conversation_clears_the_transcript_and_leaves_the_cart_alone():

@@ -6,7 +6,9 @@
 // are built here; only a JSON content type is sent.
 
 import {
+  ASSISTANT_CONFLICT_REASONS,
   AssistantActionRequest,
+  AssistantConflictReason,
   AssistantConversationStatus,
   AssistantFeedbackRequest,
   AssistantMessageRequest,
@@ -29,16 +31,29 @@ const agentBaseUrl = (): string => {
   return configured;
 };
 
+interface AgentDetail {
+  message?: string;
+  reason?: AssistantConflictReason;
+}
+
+const isConflictReason = (value: unknown): value is AssistantConflictReason =>
+  typeof value === 'string' && (ASSISTANT_CONFLICT_REASONS as readonly string[]).includes(value);
+
 // FastAPI reports HTTPException reasons as { detail: string }; the agent's own turn and cart
-// failures carry { detail: { message, trace_id } }; validation errors carry a list (ignored).
-const agentDetail = (payload: unknown): string | undefined => {
+// failures carry { detail: { message, trace_id } } and its 409s { detail: { message, reason } };
+// validation errors carry a list (ignored).
+const agentDetail = (payload: unknown): AgentDetail => {
   const detail = typeof payload === 'object' && payload !== null ? (payload as { detail?: unknown }).detail : undefined;
-  const message = typeof detail === 'object' && detail !== null ? (detail as { message?: unknown }).message : detail;
-  return typeof message === 'string' && message.length > 0 && message.length <= DETAIL_MAX_LENGTH ? message : undefined;
+  const structured = typeof detail === 'object' && detail !== null ? (detail as { message?: unknown; reason?: unknown }) : undefined;
+  const message = structured ? structured.message : detail;
+  return {
+    message: typeof message === 'string' && message.length > 0 && message.length <= DETAIL_MAX_LENGTH ? message : undefined,
+    reason: isConflictReason(structured?.reason) ? structured.reason : undefined,
+  };
 };
 
 const failureFor = (status: number, payload: unknown): AssistantRouteError => {
-  const detail = agentDetail(payload);
+  const { message: detail, reason } = agentDetail(payload);
   switch (status) {
     case 400:
     case 422:
@@ -46,8 +61,9 @@ const failureFor = (status: number, payload: unknown): AssistantRouteError => {
     case 404:
       return new AssistantRouteError(404, 'expired', detail ?? 'This conversation has expired. Start a new one.', false);
     case 409:
-      // The agent deduplicates by request_id, so repeating the same turn later is safe.
-      return new AssistantRouteError(409, 'conflict', detail ?? 'The assistant is still working on your previous request.', true);
+      // Only a turn still in flight clears on its own (the agent deduplicates by request_id, so
+      // repeating it later is safe); a foreign, exhausted, or rebound conversation never will.
+      return new AssistantRouteError(409, 'conflict', detail ?? 'The assistant refused this turn. Start a new conversation.', reason === 'in_flight', reason);
     case 502:
     case 503:
       return new AssistantRouteError(502, 'unavailable', detail ?? `The assistant is unavailable right now. ${KEEP_MESSAGE}`, true);

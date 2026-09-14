@@ -1,5 +1,6 @@
 import json
 from datetime import UTC, datetime
+from typing import get_args
 from uuid import UUID, uuid4
 
 import httpx
@@ -11,6 +12,7 @@ from concierge.agent import ChatRequest, ConciergeAgent, FeedbackRequest
 from concierge.contract import (
     CONTRACT_VERSION,
     AssistantResponse,
+    ConflictReason,
     MessageRequest,
     product_refs,
 )
@@ -105,6 +107,16 @@ def message(shop_session, conversation_id=None, text="Find a beginner telescope"
     }
 
 
+def conflict(response, reason):
+    """Assert a structured 409 on the storefront routes and return its message."""
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert set(detail) == {"message", "reason"}
+    assert reason in get_args(ConflictReason)
+    assert detail["reason"] == reason
+    return detail["message"]
+
+
 def cart_action(shop_session, conversation_id, quantity=1, **extra):
     return {
         "conversation_id": conversation_id,
@@ -144,8 +156,7 @@ async def test_rebinding_a_conversation_to_another_shop_session_is_rejected(agen
     other = await client.post(
         "/assistant/message", json=message(str(uuid4()), conversation_id, "Show my cart")
     )
-    assert other.status_code == 409
-    assert "storefront session" in other.json()["detail"]
+    assert "storefront session" in conflict(other, "foreign")
     assert agent.sessions[conversation_id].turns == 1
 
 
@@ -286,8 +297,7 @@ async def test_concurrent_turn_on_same_conversation_is_rejected(agent, client):
         blocked = await client.post(
             "/assistant/message", json=message(shop_session, conversation_id, "Show my cart")
         )
-    assert blocked.status_code == 409
-    assert "in flight" in blocked.json()["detail"]
+    assert "in flight" in conflict(blocked, "in_flight")
     assert state.turns == 1
 
 
@@ -337,8 +347,7 @@ async def test_add_to_cart_action_from_another_shop_session_is_rejected(agent, c
     ours = cart_action(shop_session, conversation_id)
     foreign = {**ours, "shop_session_id": str(uuid4())}
     rejected = await client.post("/assistant/actions/add-to-cart", json=foreign)
-    assert rejected.status_code == 409, rejected.text
-    assert "storefront session" in rejected.json()["detail"]
+    assert "storefront session" in conflict(rejected, "foreign")
     assert not [c for c in agent.test_calls if c[0] == "add_to_cart"]
     assert agent.test_carts == {}
     assert state.turns == 1
@@ -351,7 +360,7 @@ async def test_add_to_cart_action_from_another_shop_session_is_rejected(agent, c
     assert repeat.json() == accepted.json()
     assert len([c for c in agent.test_calls if c[0] == "add_to_cart"]) == 1
     # Ownership is checked before deduplication: a stored reply is never handed to another session.
-    assert (await client.post("/assistant/actions/add-to-cart", json=foreign)).status_code == 409
+    conflict(await client.post("/assistant/actions/add-to-cart", json=foreign), "foreign")
     assert state.turns == 2
     without_session = {k: v for k, v in ours.items() if k != "shop_session_id"}
     assert (
@@ -580,7 +589,13 @@ async def test_scenario_and_budget_changes_need_a_new_conversation(agent, client
     same = message(shop_session, body["conversation_id"], "Show my cart", budget=150)
     assert (await client.post("/assistant/message", json=same)).status_code == 200
     changed = message(shop_session, body["conversation_id"], "Show my cart", budget=99)
-    assert (await client.post("/assistant/message", json=changed)).status_code == 409
+    rebound = await client.post("/assistant/message", json=changed)
+    assert "new conversation" in conflict(rebound, "rebind")
+    scenario = message(
+        shop_session, body["conversation_id"], "Show my cart", scenario="backend-failure"
+    )
+    conflict(await client.post("/assistant/message", json=scenario), "rebind")
+    assert agent.sessions[body["conversation_id"]].turns == 2
 
 
 async def test_turn_limit_needs_a_new_conversation(agent, client):
@@ -590,8 +605,20 @@ async def test_turn_limit_needs_a_new_conversation(agent, client):
     limited = await client.post(
         "/assistant/message", json=message(shop_session, body["conversation_id"], "Show my cart")
     )
-    assert limited.status_code == 409
-    assert "20 turns" in limited.json()["detail"]
+    assert "20 turns" in conflict(limited, "turn_limit")
+
+
+async def test_legacy_prompt_conflicts_keep_their_plain_string_detail(agent, client):
+    session = str(uuid4())
+    first = await client.post(
+        "/prompt", json={"message": "Find a telescope", "session_id": session}
+    )
+    assert first.status_code == 200, first.text
+    rebound = await client.post(
+        "/prompt", json={"message": "hello", "session_id": session, "budget_usd": 100}
+    )
+    assert rebound.status_code == 409
+    assert isinstance(rebound.json()["detail"], str)
 
 
 async def test_legacy_prompt_keeps_conversation_id_as_cart_id(agent):
