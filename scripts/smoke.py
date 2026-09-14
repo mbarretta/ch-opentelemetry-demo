@@ -1,12 +1,21 @@
 #!/usr/bin/env python3
 """Exercise the running demo and restore its catalog fault setting afterwards.
 
-Two paths are checked against the running scripted stack: the legacy ``POST /prompt`` API on
-the agent's host port, and one native storefront turn through the proxy under a synthetic
-browser span, whose whole ancestor chain must reach the Langfuse preview file.
+`--target local`, the default, checks two paths against the running scripted Compose stack: the
+legacy ``POST /prompt`` API on the agent's host port, and one native storefront turn through
+the proxy under a synthetic browser span, whose whole ancestor chain must reach the Langfuse
+preview file.
+
+`--target eks` drives that same native turn through the `demo.py eks tunnel` port-forward and
+then asserts the demo's central claim where the cluster puts it: ONE trace id, in ClickHouse
+Cloud with the whole storefront-to-agent span set intact, and the same id Langfuse answers for.
+The cluster writes no capture file, and the legacy `/prompt` block needs one -- plus the agent's
+host port and the laptop's flagd file -- so it is skipped there.
 """
 
+import argparse
 import json
+import re
 import sys
 import time
 from collections import Counter
@@ -17,6 +26,8 @@ import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from launcher import RUNTIME, environment, scenario  # noqa: E402
+from launcher.cli import TARGETS  # noqa: E402
+from launcher.eks import config, ops, tunnel  # noqa: E402
 
 # What the Langfuse pipeline may retain from a storefront turn (see collector.langfuse_span_filter).
 RETAINED_SERVICES = {"frontend-web", "frontend-proxy", "frontend", "agent", "mcp"}
@@ -172,7 +183,8 @@ def check_native_trace(result, shop_session, parent):
     print("Native turn retained for Langfuse:", dict(Counter(s["service"] for s in preview)))
 
 
-def main():
+def smoke_local():
+    """The laptop stack: the legacy `/prompt` scenarios, then one native storefront turn."""
     env = environment()
     url = f"http://localhost:{env.get('AGENT_HOST_PORT', '8010')}"
     shop_url = f"http://localhost:{env.get('SHOP_PORT', '8080')}"
@@ -253,6 +265,254 @@ def main():
         check_native_trace(native, shop_session, parent)
         (RUNTIME / "smoke-results.json").write_text(json.dumps(reports, indent=2))
         print("All smoke scenarios passed. Original fault configuration restored.")
+
+
+# --- the EKS target ------------------------------------------------------------------------
+
+# Every service a storefront turn must have spans from on the cluster. The laptop checks its
+# service set against the Langfuse preview, which is filtered down to one turn's ancestry; the
+# ClickHouse table holds the whole trace, so product-catalog -- the tool call the agent makes --
+# belongs in the set here rather than only in the unfiltered capture.
+EKS_SERVICES = ("frontend-web", "frontend-proxy", "frontend", "agent", "product-catalog")
+# The agent's own span for the turn, and the storefront service whose server span carries the
+# route. The route is `ops.ASSISTANT_PATH` (`/api/assistant/message`) and deliberately not
+# `collector.ASSISTANT_PATH`, which is the `/api/assistant` prefix the OTTL statements match on.
+TURN_SPAN = "concierge.turn"
+ROUTE_SERVICE = "frontend"
+# The gateway collector batches spans, the ClickStack collector batches again, and ClickHouse
+# inserts in parts, so one trace arrives in pieces over several seconds. A minute is the budget
+# for the whole span set to be there; the poll returns as soon as it is, so a healthy deployment
+# pays a couple of seconds rather than the minute. Langfuse ingests asynchronously too and gets
+# the same budget of its own.
+EKS_POLL_SECONDS = 60
+EKS_POLL_INTERVAL = 2
+# Langfuse's read API for one trace, and how long one of those reads may take.
+LANGFUSE_TRACE_PATH = "/api/public/traces"
+LANGFUSE_TIMEOUT = 30
+# A trace id as both backends spell it: 32 hex digits, and nothing else may be interpolated into
+# the statement or the URL below.
+TRACE_ID = re.compile(r"[0-9a-f]{32}\Z")
+
+
+def require_trace_id(trace_id):
+    """Refuse anything that is not a trace id before it reaches a SQL statement or a URL.
+
+    The id comes back from the storefront rather than from a person, so this is a guard on a
+    contract and not on an operator's typing -- but it is interpolated into both a query and a
+    path, and the one shape it may have is cheap to insist on.
+    """
+    assert TRACE_ID.match(trace_id or ""), f"not a trace id: {trace_id!r}"
+    return trace_id
+
+
+def until(attempt):
+    """Retry `attempt` until it reports nothing wrong, and return its last answer either way.
+
+    `attempt` returns a (value, failures) pair; an empty `failures` ends the poll. The deadline
+    is checked after the attempt, so the budget bounds the waiting rather than the number of
+    tries, and a backend that answers slowly is still given one full answer.
+
+    The budget is read from the module rather than taken as an argument, so the constant above
+    is the only place it is written down -- the failure messages quote the same name, and a
+    default argument would have frozen it at import instead.
+    """
+    deadline = time.monotonic() + EKS_POLL_SECONDS
+    while True:
+        value, failures = attempt()
+        if not failures or time.monotonic() >= deadline:
+            return value, failures
+        time.sleep(EKS_POLL_INTERVAL)
+
+
+def eks_span_sql(database, trace_id):
+    """The one statement the EKS smoke run issues: every span of one trace, as ClickHouse has it.
+
+    The columns are aliased to the names the capture-file helpers above already use, so
+    `orphans()` reads a ClickHouse row and a `telemetry.jsonl` span the same way. The time bound
+    is what makes this cheap: `otel_traces` is partitioned by day, the turn happened seconds
+    ago, and the window is the one `eks verify` reports over.
+    """
+    return f"""
+    SELECT ServiceName AS service, SpanName AS name, SpanId AS spanId,
+           ParentSpanId AS parentSpanId, SpanAttributes['http.route'] AS route
+    FROM {database}.otel_traces
+    WHERE TraceId = '{require_trace_id(trace_id)}'
+          AND Timestamp > now() - INTERVAL {ops.WINDOW}
+    """
+
+
+def eks_spans(client, database, trace_id):
+    """The trace's spans out of ClickHouse, one dict per row.
+
+    JSONEachRow rather than the pretty table `eks verify` prints: this is a gate, so the rows
+    are read rather than shown, and a malformed answer must fail the run instead of being
+    reported and carried past.
+    """
+    statement = f"{ops.trim(eks_span_sql(database, trace_id))}\nFORMAT JSONEachRow"
+    response = client.post("/", content=statement.encode())
+    response.raise_for_status()
+    return [json.loads(line) for line in response.text.splitlines() if line.strip()]
+
+
+def eks_trace_failures(spans, parent):
+    """Everything wrong with one trace as ClickHouse holds it; empty means the demo's claim holds.
+
+    Failures rather than assertions, because this is the body of a poll: a partial trace is the
+    expected answer for the first few seconds and a final answer only at the deadline, and the
+    caller needs every reason at once when it gets there. The four properties are the whole
+    claim -- the request crossed the browser, the proxy, the storefront, the agent and the
+    catalog under one id; the agent took exactly one turn on it; no ancestor was dropped on the
+    way; and the storefront span names the route the assistant answers on.
+    """
+    failures = []
+    services = {span["service"] for span in spans}
+    missing = [name for name in EKS_SERVICES if name not in services]
+    if missing:
+        failures.append(f"no spans from {', '.join(missing)} (only {sorted(services)})")
+    turns = sum(span["name"] == TURN_SPAN for span in spans)
+    if turns != 1:
+        failures.append(f"{turns} {TURN_SPAN} spans, expected exactly one")
+    stray = orphans(spans)
+    if stray:
+        failures.append(f"spans whose parent is not in the trace: {stray}")
+    if not any(
+        span["service"] == ROUTE_SERVICE and span["route"] == ops.ASSISTANT_PATH
+        for span in spans
+    ):
+        failures.append(
+            f"no {ROUTE_SERVICE} span carries http.route = {ops.ASSISTANT_PATH}"
+        )
+    if parent not in {span["spanId"] for span in spans}:
+        failures.append("the synthetic browser parent span is not in the trace")
+    return failures
+
+
+def check_eks_trace(client, database, trace_id, parent):
+    """Poll ClickHouse until the turn's whole trace is there, or fail saying what is missing.
+
+    A ClickHouse answer that is not a result is one more reason to wait rather than a reason to
+    stop: a Cloud service that has idled answers the first query after it wakes with a 503, and
+    failing the gate on that would report a broken demo because the database was asleep.
+    """
+    print(f"polling {database}.otel_traces for {trace_id} (up to {EKS_POLL_SECONDS}s)")
+
+    def attempt():
+        try:
+            spans = eks_spans(client, database, trace_id)
+        except httpx.HTTPError as failure:
+            return [], [f"ClickHouse did not answer the query ({failure})"]
+        return spans, eks_trace_failures(spans, parent)
+
+    spans, failures = until(attempt)
+    assert not failures, (
+        f"trace {trace_id} in {database}.otel_traces after {EKS_POLL_SECONDS}s: "
+        + "; ".join(failures)
+    )
+    print("Correlated ClickHouse services:", dict(Counter(s["service"] for s in spans)))
+    return spans
+
+
+def langfuse_trace(client, trace_id):
+    """One read of Langfuse's trace API as a (trace, failures) pair, for the poll above.
+
+    A 404 is the expected answer while Langfuse is still ingesting, and any other non-200 --
+    or no answer at all -- is worth another attempt too: all of them are reasons to wait rather
+    than to stop, and the last one becomes the message if the budget runs out.
+    """
+    try:
+        response = client.get(f"{LANGFUSE_TRACE_PATH}/{trace_id}")
+    except httpx.HTTPError as failure:
+        return None, [f"Langfuse did not answer ({failure})"]
+    if response.status_code == 404:
+        return None, ["Langfuse has no trace with that id"]
+    if response.status_code != 200:
+        return None, [f"Langfuse answered {response.status_code}"]
+    trace = response.json()
+    if trace.get("id") != trace_id:
+        return trace, [f"Langfuse answered with trace {trace.get('id')!r} instead"]
+    return trace, []
+
+
+def check_langfuse_trace(trace_id, langfuse):
+    """Assert Langfuse holds the same trace id, when Langfuse is configured at all.
+
+    Skipped and said to be skipped when it is not: Langfuse is optional on both targets (see
+    `config.load_langfuse_env`), and a deployment that was never given keys has not failed this
+    check, it has opted out of the half of the demo the keys buy.
+
+    The key pair goes to `httpx` as `auth=`, which is the same in-process path
+    `ops.clickhouse_client` uses for the ClickHouse password: the credential becomes a request
+    header and never a command line.
+    """
+    if not langfuse:
+        print("Langfuse is not configured in .env; skipped the Langfuse half of the trace.")
+        return None
+    with httpx.Client(
+        base_url=langfuse["LANGFUSE_BASE_URL"],
+        auth=(langfuse["LANGFUSE_PUBLIC_KEY"], langfuse["LANGFUSE_SECRET_KEY"]),
+        timeout=LANGFUSE_TIMEOUT,
+    ) as client:
+        trace, failures = until(lambda: langfuse_trace(client, trace_id))
+    assert not failures, (
+        f"trace {trace_id} in Langfuse after {EKS_POLL_SECONDS}s: " + "; ".join(failures)
+    )
+    print(f"Langfuse holds the same trace: {trace.get('name') or trace_id}")
+    return trace
+
+
+def smoke_eks():
+    """One native turn through the tunnel, then that one trace id in both backends.
+
+    This is the demo's claim as a gate rather than as a report: `eks verify` counts what landed
+    in the last fifteen minutes and prints it for an audience, while this run drives a turn it
+    can name and refuses to pass unless that exact id is complete in ClickHouse Cloud and
+    present in Langfuse.
+
+    Nothing here starts a process, so no credential can reach an argv: the two backends are
+    read over HTTPS with their secrets in `auth=`, and the cluster is reached through the
+    tunnel that `demo.py eks tunnel` already put on loopback.
+    """
+    clickstack = config.load_clickstack_env()
+    database = ops.require_identifier(clickstack["HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE"])
+    langfuse = config.load_langfuse_env()
+    port = tunnel.resolved_port()
+    assert tunnel.probe(port), (
+        f"nothing answers on {tunnel.url(port)}: start the port-forward with "
+        "`demo.py eks tunnel`, and check the release with `demo.py eks status`"
+    )
+
+    native, shop_session, parent = native_turn(tunnel.url(port).rstrip("/"))
+    trace_id = require_trace_id(native["trace_id"])
+    print(
+        f"native: {trace_id} · conversation={native['conversation_id']} · "
+        f"shop session={shop_session}"
+    )
+    with ops.clickhouse_client(clickstack) as client:
+        check_eks_trace(client, database, trace_id, parent)
+    check_langfuse_trace(trace_id, langfuse)
+    (RUNTIME / "smoke-results.json").write_text(json.dumps([native], indent=2))
+    print(f"EKS smoke passed: {trace_id} is one trace in ClickHouse and in Langfuse.")
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Exercise the running demo: the laptop stack, or the EKS deployment."
+    )
+    parser.add_argument(
+        "--target",
+        choices=TARGETS,
+        default="local",
+        help="which deployment to exercise (default: local)",
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv=None):
+    args = parse_args(argv)
+    if args.target == "eks":
+        smoke_eks()
+    else:
+        smoke_local()
 
 
 if __name__ == "__main__":
