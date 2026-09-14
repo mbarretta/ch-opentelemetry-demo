@@ -17,7 +17,7 @@ from concierge.contract import (
     product_refs,
 )
 from concierge.scripted_model import EXPENSIVE, EXPLORASCOPE, ScriptedModel, format_money
-from scripts import demo
+from launcher import core, upstream
 
 
 def product(product_id, currency="USD"):
@@ -233,7 +233,7 @@ async def test_cart_identity_and_currency_are_injected_on_every_tool(agent):
 
 
 async def test_bootstrap_tools_patch_adds_currency_to_shop_calls(monkeypatch):
-    patched = demo.patch_tools((demo.UPSTREAM / "src/shared/tools.py").read_text())
+    patched = upstream.patch_tools((core.UPSTREAM / "src/shared/tools.py").read_text())
     namespace = {}
     exec(compile(patched, "tools.py", "exec"), namespace)
     requests = []
@@ -264,7 +264,7 @@ async def test_bootstrap_tools_patch_adds_currency_to_shop_calls(monkeypatch):
         {"currencyCode": "USD"},
     ]
     with pytest.raises(SystemExit):
-        demo.patch_tools("def unrelated(): ...")
+        upstream.patch_tools("def unrelated(): ...")
 
 
 async def test_repeated_request_id_returns_stored_response_without_rerunning(agent, client):

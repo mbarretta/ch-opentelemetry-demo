@@ -8,7 +8,7 @@ import re
 
 import yaml
 
-from scripts import demo
+from launcher import core
 
 
 class ComposeLoader(yaml.SafeLoader):
@@ -40,7 +40,7 @@ def environment_of(service):
 
 
 def compose_override(name):
-    return yaml.load((demo.ROOT / name).read_text(), Loader=ComposeLoader)["services"]
+    return yaml.load((core.ROOT / name).read_text(), Loader=ComposeLoader)["services"]
 
 
 def interpolate(template, variables):
