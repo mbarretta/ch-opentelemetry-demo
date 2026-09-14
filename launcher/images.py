@@ -300,10 +300,11 @@ def publish(services, force=False):
     in the registry is skipped (that is what `--force` overrides), but the deploy's gate reads
     `manifest.published`, not ECR, so skipping the push must not mean skipping the record.
     """
-    # Deferred rather than module-scope, as a guard rather than a fix: nothing under
-    # launcher.eks imports this module yet, so a top-level import would load cleanly today.
-    # `eks deploy` calls require_published() from launcher.eks.lifecycle, and the day that body
-    # lands, importing launcher.eks from here would close a cycle through its __init__.
+    # Deferred rather than module-scope, and load-bearing rather than a precaution since the
+    # lifecycle landed: `launcher.eks.lifecycle` imports this module at the top for
+    # `require_published()`, and `launcher.eks.__init__` imports lifecycle, so a top-level
+    # `from .eks import aws` here would have the two packages importing each other. Deferring
+    # it is what keeps each of them importable on its own.
     from .eks import aws
 
     require_known(services)

@@ -1,0 +1,675 @@
+"""launcher.eks.lifecycle: deploy, up and down, and the order the cluster has to see them in.
+
+`deploy` is the command where ordering *is* the behaviour, so these tests assert the recorded
+sequence of processes rather than any return value. Three orderings are load-bearing and each
+has a cost attached: the published-image gate before the first AWS call (otherwise the release
+rolls out last week's images), the zero-node refusal before the first kubectl call (otherwise
+the Secrets and the collector land in a cluster with nothing to run them on, and `helm --wait`
+takes twenty minutes to say so), and `demo-values.yaml` before `values.generated.yaml` in the
+`helm upgrade` argv (Helm replaces lists, so the reverse order silently drops the agent's
+collector endpoint and its optional secret references).
+
+Every process goes through `fake_sh`, so the credentials in the fixtures below are also what
+proves the constraint the whole Secret path exists for: no secret value in any recorded argv.
+"""
+
+import base64
+import json
+import os
+import shutil
+from pathlib import Path
+
+import pytest
+import yaml
+
+from launcher import core, images
+from launcher.eks import aws, config, k8s, lifecycle, tunnel, values
+
+REGION = "us-east-1"
+REGISTRY = "111122223333.dkr.ecr.us-east-1.amazonaws.com"
+CLUSTER = "otel-demo-eks"
+NODEGROUP = f"{CLUSTER}-demo"
+NODE_COUNT = 2
+PROFILE = "demo"
+PORT = 8080
+TAG = "c0ffee1234"
+
+# Every credential the deploy handles, marked so a leak is a substring match rather than a
+# guess: the five the ClickStack collector reads, the Langfuse pair, the agent's API key, and
+# the ECR password `docker login` is fed on stdin.
+CLICKSTACK = {
+    "CLICKHOUSE_ENDPOINT": "https://ch.test:8443",
+    "CLICKHOUSE_USER": "clickstack",
+    "CLICKHOUSE_PASSWORD": "sensitive-clickhouse-password",
+    "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE": "otel",
+    "OTLP_AUTH_TOKEN": "sensitive-otlp-token",
+}
+LANGFUSE = {
+    "LANGFUSE_BASE_URL": "https://cloud.langfuse.test",
+    "LANGFUSE_PUBLIC_KEY": "pk-lf-sensitive-public",
+    "LANGFUSE_SECRET_KEY": "sk-lf-sensitive-secret",
+}
+API_KEY = "sensitive-llm-api-key"
+ECR_PASSWORD = "sensitive-ecr-password"
+AUTH_HEADER = config.langfuse_auth_header(
+    LANGFUSE["LANGFUSE_PUBLIC_KEY"], LANGFUSE["LANGFUSE_SECRET_KEY"]
+)
+SECRET_VALUES = (
+    CLICKSTACK["CLICKHOUSE_PASSWORD"],
+    CLICKSTACK["OTLP_AUTH_TOKEN"],
+    LANGFUSE["LANGFUSE_PUBLIC_KEY"],
+    LANGFUSE["LANGFUSE_SECRET_KEY"],
+    API_KEY,
+    ECR_PASSWORD,
+    AUTH_HEADER,
+    # The header without its scheme: the base64 payload is the credential itself.
+    AUTH_HEADER.split(" ", 1)[1],
+)
+
+# A fully configured `.env`: the agent settings the generated values render, plus every
+# credential above. The four optional-Secret tests below take keys back out of it.
+ENV = {
+    "AWS_PROFILE": PROFILE,
+    "AWS_REGION": REGION,
+    "EKS_TUNNEL_PORT": str(PORT),
+    "AGENT_MODE": "live",
+    "MCP_ENABLED": "True",
+    "LLM_BASE_URL": "https://llm.test/v1",
+    "LLM_MODEL": "test-model",
+    "LANGFUSE_PROMPT_LABEL": "workshop",
+    "LANGFUSE_PROJECT_ID": "cm0project",
+    "LANGFUSE_PUBLIC_URL": "https://cloud.langfuse.test",
+    "CLICKSTACK_TRACE_URL_TEMPLATE": "https://clickstack.test/search?trace={trace_id}",
+    "ASSISTANT_DEMO_DETAILS": "true",
+    "API_KEY": API_KEY,
+    **CLICKSTACK,
+    **LANGFUSE,
+}
+
+# `tofu output -json`, in the wrapped shape OpenTofu answers with.
+OUTPUTS = {
+    "region": {"value": REGION},
+    "cluster_name": {"value": CLUSTER},
+    "nodegroup_name": {"value": NODEGROUP},
+    "node_count": {"value": NODE_COUNT},
+    "ecr_registry": {"value": REGISTRY},
+}
+# What `demo.py publish` recorded, in the shape `images.PUBLISHED_FIELDS` pins.
+PUBLISHED = {
+    service: {
+        "repository": f"{REGISTRY}/ch-opentelemetry-demo/{service}",
+        "tag": TAG,
+        "digest": "sha256:" + "d" * 64,
+    }
+    for service in core.IMAGES
+}
+
+# The two `describe-nodegroup` reads share a prefix; `fake_sh` answers the longest match, which
+# is how one fake shell answers both the status and the desired-size question.
+NG_DESIRED = (
+    f"aws eks describe-nodegroup --cluster-name {CLUSTER} --nodegroup-name {NODEGROUP} "
+    "--query nodegroup.scalingConfig.desiredSize"
+)
+NG_STATUS = f"aws eks describe-nodegroup --cluster-name {CLUSTER}"
+# Two nodes that have registered and are schedulable, as `kubectl get nodes --no-headers`
+# prints them.
+READY_NODES = (
+    "ip-10-0-1-11.ec2.internal   Ready   <none>   2m    v1.33.0\n"
+    "ip-10-0-2-22.ec2.internal   Ready   <none>   2m    v1.33.0\n"
+)
+
+LOGIN = [["aws", "configure", "list-profiles"], ["aws", "sts", "get-caller-identity"]]
+APPLY = ["kubectl", "apply", "-f", "-"]
+
+
+def tofu_output():
+    return ["tofu", f"-chdir={config.tofu_dir()}", "output", "-json"]
+
+
+def describe(query):
+    return [
+        "aws",
+        "eks",
+        "describe-nodegroup",
+        "--cluster-name",
+        CLUSTER,
+        "--nodegroup-name",
+        NODEGROUP,
+        "--query",
+        query,
+        "--output",
+        "text",
+    ]
+
+
+def scale_to(size):
+    """The two calls `aws.ng_scale` makes once it has decided the size really has to change."""
+    return [
+        [
+            "aws",
+            "eks",
+            "update-nodegroup-config",
+            "--cluster-name",
+            CLUSTER,
+            "--nodegroup-name",
+            NODEGROUP,
+            "--scaling-config",
+            f"minSize=0,maxSize={NODE_COUNT},desiredSize={size}",
+        ],
+        [
+            "aws",
+            "eks",
+            "wait",
+            "nodegroup-active",
+            "--cluster-name",
+            CLUSTER,
+            "--nodegroup-name",
+            NODEGROUP,
+        ],
+    ]
+
+
+def kubeconfig():
+    return [
+        [
+            "aws",
+            "eks",
+            "update-kubeconfig",
+            "--region",
+            REGION,
+            "--name",
+            CLUSTER,
+            "--alias",
+            CLUSTER,
+            "--profile",
+            PROFILE,
+        ],
+        ["kubectl", "config", "use-context", CLUSTER],
+    ]
+
+
+def write_env(root, env):
+    (root / ".env").write_text("".join(f"{key}={value}\n" for key, value in env.items()))
+
+
+def argvs(shell):
+    return [call.argv for call in shell.calls]
+
+
+def one(shell, *prefix):
+    matched = [call for call in shell.calls if call.argv[: len(prefix)] == list(prefix)]
+    assert len(matched) == 1, f"expected exactly one {' '.join(prefix)} call, got {matched}"
+    return matched[0]
+
+
+def applied(shell):
+    """Every manifest piped to `kubectl apply -f -`, in order, as (kind, name) pairs."""
+    return [
+        (document["kind"], document["metadata"]["name"]) for document in manifests(shell)
+    ]
+
+
+def manifests(shell):
+    return [json.loads(call.stdin) for call in shell.calls if call.argv == APPLY]
+
+
+def secret(shell, name):
+    """One applied Secret, with its values decoded, or None when it was never applied."""
+    found = [
+        document
+        for document in manifests(shell)
+        if document["kind"] == "Secret" and document["metadata"]["name"] == name
+    ]
+    if not found:
+        return None
+    assert len(found) == 1, f"{name} was applied {len(found)} times"
+    return {
+        key: base64.b64decode(value).decode() for key, value in found[0]["data"].items()
+    }
+
+
+def deletion(name):
+    return ["kubectl", "-n", config.NS_DEMO, "delete", "secret", name, "--ignore-not-found"]
+
+
+def generated():
+    """The values document the deploy wrote, read back off disk as Helm would read it."""
+    return yaml.safe_load(values.values_path().read_text())
+
+
+class Steps:
+    """The collaborators outside this module, recorded with the process count at the time.
+
+    Where a call sits in the sequence is the assertion here rather than what it was passed:
+    `require_published` has to have run before the first process and the tunnel after the last
+    one, and neither fact is visible in `fake_sh`'s own record, because neither of them starts
+    a process of its own.
+    """
+
+    def __init__(self, shell):
+        self.shell = shell
+        self.calls = []
+
+    def stub(self, name, result=None, raises=None):
+        def action(*args, **kwargs):
+            self.calls.append((name, len(self.shell.calls)))
+            if raises is not None:
+                raise raises
+            return result
+
+        return action
+
+    def patch(self, monkeypatch, module, name, **answer):
+        monkeypatch.setattr(module, name, self.stub(name, **answer))
+
+    def at(self, name):
+        """The process count at each call to `name`: 0 means it ran before any process did."""
+        return [position for called, position in self.calls if called == name]
+
+
+@pytest.fixture
+def redirected(tmp_path, monkeypatch):
+    """A checkout of our own, with a filled-in `.env` and nothing inherited from the shell.
+
+    `config.load_env()` layers the process environment over `.env`, so an exported CLICKHOUSE_*
+    or AGENT_MODE on the developer's machine -- `tests/conftest.py` sets two of them -- would
+    otherwise decide what these tests see. `aws.aws_login()` then exports AWS_PROFILE and
+    AWS_REGION into the real environment on purpose, which is how kubectl's exec-auth plugin
+    sees them, so every key is saved and put back rather than left set for the next test.
+
+    `deploy/eks/k8s` is copied in rather than faked: the deploy reads `demo-values.yaml` for
+    the static `envOverrides` it has to carry into the generated document, and a stand-in file
+    would make that carry-over untestable.
+    """
+    monkeypatch.setattr(core, "ROOT", tmp_path)
+    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
+    # Every external command is faked; `need` would still look for aws, docker, tofu, kubectl
+    # and helm on the developer's PATH, where a missing one is not this module's problem.
+    monkeypatch.setattr(core, "need", lambda *commands: None)
+    # The process-wide `tofu output` cache outlives a redirected core.ROOT, so it starts empty.
+    monkeypatch.setattr(aws, "_OUTPUTS", None)
+    shutil.copytree(Path(__file__).parent.parent / "deploy/eks/k8s", tmp_path / "deploy/eks/k8s")
+    write_env(tmp_path, ENV)
+
+    saved = {key: os.environ.get(key) for key in ENV}
+    for key in saved:
+        os.environ.pop(key, None)
+    yield tmp_path
+    for key, value in saved.items():
+        if value is None:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = value
+
+
+@pytest.fixture
+def cluster(redirected, fake_sh):
+    """A live session, readable OpenTofu outputs, and a node group that is scaled up."""
+    fake_sh.reply("tofu", stdout=json.dumps(OUTPUTS))
+    fake_sh.reply("aws configure list-profiles", stdout=f"default\n{PROFILE}\n")
+    fake_sh.reply("aws ecr get-login-password", stdout=f"{ECR_PASSWORD}\n")
+    fake_sh.reply(NG_STATUS, stdout="ACTIVE")
+    fake_sh.reply(NG_DESIRED, stdout=str(NODE_COUNT))
+    fake_sh.reply("kubectl get nodes", stdout=READY_NODES)
+    return fake_sh
+
+
+@pytest.fixture
+def steps(cluster, monkeypatch):
+    """The three collaborators a deploy must not really run: the gate and the tunnel."""
+    recorder = Steps(cluster)
+    recorder.patch(monkeypatch, images, "require_published", result=PUBLISHED)
+    # The real `start()` spawns a detached CLI and then polls http://localhost:8080 for twenty
+    # seconds; `stop()` signals a process group. Both have their own tests.
+    recorder.patch(monkeypatch, tunnel, "start", result=True)
+    recorder.patch(monkeypatch, tunnel, "stop")
+    return recorder
+
+
+# --- deploy --------------------------------------------------------------------------------
+
+
+def test_deploy_runs_every_step_in_the_order_the_cluster_needs_them(cluster, steps):
+    """AC2: the twelve steps, as the argv of every process the deploy starts, in order."""
+    lifecycle.deploy()
+
+    assert argvs(cluster) == [
+        # 2. the session, then the ECR login, which is also the first read of the state
+        *LOGIN,
+        tofu_output(),
+        ["aws", "ecr", "get-login-password", "--region", REGION],
+        ["docker", "login", "--username", "AWS", "--password-stdin", REGISTRY],
+        # 3. the zero-node refusal, before any kubectl call
+        describe("nodegroup.scalingConfig.desiredSize"),
+        # 4. kubeconfig and both namespaces
+        *kubeconfig(),
+        APPLY,
+        APPLY,
+        # 5. clickstack-credentials
+        APPLY,
+        # 6. the collector, its roll-out, and its first log lines
+        ["kubectl", "apply", "-f", str(config.k8s_dir() / config.COLLECTOR_MANIFEST)],
+        [
+            "kubectl",
+            "-n",
+            config.NS_CS,
+            "rollout",
+            "status",
+            config.COLLECTOR_DEPLOYMENT,
+            "--timeout=300s",
+        ],
+        ["kubectl", "-n", config.NS_CS, "logs", config.COLLECTOR_DEPLOYMENT, "--tail=40"],
+        # 7. and 8. the OTLP token, then the two optional Secrets
+        APPLY,
+        APPLY,
+        APPLY,
+        # 10. the release, from the two values files
+        ["helm", "repo", "add", config.HELM_REPO_NAME, config.HELM_REPO_URL, "--force-update"],
+        ["helm", "repo", "update", config.HELM_REPO_NAME],
+        [
+            "helm",
+            "upgrade",
+            "--install",
+            config.RELEASE,
+            f"{config.HELM_REPO_NAME}/{k8s.CHART_NAME}",
+            "--version",
+            config.CHART_VERSION,
+            "-n",
+            config.NS_DEMO,
+            "-f",
+            str(config.k8s_dir() / values.STATIC_VALUES),
+            "-f",
+            str(values.values_path()),
+            "--wait",
+            "--timeout",
+            k8s.HELM_TIMEOUT,
+        ],
+    ]
+    # Which manifest went to each `apply -f -`, in the order they were piped: the namespaces
+    # before the Secrets they hold, and clickstack-credentials before the collector that reads
+    # it (the collector manifest is the named `apply -f` between them above).
+    assert applied(cluster) == [
+        ("Namespace", config.NS_CS),
+        ("Namespace", config.NS_DEMO),
+        ("Secret", config.SECRET_CLICKSTACK),
+        ("Secret", config.SECRET_OTLP_TOKEN),
+        ("Secret", config.SECRET_LANGFUSE),
+        ("Secret", config.SECRET_LLM),
+    ]
+    # 1. and 11.: the gate ran before the first process, the tunnel after the last one.
+    assert steps.at("require_published") == [0]
+    assert steps.at("start") == [len(cluster.calls)]
+
+
+def test_deploy_refuses_a_node_group_at_zero_before_it_touches_the_cluster(cluster, steps):
+    """AC2: deploying onto no nodes is 20 minutes of `helm --wait` and then a failure anyway."""
+    cluster.reply(NG_DESIRED, stdout="0")
+
+    with pytest.raises(SystemExit) as failure:
+        lifecycle.deploy()
+
+    assert "eks up" in str(failure.value), "name the command that scales up and deploys"
+    assert [argv for argv in argvs(cluster) if argv[0] in ("kubectl", "helm")] == []
+    assert not values.values_path().exists(), "and nothing was written for it either"
+
+
+def test_deploy_gates_on_the_published_images_before_any_aws_or_kubectl_call(cluster, steps):
+    """AC3: the release points at four ECR tags, so all four are checked before anything runs."""
+    lifecycle.deploy()
+
+    assert steps.at("require_published") == [0]
+
+
+def test_deploy_aborts_when_the_published_images_are_missing_or_stale(
+    cluster, steps, monkeypatch
+):
+    """AC3: the gate's refusal is the deploy's refusal -- nothing else has happened yet."""
+    steps.patch(
+        monkeypatch,
+        images,
+        "require_published",
+        raises=SystemExit("error: no published image for agent"),
+    )
+
+    with pytest.raises(SystemExit, match="no published image"):
+        lifecycle.deploy()
+
+    assert argvs(cluster) == [], "no session, no state read, no cluster call"
+
+
+def test_the_helm_upgrade_reads_the_static_values_before_the_generated_ones(cluster, steps):
+    """AC6: two `-f` flags in that order and no `--set`, because Helm replaces lists.
+
+    Both files set `components.*.envOverrides`. Generated-last wins the merge and the generated
+    document carries the static entries through; generated-first would drop the static list --
+    the agent's OTEL_EXPORTER_OTLP_ENDPOINT, its USE_VCR and its four optional secretKeyRefs --
+    with nothing failing.
+    """
+    lifecycle.deploy()
+
+    upgrade = one(cluster, "helm", "upgrade").argv
+    files = [upgrade[index + 1] for index, flag in enumerate(upgrade) if flag == "-f"]
+    assert files == [
+        str(config.k8s_dir() / values.STATIC_VALUES),
+        str(values.values_path()),
+    ]
+    assert [flag for flag in upgrade if flag.startswith("--set")] == [], "every value is a file"
+    # Both files are readable at that moment, which is the other half of the contract: the
+    # committed one is the checkout's, and the generated one carries the published tags.
+    static = yaml.safe_load(Path(files[0]).read_text())
+    assert static["components"]["chatbot"] == {"enabled": False}, "the committed file, not a stub"
+    document = yaml.safe_load(Path(files[1]).read_text())
+    assert [document["components"][service]["imageOverride"]["tag"] for service in core.IMAGES] == [
+        TAG
+    ] * len(core.IMAGES)
+
+
+def test_no_secret_value_reaches_argv_and_every_secret_travels_on_stdin(cluster, steps):
+    """The deploy's whole reason for assembling manifests in Python: `ps` shows argv to anyone."""
+    lifecycle.deploy()
+
+    for call in cluster.calls:
+        for value in SECRET_VALUES:
+            assert value not in call.line, f"{value} reached the command line of {call.line}"
+    # The ClickStack collector's five keys, base64-encoded in a manifest fed to kubectl's stdin.
+    assert secret(cluster, config.SECRET_CLICKSTACK) == CLICKSTACK
+    assert secret(cluster, config.SECRET_OTLP_TOKEN) == {
+        "OTLP_AUTH_TOKEN": CLICKSTACK["OTLP_AUTH_TOKEN"]
+    }
+    # The ECR password goes the same way, to `docker login --password-stdin`.
+    assert one(cluster, "docker", "login").stdin == ECR_PASSWORD
+    # And nothing secret is left on disk in the generated values either.
+    for value in SECRET_VALUES:
+        assert value not in values.values_path().read_text()
+
+
+def test_with_langfuse_configured_the_secret_is_applied_and_the_exporter_appears(cluster, steps):
+    """AC4: the four keys land in the Secret and the collector gets the exporter that reads it."""
+    lifecycle.deploy()
+
+    assert secret(cluster, config.SECRET_LANGFUSE) == {
+        **LANGFUSE,
+        "LANGFUSE_AUTH_HEADER": AUTH_HEADER,
+    }
+    assert deletion(config.SECRET_LANGFUSE) not in argvs(cluster)
+    exporters = generated()["opentelemetry-collector"]["config"]["exporters"]
+    assert values.LANGFUSE_EXPORTER in exporters
+    assert exporters[values.LANGFUSE_EXPORTER]["headers"]["Authorization"] == (
+        "${env:LANGFUSE_AUTH_HEADER}"
+    ), "the collector expands it from the Secret; the value is never rendered"
+
+
+def test_without_langfuse_the_secret_is_deleted_and_the_exporter_is_left_out(
+    cluster, steps, redirected
+):
+    """AC4: an `otlphttp` exporter with an unset `${env:...}` endpoint CrashLoops the collector.
+
+    Deleted rather than skipped: a Secret left from a run when `.env` did have the keys would
+    go on feeding credentials to the collector and the agent after they were taken out.
+    """
+    write_env(redirected, {key: value for key, value in ENV.items() if key not in LANGFUSE})
+
+    lifecycle.deploy()
+
+    assert secret(cluster, config.SECRET_LANGFUSE) is None
+    assert deletion(config.SECRET_LANGFUSE) in argvs(cluster)
+    collector = generated()["opentelemetry-collector"]["config"]
+    assert "exporters" not in collector, "nothing references the credentials that are not there"
+    pipeline = collector["service"]["pipelines"][values.LANGFUSE_PIPELINE]
+    assert pipeline["exporters"] == [values.PREVIEW_EXPORTER], "still a valid pipeline"
+
+
+def test_llm_credentials_are_applied_only_when_an_api_key_is_set(cluster, steps):
+    """AC5: live mode needs the key; a scripted demo calls no model and must not carry one."""
+    lifecycle.deploy()
+
+    assert secret(cluster, config.SECRET_LLM) == {"API_KEY": API_KEY}
+    assert deletion(config.SECRET_LLM) not in argvs(cluster)
+
+
+def test_llm_credentials_are_deleted_when_no_api_key_is_set(cluster, steps, redirected):
+    """AC5: the agent's reference to it is `optional: true`, so its absence is a valid deploy."""
+    write_env(redirected, {key: value for key, value in ENV.items() if key != "API_KEY"})
+
+    lifecycle.deploy()
+
+    assert secret(cluster, config.SECRET_LLM) is None
+    assert deletion(config.SECRET_LLM) in argvs(cluster)
+
+
+def test_a_tunnel_that_will_not_start_does_not_fail_the_deploy(
+    cluster, steps, monkeypatch, capsys
+):
+    """AC9: by then the release is installed, so a busy port is an inconvenience, not a failure."""
+    steps.patch(
+        monkeypatch,
+        tunnel,
+        "start",
+        raises=SystemExit(f"error: port {PORT} is already in use by another process"),
+    )
+
+    lifecycle.deploy()
+
+    out, err = capsys.readouterr()
+    base = f"http://localhost:{PORT}/"
+    for url in (base, f"{base}feature/", f"{base}loadgen/"):
+        assert url in out, url
+    assert "already in use" in err and "demo.py eks tunnel" in err
+    assert one(cluster, "helm", "upgrade"), "the release still went in"
+
+
+def test_deploy_prints_the_three_urls_of_a_tunnel_that_did_come_up(cluster, steps, capsys):
+    """AC9: the storefront, the feature-flag UI and the load generator, all through one port."""
+    lifecycle.deploy()
+
+    out = capsys.readouterr().out
+    base = f"http://localhost:{PORT}/"
+    assert f"Storefront:      {base}" in out
+    assert f"Feature flags:   {base}feature/" in out
+    assert f"Load generator:  {base}loadgen/" in out
+
+
+# --- up ------------------------------------------------------------------------------------
+
+
+def test_up_scales_the_node_group_waits_for_the_nodes_then_deploys(cluster, steps, monkeypatch):
+    """AC7: scale, wait for Ready nodes and CoreDNS, then hand over to deploy -- in that order."""
+    cluster.reply(NG_DESIRED, stdout="0")
+    steps.patch(monkeypatch, lifecycle, "deploy")
+
+    lifecycle.up()
+
+    assert argvs(cluster) == [
+        *LOGIN,
+        # The kubeconfig is written before the scale-up: an expired session or a cluster that
+        # is gone then refuses in seconds rather than after five minutes of billed nodes.
+        tofu_output(),
+        *kubeconfig(),
+        describe("nodegroup.status"),
+        describe("nodegroup.scalingConfig.desiredSize"),
+        *scale_to(NODE_COUNT),
+        ["kubectl", "get", "nodes", "--no-headers"],
+        [
+            "kubectl",
+            "-n",
+            "kube-system",
+            "rollout",
+            "status",
+            "deploy/coredns",
+            f"--timeout={k8s.COREDNS_TIMEOUT}",
+        ],
+    ]
+    assert steps.at("deploy") == [len(cluster.calls)], "deploy owns everything after the nodes"
+
+
+def test_up_asks_for_the_node_count_by_keyword_not_by_position(cluster, steps, monkeypatch):
+    """`wait_nodes_ready(count=None, timeout=NODES_TIMEOUT)`: position two is the timeout.
+
+    A positional `wait_nodes_ready(2)` reads the same and does the same thing today, which is
+    why this is worth pinning: the day the signature grows another parameter, a positional call
+    would start waiting two seconds for the nodes and report them missing.
+    """
+    cluster.reply(NG_DESIRED, stdout="0")
+    steps.patch(monkeypatch, lifecycle, "deploy")
+    waited = []
+    monkeypatch.setattr(k8s, "wait_nodes_ready", lambda *args, **kwargs: waited.append((args, kwargs)))
+
+    lifecycle.up()
+
+    assert waited == [((), {"count": NODE_COUNT})]
+
+
+# --- down ----------------------------------------------------------------------------------
+
+
+def test_down_closes_the_tunnel_removes_the_workloads_then_scales_to_zero(cluster, steps):
+    """AC8: the demo goes before the collector, and the node group goes last."""
+    lifecycle.down()
+
+    assert steps.at("stop") == [0], "the tunnel points at pods that are about to be deleted"
+    assert argvs(cluster) == [
+        *LOGIN,
+        tofu_output(),
+        *kubeconfig(),
+        [
+            "helm",
+            "uninstall",
+            config.RELEASE,
+            "-n",
+            config.NS_DEMO,
+            "--ignore-not-found",
+            "--wait",
+            "--timeout",
+            "5m",
+        ],
+        [
+            "kubectl",
+            "delete",
+            "ns",
+            config.NS_DEMO,
+            config.NS_CS,
+            "--ignore-not-found",
+            "--timeout=300s",
+        ],
+        describe("nodegroup.status"),
+        describe("nodegroup.scalingConfig.desiredSize"),
+        *scale_to(0),
+    ]
+
+
+def test_down_keep_only_scales_to_zero(cluster, steps):
+    """AC8: the workloads stay in the API with nowhere to run and reschedule on the way up."""
+    lifecycle.down(keep=True)
+
+    assert steps.at("stop") == [0]
+    assert [argv for argv in argvs(cluster) if argv[0] in ("kubectl", "helm")] == []
+    assert argvs(cluster) == [
+        *LOGIN,
+        # `ng_scale` resolves the cluster and the node group from the state before it reads the
+        # group's status, so the one `tofu output` of the process happens here instead of in
+        # the kubeconfig that `--keep` skips.
+        tofu_output(),
+        describe("nodegroup.status"),
+        describe("nodegroup.scalingConfig.desiredSize"),
+        *scale_to(0),
+    ]

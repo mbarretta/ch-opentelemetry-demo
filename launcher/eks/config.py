@@ -51,6 +51,9 @@ CLICKSTACK_KEYS = (
     "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE",
     "OTLP_AUTH_TOKEN",
 )
+# The agent's LLM credential, and the whole content of the `llm-credentials` Secret: one
+# optional key, meaningful only in live mode (a scripted run calls no model).
+LLM_KEYS = ("API_KEY",)
 # Langfuse is optional on both targets, but all or nothing (see load_langfuse_env).
 LANGFUSE_KEYS = (
     "LANGFUSE_BASE_URL",
@@ -60,6 +63,17 @@ LANGFUSE_KEYS = (
 # What the `langfuse-credentials` Secret holds: the three keys plus the derived header, so the
 # collector's exporter can reference `${env:LANGFUSE_AUTH_HEADER}` without assembling it itself.
 LANGFUSE_SECRET_KEYS = (*LANGFUSE_KEYS, "LANGFUSE_AUTH_HEADER")
+
+
+# The ClickStack collector: the static manifest `eks deploy` applies as-is, and the name it is
+# addressed by afterwards. A Deployment rather than a pod, because the rollout renames the pod
+# every time; `eks deploy` waits on it and tails it, `eks status` reports it, and `eks check`
+# parses the manifest, so all three read the names from here.
+COLLECTOR_MANIFEST = "clickstack-collector.yaml"
+COLLECTOR_DEPLOYMENT = "deploy/clickstack-otel-collector"
+# How many lines of the collector's log are worth showing: enough to see whether the ClickHouse
+# credentials it has just read are being accepted.
+COLLECTOR_LOG_TAIL = 40
 
 
 def eks_dir():

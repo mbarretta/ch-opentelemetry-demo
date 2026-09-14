@@ -384,7 +384,7 @@ def test_check_uses_the_cluster_to_validate_the_manifest_when_one_answers(tools,
     """A cluster is a bonus: it adds schema validation, and its absence changes the parse."""
     check.check()
 
-    manifest = config.k8s_dir() / check.COLLECTOR_MANIFEST
+    manifest = config.k8s_dir() / config.COLLECTOR_MANIFEST
     assert fake_sh.calls[4].argv == [
         "kubectl",
         "apply",

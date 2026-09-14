@@ -316,7 +316,8 @@ def test_verify_reports_the_collector_pods_and_a_tail_of_the_logs(cluster, http,
     lines = cluster.lines()
     assert f"kubectl -n {config.NS_CS} get pods" in lines
     assert (
-        f"kubectl -n {config.NS_CS} logs {ops.COLLECTOR_DEPLOYMENT} --tail={ops.LOG_TAIL}" in lines
+        f"kubectl -n {config.NS_CS} logs {config.COLLECTOR_DEPLOYMENT} "
+        f"--tail={config.COLLECTOR_LOG_TAIL}" in lines
     ), "the Deployment, not a pod name that changes on every redeploy"
     out = capsys.readouterr().out
     assert "otel-demo-otel-collector-5fff8f6b97-7ggzt" in out, "the gateway collector's pod"
