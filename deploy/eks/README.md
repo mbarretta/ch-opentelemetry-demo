@@ -6,10 +6,11 @@ that anyone with the AWS profile can reach, instead of one Mac. Between demos
 the node group scales to zero and only the EKS control plane is billed.
 
 This file is the reference half: why the cluster looks the way it does, what it
-costs, and how to get out of trouble. The runbooks live in the root
-[README](../../README.md) — prerequisites, the `.env` keys, first-time setup and
-the everyday cycle — and every ordinary command is a subcommand of the one CLI,
-run from the repository root:
+costs, and how to get out of trouble. The runbooks live in the root README:
+[Run on EKS](../../README.md#run-on-eks) for the prerequisites, the first run and
+the everyday cycle, and [Configuration](../../README.md#configuration) for what
+each `.env` key does on each target. Every ordinary command is a subcommand of
+the one CLI, run from the repository root:
 
 ```sh
 scripts/demo.py eks --help
