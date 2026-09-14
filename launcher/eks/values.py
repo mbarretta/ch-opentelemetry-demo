@@ -10,7 +10,7 @@ The OTTL statements are never written twice: they come from `launcher.collector`
 functions the laptop collector configuration uses.
 """
 
-from .. import collector, core
+from .. import collector, core, stack
 from . import config
 
 STATIC_VALUES = "demo-values.yaml"
@@ -29,8 +29,12 @@ AGENT_ENV_KEYS = (
     "LANGFUSE_PUBLIC_URL",
     "CLICKSTACK_TRACE_URL_TEMPLATE",
 )
-# The storefront's one per-deployment setting; the rest of its environment is static.
-FRONTEND_ENV_KEYS = ("ASSISTANT_DEMO_DETAILS",)
+# The storefront's two per-deployment settings; the rest of its environment is static.
+# PUBLIC_HYPERDX_ENABLED is here rather than in demo-values.yaml because it is a runtime switch
+# the operator owns: hardcoded in the static file it recorded every session on every deployment
+# whatever `.env` said, so SESSION_REPLAY was inert on this target. It is derived, not read --
+# see frontend_env.
+FRONTEND_ENV_KEYS = ("ASSISTANT_DEMO_DETAILS", "PUBLIC_HYPERDX_ENABLED")
 # Every key above is emitted on every deploy, blank included, because the chart's own defaults
 # for three of them are placeholders (`LLM_BASE_URL: https://local-llm.com`, `LLM_MODEL:
 # azure/gpt-5.5`): leaving a key out would let the release advertise a model that does not
@@ -59,6 +63,11 @@ LANGFUSE_EXPORTER = "otlp_http/langfuse"
 # laptop's `file/langfuse-preview` gives a presenter without credentials.
 PREVIEW_EXPORTER = "debug"
 
+# The exporter the static values give the demo's gateway collector: the hop by which everything
+# this release records, browser session replay included, reaches ClickHouse. Its presence is
+# this target's answer to "is ClickStack configured", which is what `SESSION_REPLAY=auto` asks.
+CLICKSTACK_EXPORTER = "otlphttp/clickstack"
+
 
 def eks_values(env, published, langfuse):
     """The generated values document: images, env-derived overrides, collector pipelines.
@@ -70,12 +79,51 @@ def eks_values(env, published, langfuse):
     Only `${env:...}` references reach the document; no credential is ever rendered into it.
     `langfuse` is read for its emptiness alone: its four values are already in the
     `langfuse-credentials` Secret, and the collector expands them itself at start-up.
+
+    The frontend's environment is `frontend_env`'s rather than `.env`'s, because one of its two
+    keys -- the session-replay switch -- is derived from SESSION_REPLAY instead of read.
     """
     components = image_overrides(published)
-    static = static_values().get("components", {})
-    for service, keys in (("agent", AGENT_ENV_KEYS), ("frontend", FRONTEND_ENV_KEYS)):
-        components[service]["envOverrides"] = env_overrides(static.get(service, {}), env, keys)
+    static = static_values()
+    static_components = static.get("components") or {}
+    for service, keys, source in (
+        ("agent", AGENT_ENV_KEYS, env),
+        ("frontend", FRONTEND_ENV_KEYS, frontend_env(env, static)),
+    ):
+        components[service]["envOverrides"] = env_overrides(
+            static_components.get(service, {}), source, keys
+        )
     return {"components": components, "opentelemetry-collector": collector_values(langfuse)}
+
+
+def frontend_env(env, static):
+    """`env` plus PUBLIC_HYPERDX_ENABLED, the one frontend value that is derived, not read.
+
+    `stack.replay_flag` is the derivation the laptop uses, called here rather than repeated, so
+    SESSION_REPLAY means one thing on both targets: `true` records the session, `false` does
+    not, and `auto` records whenever ClickStack is configured. Only what "configured" means is
+    per-target, and it is read from the release rather than from `.env`: the laptop's collector
+    exports to ClickStack when CLICKSTACK_OTLP_ENDPOINT is set, and this one when the static
+    values give it the `otlphttp/clickstack` exporter -- which every replay event travels
+    through, so replay with no ClickStack behind it would record into nothing.
+
+    A PUBLIC_HYPERDX_ENABLED in `.env` does not win over the derivation, exactly as it does not
+    on Compose (`stack.environment` overwrites it too): SESSION_REPLAY is the documented switch.
+    """
+    decision = {**env, "CLICKSTACK_OTLP_ENDPOINT": clickstack_endpoint(static)}
+    return {**env, "PUBLIC_HYPERDX_ENABLED": stack.replay_flag(decision)}
+
+
+def clickstack_endpoint(static):
+    """Where the gateway collector ships everything, from the static values, or `""` if nowhere.
+
+    Read out of the document rather than restated as a constant here: the address itself lives
+    in `demo-values.yaml` next to the Service it names, and a second copy would be a second
+    thing to keep in step.
+    """
+    subchart = static.get("opentelemetry-collector") or {}
+    exporters = (subchart.get("config") or {}).get("exporters") or {}
+    return (exporters.get(CLICKSTACK_EXPORTER) or {}).get("endpoint") or ""
 
 
 def image_overrides(published):
