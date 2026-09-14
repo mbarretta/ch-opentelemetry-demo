@@ -68,3 +68,30 @@ def test_popen_hands_back_a_pipe_to_stream_from():
     with core.popen(sys.executable, "-c", "print('chunk')") as process:
         assert process.stdout.readline() == b"chunk\n"
     assert process.returncode == 0
+
+
+def test_fake_sh_records_every_call_and_answers_from_the_prefix_table(fake_sh):
+    """The fixture the offline tests are written against: all three chokepoints, recorded."""
+    fake_sh.reply("kubectl", stdout="applied\n")
+    fake_sh.reply("kubectl -n otel-demo get nodes", stdout="node-1 Ready\n")
+    fake_sh.reply("helm upgrade", stderr="no release\n", returncode=1)
+
+    core.run("kubectl", "apply", "-f", "-", input='{"kind": "Secret"}')
+    assert core.capture("kubectl", "-n", "otel-demo", "get", "nodes").stdout == "node-1 Ready\n"
+    assert core.capture("kubectl", "get", "ns").stdout == "applied\n", "longest prefix wins"
+    with core.popen("git", "archive", "HEAD") as archive:
+        assert archive.stdout.read() == b"", "an unanswered call succeeds with no output"
+
+    assert fake_sh.lines() == [
+        "kubectl apply -f -",
+        "kubectl -n otel-demo get nodes",
+        "kubectl get ns",
+        "git archive HEAD",
+    ]
+    assert fake_sh.calls[0].stdin == '{"kind": "Secret"}', "what goes in on stdin is recorded too"
+    assert fake_sh.calls[1].stdin is None
+
+    with pytest.raises(core.subprocess.CalledProcessError):
+        core.run("helm", "upgrade", "otel-demo")
+    failed = core.run("helm", "upgrade", "otel-demo", check=False)
+    assert (failed.returncode, failed.stderr) == (1, "no release\n")

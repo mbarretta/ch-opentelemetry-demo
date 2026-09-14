@@ -1,6 +1,5 @@
 import json
 import re
-import shlex
 import shutil
 
 import pytest
@@ -348,27 +347,26 @@ def test_source_mounts_live_only_in_the_dev_override():
         assert service in concierge, f"{service} overrides stay in compose.concierge.yaml"
 
 
-def test_up_flags_select_dev_mounts_and_the_debug_chatbot(inputs, monkeypatch):
-    calls = []
-    monkeypatch.setattr(core, "run", lambda *args, **kwargs: calls.append(args))
+def test_up_flags_select_dev_mounts_and_the_debug_chatbot(inputs, fake_sh, monkeypatch):
     monkeypatch.setattr(stack, "generate_config", lambda env: None)
     env = {"SHOP_PORT": "8080"}
 
     stack.compose(env, ["up", "-d"])
-    default = shlex.join(calls[-1])
+    default = fake_sh.last.line
     assert "compose.native.yaml" in default
     assert "compose.dev.yaml" not in default and "--profile" not in default
 
     stack.compose(env, ["up", "-d"], dev=True)
-    assert "compose.dev.yaml" in shlex.join(calls[-1])
-    files = [arg for arg in calls[-1] if str(arg).endswith(".yaml")]
+    assert "compose.dev.yaml" in fake_sh.last.line
+    files = [argument for argument in fake_sh.last.argv if argument.endswith(".yaml")]
     assert files.index(str(core.ROOT / "compose.dev.yaml")) > files.index(
         str(core.ROOT / "compose.native.yaml")
     ), "dev mounts override the native images"
 
     stack.compose(env, ["up", "-d"], debug_chatbot=True)
-    argv = [str(arg) for arg in calls[-1]]
+    argv = fake_sh.last.argv
     assert argv.index("--profile") + 1 == argv.index("debug") < argv.index("up")
+    assert fake_sh.last.kwargs["env"] == env, "compose runs under the environment it is given"
 
 
 def test_root_dockerignore_excludes_secrets_and_runtime_state():
