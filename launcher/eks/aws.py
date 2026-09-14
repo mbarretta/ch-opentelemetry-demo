@@ -5,7 +5,6 @@ Ported from `deploy/eks/scripts/lib/aws.sh`. Every call shells out through `core
 
 These are the shapes the tunnel, infra, lifecycle, publish, ops and check modules are written
 against, which is why the argv is asserted here rather than at each of their call sites.
-`ecr_image_digest` is the one body still to land: it belongs with `demo.py publish`.
 """
 
 import json
@@ -200,10 +199,34 @@ def ecr_has_image(repository, tag):
 def ecr_image_digest(repository, tag):
     """The registry manifest digest of a pushed image, for `manifest.published[service]`.
 
-    Still a stub on purpose: the only caller is `demo.py publish`, which records the digest it
-    reads, so this lands with the publish task alongside the writer of that manifest section.
+    Read back from the registry rather than scraped out of `docker push` output, which is also
+    why it answers for an image that was already there and so was never pushed.
+
+    Two failures, one refusal. An absent tag is an error exit -- the same return code
+    `ecr_has_image` reads -- and a query that matches nothing prints the string `None`, which
+    `--output text` would otherwise hand back as a literal digest. Neither is worth a traceback,
+    so the return code is read rather than raised on, and stderr is left on the terminal (see
+    `core.capture`) so the CLI's own diagnosis still reaches the operator.
     """
-    raise SystemExit("not implemented yet")
+    name = repository_name(repository)
+    result = core.capture(
+        "aws",
+        "ecr",
+        "describe-images",
+        "--repository-name",
+        name,
+        "--image-ids",
+        f"imageTag={tag}",
+        "--query",
+        "imageDetails[0].imageDigest",
+        "--output",
+        "text",
+        check=False,
+    )
+    digest = result.stdout.strip()
+    if result.returncode or not digest or digest == "None":
+        core.die(f"ECR has no image digest for {name}:{tag}; push it with `demo.py publish`")
+    return digest
 
 
 def _ng_describe(query):
