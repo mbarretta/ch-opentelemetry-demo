@@ -1,6 +1,23 @@
 {
   "plans": [
     {
+      "slug": "feat-merge-ch-otel-demo",
+      "title": "Merge ch-otel-demo-eks into this repo as ch-opentelemetry-demo",
+      "status": "planned",
+      "mode": "dev",
+      "parallelism": "auto",
+      "autonomy": "managed",
+      "tasks_total": 15,
+      "tasks_complete": 0,
+      "wave_state": "idle",
+      "current_wave": null,
+      "wave_tasks_in_flight": [],
+      "paused_reason": "",
+      "deferred_open": 0,
+      "updated": "2026-09-14T12:50:59-04:00",
+      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-merge-ch-otel-demo.json"
+    },
+    {
       "slug": "feat-native-assistant-ui",
       "title": "Native Astronomy Shop assistant in the storefront",
       "status": "complete",

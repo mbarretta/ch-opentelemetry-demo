@@ -1,0 +1,1351 @@
+{
+  "slug": "feat-merge-ch-otel-demo",
+  "title": "Merge ch-otel-demo-eks into this repo as ch-opentelemetry-demo",
+  "kind": "feature",
+  "mode": "dev",
+  "created": "2026-09-14",
+  "status": "planned",
+  "context": "Two sibling repos overlay the same OpenTelemetry Demo 3.0.0 release and cannot be deployed together. This repo (langfuse-sample-agent-app) owns the Compose stack, four custom images tagged by content hash, and a Langfuse-traced AI shopping assistant (concierge/ + frontend/ overlay and patches). ch-otel-demo-eks owns an OpenTofu + Helm EKS deployment (Graviton, scale-to-zero, kubectl port-forward access), an in-cluster ClickStack collector writing to ClickHouse Cloud, and a session-replay frontend patch (@hyperdx/browser). Both patch package.json, pages/_app.tsx and pages/_document.tsx, and there can only be one frontend image. Outcome: one repo, one upstream pin (3.0.0 / 1755859a), one patch set, one image set, one Python CLI, two targets (laptop Compose, EKS Helm). THE FULL DESIGN IS IN .claude/plans/refactored-marinating-rain.md (target layout, argparse tree, Kubernetes Secret table, static vs generated Helm values, and the bash-to-Python behavior-preservation mapping table) AND the plan-phase verification record with its corrections is in .claude/plans/plan-claude-plans-refactored-marinating-witty-sunrise.md. READ BOTH before implementing any task. User decisions already made (do not re-open): new public repo mbarretta/ch-opentelemetry-demo with this history as the trunk and the EKS repo imported via git subtree add --prefix=deploy/eks (no squash); one unified Python CLI with the EKS bash ported to `demo.py eks ...` subcommands (tofu/helm/kubectl/aws/docker stay shell-outs, the bash and envvars.* are deleted); session replay compiled into the single frontend image and enabled on both targets whenever ClickStack is configured (SESSION_REPLAY=auto); Langfuse stays external (Langfuse Cloud) on both targets, keys in a Kubernetes Secret on EKS; upstream pin 3.0.0 everywhere so DEMO_REF=d6fd782e disappears and the replay hunks are rebased onto 3.0.0; internal identifiers (astronomy-concierge image prefix, compose project, Langfuse prompt/trace names, concierge/ package) stay. Three plan-phase decisions: core.py exposes THREE subprocess chokepoints (run, capture, popen) so images.stage() keeps streaming git archive into tarfile; task 4's rrweb-in-telemetry.jsonl assertion moved to manual post-merge validation and replaced by an automated smoke gate; the public repo is created and origin repointed BEFORE wave 1. PRE-FLIGHT, done by the orchestrator as direct commits before wave 1 dispatches (NOT harness tasks): (1) git subtree add --prefix=deploy/eks, (2) housekeeping commit — COPY (do not git mv, .claude/ is untracked in the EKS repo) feat-otel-demo-eks.json from /Users/barretta/workspace/ch/ch-otel-demo-eks/.claude/plans/ into .claude/plans/ and rebuild-index, git mv deploy/eks/LIVE-VALIDATION.md to docs/history/eks-live-validation-2026-09-09.md, git mv NATIVE_AGENT_UI_PLAN.md to docs/history/, root .gitignore gains the deploy/eks/ patterns and deploy/eks/.gitignore is removed, .dockerignore gains deploy and launcher, pyproject.toml name becomes ch-opentelemetry-demo, (3) gh repo create + git remote set-url + git push -u.",
+  "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests launcher && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
+  "constraints": [
+    "subprocess is imported and called only in launcher/core.py; every other launcher module goes through core.run(), core.capture() or core.popen()",
+    "No secret value reaches argv or disk: Kubernetes Secrets are assembled in Python and piped to `kubectl apply -f -` on stdin; ClickHouse and Langfuse auth travel in request headers or function kwargs, never a command line",
+    "Tofu identifiers var.name = \"otel-demo-eks\", state bucket otel-demo-eks-tfstate-<account> and state key otel-demo-eks/terraform.tfstate are unchanged — moving any of them replaces the live EKS cluster",
+    "The upstream pin stays 3.0.0 / commit 1755859a everywhere; no DEMO_REF variable and no d6fd782e reference survives the merge",
+    "Internal identifiers unchanged: astronomy-concierge image prefix, concierge/ package name, Compose project name, Langfuse prompt and trace names. Only the repo name, README, pyproject name/description and ECR repository names change"
+  ],
+  "parallelism": "auto",
+  "autonomy": "managed",
+  "signing_disabled": true,
+  "security_audit": "auto",
+  "quality_review": "auto",
+  "plan_review": "auto",
+  "deferred_review": "auto",
+  "sweep": false,
+  "charter": {
+    "path": "",
+    "checked_at": "2026-09-14T00:00:00-04:00",
+    "advances": [],
+    "tensions": [],
+    "reconciled_at": null,
+    "amendments": []
+  },
+  "log": [
+    {
+      "timestamp": "2026-09-14T11:53:44-04:00",
+      "note": "Codex plan review: round 1 returned verdict revise with 6 findings (1 critical, 3 high, 2 medium); all 6 applied, pr3 as modified. Round 2 timed out after 482s with no envelope, so the plan stands as round 1 left it (stop_reason timeout). Round 1's critical finding is the load-bearing one: task 3 originally had depends_on [] and would have been colored into wave 1, where its worktree has no launcher/ directory and the plan verification command's 'ruff check ... launcher' exits non-zero - confirmed by running it. That finding restored task 3 to wave 2."
+    },
+    {
+      "timestamp": "2026-09-14T11:54:51-04:00",
+      "note": "Phase 4.5: greedy-colored 15 tasks into 6 waves (1/3/4/4/2/1) against the four conflict classes. Verified mechanically that no task sits in a wave at or before one of its dependencies, and that no two tasks in the same wave share a predicted file. Two plan-time restructurings removed real intra-wave collisions: the EKS-only-key drop moved from task 2 to task 1 so task 2 and task 4 do not both write launcher/stack.py in wave 2, and the manifest published[svc]={repository,tag,digest} schema was pinned as task 1 ac8 so task 7 (wave 3) and task 9 (wave 4) code against a written contract instead of against each other. Waves 3 and 4 both sit at the concurrency cap of 4, so task 10 lands in wave 4 purely for capacity, not for any dependency. No post_merge_build is needed: the image manifest lives under .runtime/ which is gitignored, so nothing on the base branch goes stale when task 4 changes the content tag."
+    },
+    {
+      "timestamp": "2026-09-14T11:54:51-04:00",
+      "note": "Plan-phase verification corrected ten claims carried over from the design document; the four load-bearing ones are recorded here because implementers will trip on them. (1) .claude/ is untracked in ch-otel-demo-eks, so git subtree add will not import it and the pre-flight must COPY feat-otel-demo-eks.json from the sibling checkout rather than git mv it out of the subtree. (2) core.py's log/die/need/dotenv/capture/popen do not exist in demo.py today - they are new code, not extractions - and run() is not a chokepoint: nine subprocess sites bypass it. (3) demo.py:647's function-local 'from concierge.langfuse_api import PROMPTS' deliberately shadows the module-level PROMPTS; the two are different objects from different modules and must not be unified. (4) tests/test_integration_config.py:18-27 asserts only that the literal string 'sensitive' is absent from the dumped config - it does NOT assert an ${env:...}-only pattern, so task 7 writes a real credential scan rather than copying that precedent. Also: the monkeypatch surface is 12 attributes, not ~30."
+    }
+  ],
+  "deferrals": [],
+  "security_findings": [],
+  "quality_findings": [],
+  "plan_review_findings": [
+    {
+      "id": "pr1",
+      "reviewer_ref": "f1",
+      "status": "applied",
+      "disposition_reason": "Applied verbatim; evidence independently confirmed in-session.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "critical",
+      "confidence": 0.99,
+      "category": "hidden-dependency",
+      "target": "tasks[2].depends_on",
+      "title": "Task 3 can run before launcher exists, making the global verification fail",
+      "description": "Task 3 has no dependency on task 1, so conflict analysis can place both file-disjoint tasks in the first wave. Task 3's worktree would not contain launcher/, but every task must run Ruff against that path.",
+      "evidence": "ls -ld launcher returned No such file or directory. The verification command runs .venv/bin/ruff check concierge scripts tests launcher, while task 3 has depends_on [] and edits only deploy/eks paths. The pre-flight creates deploy/eks but not launcher/.",
+      "recommendation": "Make task 3 depend on task 1 so its verification runs on a base containing launcher/.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[2].depends_on",
+        "proposed": "[\"1\"]"
+      }
+    },
+    {
+      "id": "pr2",
+      "reviewer_ref": "f2",
+      "status": "applied",
+      "disposition_reason": "Applied verbatim; evidence independently confirmed in-session.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "unstated-assumption",
+      "target": "tasks[11].notes",
+      "title": "Task 12 orders kubeconfig before a check that must precede every kubectl call",
+      "description": "The prescribed 12-step order calls kubeconfig before the zero-node refusal, but kubeconfig itself invokes kubectl. An implementation cannot satisfy both the notes and critical AC2.",
+      "evidence": "The notes ordered 'ECR login and kubeconfig' before the zero-node refusal while ac2 requires the refusal to precede every kubectl invocation. The imported implementation at ch-otel-demo-eks/scripts/lib/k8s.sh:8-14 shows kubeconfig runs kubectl config use-context.",
+      "recommendation": "Move kubeconfig after the zero-node check while retaining a 12-step sequence.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[11].notes",
+        "proposed": "Reordered: (2) ECR login, (3) zero-node refusal, (4) kubeconfig and namespaces."
+      }
+    },
+    {
+      "id": "pr3",
+      "reviewer_ref": "f3",
+      "status": "applied",
+      "disposition_reason": "Applied as modified: the deterministic tracer-integration assertion becomes the critical gate (ac6) and the live smoke is retained as implementer-reported HANDOFF evidence (new ac11) rather than dropped, because the user explicitly chose smoke as the guard on the tracer-swap risk.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[3].acceptance_criteria[5]",
+      "title": "The session-replay smoke AC requires a running stack that verification never starts",
+      "description": "Setting SESSION_REPLAY=true does not build or start the Compose stack. A fresh evaluator cannot run this critical AC from the task worktree, and the global verification only performs setup, static checks, pytest, staging and linting.",
+      "evidence": "README.md:144 says the smoke script needs the running scripted demo. scripts/smoke.py:109-121 posts through the storefront and 175-181 query live localhost services. The plan verification command contains no build or up command.",
+      "recommendation": "Keep the live smoke as manual post-merge validation and replace this task AC with deterministic assertions exercised by the normal test suite.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[3].acceptance_criteria[5]",
+        "proposed": "Deterministic tracer-integration assertions in tests/test_frontend_overlay.py; live smoke recorded as manual post-merge validation."
+      }
+    },
+    {
+      "id": "pr4",
+      "reviewer_ref": "f4",
+      "status": "applied",
+      "disposition_reason": "Applied verbatim; evidence independently confirmed in-session.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "medium",
+      "confidence": 0.99,
+      "category": "other",
+      "target": "tasks[8].acceptance_criteria[7]",
+      "title": "Task 9 claims ownership of ecr_login even though task 5 already delivers it",
+      "description": "The earlier helper task explicitly implements and tests ecr_login. Task 9 should consume that function and add only ecr_image_digest; otherwise its AC asks the implementer to modify or re-deliver a function owned by its dependency.",
+      "evidence": "Task 5 notes assign ecr_login to task 5 and task 5 ac2 tests its password-stdin behaviour. Task 9 ac8 said aws.py gains both ecr_login and ecr_image_digest.",
+      "recommendation": "Make task 9 additive only for ecr_image_digest and apply the same wording correction to its notes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[8].acceptance_criteria[7]",
+        "proposed": "launcher/eks/aws.py gains only ecr_image_digest; task 9 reuses task 5's ecr_login without modifying any other function in that file"
+      }
+    },
+    {
+      "id": "pr5",
+      "reviewer_ref": "f5",
+      "status": "applied",
+      "disposition_reason": "Applied verbatim; evidence independently confirmed in-session.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[14].acceptance_criteria[3]",
+      "title": "The repository-wide stale-name AC conflicts with retained planning records",
+      "description": "Task 15 cannot remove every forbidden reference outside docs/history because the plan requires the two .claude/plans design records to remain readable, and the active plan and index also contain the old repository names.",
+      "evidence": "rg --hidden found forbidden terms outside docs/history in .claude/plans/refactored-marinating-rain.md, .claude/plans/plan-claude-plans-refactored-marinating-witty-sunrise.md, .claude/plans/feat-merge-ch-otel-demo.json and .claude/plans/_index.json. Task 15's files[] does not include those records.",
+      "recommendation": "Scope the cleanup to user-facing documentation and explicitly exempt harness and planning records.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[14].acceptance_criteria[3]",
+        "proposed": "Scope to the four README files; docs/history/ and .claude/plans/ are exempt."
+      }
+    },
+    {
+      "id": "pr6",
+      "reviewer_ref": "f6",
+      "status": "applied",
+      "disposition_reason": "Applied verbatim; evidence independently confirmed in-session.",
+      "dispositioned_at": "2026-09-14T11:45:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-14T11:44:49-04:00",
+      "round": 1,
+      "severity": "medium",
+      "confidence": 0.94,
+      "category": "other",
+      "target": "tasks[2].acceptance_criteria[8]",
+      "title": "The EKS README AC would erase the low-level recovery commands it is supposed to retain",
+      "description": "The imported recovery section relies on direct AWS and OpenTofu commands. Requiring every command in the trimmed README to be a demo.py eks invocation conflicts with retaining useful disaster-recovery content.",
+      "evidence": "The imported ch-otel-demo-eks/README.md:381-523 contains recovery procedures using aws s3api, aws eks, aws iam, aws ec2, lsof and tofu. Task 3 notes say recovery remains while its ac9 required every command to be demo.py eks.",
+      "recommendation": "Apply the demo.py-only rule to ordinary runbook operations while allowing direct infrastructure commands in the explicitly labelled disaster-recovery section.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[2].acceptance_criteria[8]",
+        "proposed": "Lifecycle commands use demo.py eks; labelled disaster-recovery procedures may use aws, tofu, kubectl or lsof directly."
+      }
+    }
+  ],
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Split scripts/demo.py into the launcher package",
+      "status": "pending",
+      "depends_on": [],
+      "origin": "planned",
+      "files": [
+        "scripts/demo.py",
+        "scripts/smoke.py",
+        "launcher/__init__.py",
+        "launcher/core.py",
+        "launcher/upstream.py",
+        "launcher/images.py",
+        "launcher/collector.py",
+        "launcher/stack.py",
+        "launcher/cli.py",
+        "tests/test_build.py",
+        "tests/test_integration_config.py",
+        "tests/compose_yaml.py",
+        "tests/conftest.py",
+        "pyproject.toml"
+      ],
+      "why": "Every EKS subcommand needs importable, independently testable modules and a single subprocess chokepoint; the 781-line script cannot absorb 1058 lines of ported bash.",
+      "notes": "Module split: core.py = ROOT/UPSTREAM/RUNTIME/TAG/COMMIT/REPO/OVERLAY/PATCHES/CONCIERGE/PROMPTS/DOCKER/IMAGE_PREFIX/IMAGES + log/die/need/dotenv + run/capture/popen. upstream.py = verify_upstream, upstream_file, TOOLS_PATCH, patch_tools, corrected_tools, write_tools, bootstrap. images.py = STAGED_IMAGES/FRONTEND_INPUTS/STAGED_DOCKERIGNORE, overlay_files, patch_files, source_files, base_images, build_tag, stage, host_platform, image_name, image_variable, image_exists, manifest_path/read_manifest/write_manifest, import_root, contract_version, build_context, build, require_images. collector.py = LANGFUSE_SERVICES/ASSISTANT_PATH/AGENT_TURN_ENDPOINTS/AGENT_STATUS_ROUTE/ASSISTANT_CLUSTER/ASSISTANT_ROUTES/LANGFUSE_PREVIEW, service_is, attribute_matches, langfuse_span_filter, assistant_route_statements, collector_config. stack.py = environment, generate_config, compose, scenario, seed_prompts. cli.py = the existing flat argparse parser, moved verbatim (task 2 replaces it with the subparser tree). VERIFIED FACTS: log/die/need/dotenv/capture/popen DO NOT EXIST today and are new code. run() is NOT a chokepoint — rewrite the 7 bypassing sites at demo.py:88 (verify_upstream), :99 (upstream_file), :161 (bootstrap), :255 Popen + :275 run (stage), :292 (host_platform), :306 (image_exists), :387 (build), plus main():754 passing stdout=subprocess.PIPE into compose(). stage()'s git-archive-into-tarfile MUST use core.popen() and keep streaming; image_exists() and stage()'s `git apply --check` must keep inspecting returncode rather than raising. Only 12 attributes are monkeypatched across the suite (OVERLAY, PATCHES, RUNTIME, COMMIT, CONCIERGE, PROMPTS, DOCKER, TOOLS_PATCH, image_exists, ROOT, run, generate_config) at tests/test_build.py:34,35,36,106,130,167,193,201,213,279,280 and tests/test_integration_config.py:108. Import graph is cli -> stack -> images -> upstream -> core (acyclic): stack.environment() calls images.read_manifest/image_variable/image_name and images.build_tag() calls upstream.upstream_file/corrected_tools. DO NOT touch seed_prompts()'s function-local `from concierge.langfuse_api import PROMPT_NAME, PROMPTS, LangfuseAPI` at demo.py:647 — it deliberately shadows the module-level PROMPTS and the two paths are different objects from different modules.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes: ruff (with launcher added to its targets in pyproject.toml) and the whole pytest suite green, with no test deleted, skipped or loosened",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "images.build_tag() returns exactly 58acc12afb99 on an unmodified tree — the split must not perturb any hash input",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "`grep -rn 'import subprocess\\|subprocess\\.' launcher/` matches only launcher/core.py",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "core.py exposes run(), capture() and popen(); images.stage() uses core.popen() and still streams `git archive` into tarfile without buffering the whole export in memory",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "scripts/demo.py is a thin shim (roughly 8 lines) delegating to launcher.cli.main(), and `demo.py config` produces byte-identical output before and after the split for the same .env",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "core.py provides log(), die(), need(*commands) and dotenv() as real functions (they do not exist today), with die() writing to stderr and exiting non-zero and need() naming every missing command in one message"
+        },
+        {
+          "id": "ac7",
+          "text": "stack.environment() drops the EKS-only keys (CLICKHOUSE_*, HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE, OTLP_AUTH_TOKEN, AWS_*, EKS_TUNNEL_PORT) before the environment reaches docker compose, with a test asserting it",
+          "critical": true
+        },
+        {
+          "id": "ac8",
+          "text": "images.write_manifest/read_manifest document and round-trip a published section shaped published[service] = {repository, tag, digest} — the contract tasks 7 and 9 both code against"
+        },
+        {
+          "id": "ac9",
+          "text": "Cross-module reads are attribute access at call time (core.RUNTIME, images.read_manifest()), never `from .core import RUNTIME`, so the 12 monkeypatch targets still take effect; tests only move patch targets and keep every existing assertion"
+        },
+        {
+          "id": "ac10",
+          "text": "scripts/smoke.py imports RUNTIME, environment and scenario from launcher (not scripts.demo) and still runs"
+        },
+        {
+          "id": "ac11",
+          "text": "seed_prompts() still resolves PROMPTS through its function-local concierge.langfuse_api import, unchanged"
+        },
+        {
+          "id": "ac12",
+          "text": "Every existing laptop subcommand still works end to end: bootstrap, stage, config, up, down, ps, `logs agent`, restart, scenario, seed-prompts"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "2",
+      "title": "CLI subparser tree and EKS config module",
+      "status": "pending",
+      "depends_on": [
+        "1"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/cli.py",
+        "launcher/eks/__init__.py",
+        "launcher/eks/config.py",
+        "launcher/eks/aws.py",
+        "launcher/eks/k8s.py",
+        "launcher/eks/values.py",
+        "launcher/eks/tunnel.py",
+        "launcher/eks/infra.py",
+        "launcher/eks/lifecycle.py",
+        "launcher/eks/flags.py",
+        "launcher/eks/ops.py",
+        "launcher/eks/check.py",
+        ".env.example",
+        "tests/conftest.py",
+        "tests/test_cli.py",
+        "tests/test_eks_config.py"
+      ],
+      "why": "Declaring the whole command surface once, with stub bodies, lets tasks 5-14 fill one module each in parallel without any of them touching cli.py.",
+      "notes": "Today's parser (demo.py:685-726) is a single flat parser with a `choices` positional, a catch-all `arguments` positional, and four GLOBAL flags — replace it with the full subparser tree from the design doc's argparse section. --dev/--debug-chatbot/--service/--platform become per-subcommand flags, which deliberately breaks `demo.py --dev up` (the README already writes `demo.py up --dev`). Every eks module gets its real signatures plus a register(subparsers) function; bodies raise SystemExit('not implemented yet') until their task lands. eks/config.py holds CHART_VERSION='0.41.0', RELEASE='otel-demo', NS_DEMO='otel-demo', NS_CS='clickstack', STATE_KEY, the key lists, load_clickstack_env, load_langfuse_env and langfuse_auth_header (the 'Basic ' + b64(pk:sk) helper shared with stack.environment()). .env.example gains the SESSION_REPLAY=auto line and the headed EKS section (AWS_PROFILE, AWS_REGION=us-east-1, CLICKHOUSE_ENDPOINT, CLICKHOUSE_USER=clickstack, CLICKHOUSE_PASSWORD, HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE=otel, OTLP_AUTH_TOKEN, EKS_TUNNEL_PORT=8080, with a pointer to deploy/eks/sql/create-user.sql). tests/conftest.py gains a fake_sh fixture generalizing the one-off recorder at tests/test_build.py:277-297 (which records only positional args today) into one that records argv AND stdin for every core.run/capture/popen call and answers from a prefix table. Do NOT edit launcher/stack.py — task 4 owns it this wave.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The whole command tree parses: `eks tunnel stop`, `eks nightly on`, `eks down --keep`, `eks destroy --purge-state`, `build --service agent --service mcp`, `publish --force`, `logs agent frontend`, `scenario backend-failure --target eks`, and the hidden `eks tunnel --loop --port N --namespace NS`",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "`demo.py up --dev` is accepted and `demo.py --dev up` is rejected with a usage error",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Every eks subcommand reachable from the tree resolves to a callable; unimplemented bodies raise SystemExit('not implemented yet') rather than AttributeError or TypeError",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "load_clickstack_env names every blank or missing key in one message rather than failing on the first",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "load_langfuse_env is all-or-nothing (all four keys or none, matching collector_config()'s existing rule) and langfuse_auth_header returns 'Basic ' + base64(public:secret)",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "publish and every eks subcommand parse and dispatch without requiring the .upstream checkout to be present"
+        },
+        {
+          "id": "ac8",
+          "text": ".env.example carries SESSION_REPLAY=auto and the headed EKS section with every key named in the design's env table, each with a comment"
+        },
+        {
+          "id": "ac9",
+          "text": "tests/conftest.py exposes a fake_sh fixture that records argv and stdin for core.run/capture/popen and answers from a prefix table, and at least one existing test is migrated onto it to prove it works"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "3",
+      "title": "deploy/eks data: four ECR repos, map outputs, static Helm values, trimmed README",
+      "status": "pending",
+      "depends_on": [
+        "1"
+      ],
+      "origin": "planned",
+      "files": [
+        "deploy/eks/tofu/ecr.tf",
+        "deploy/eks/tofu/outputs.tf",
+        "deploy/eks/k8s/demo-values.yaml",
+        "deploy/eks/README.md"
+      ],
+      "why": "The merged repo publishes four images, not one, and the static Helm values are the half of the chart configuration that needs no Python.",
+      "notes": "Scope is deploy/eks/** ONLY — touching anything outside it collides with wave-mates. ecr.tf: for_each over the four services so repository names become ch-opentelemetry-demo/<service> (frontend, frontend-proxy, agent, mcp), keeping image_tag_mutability = MUTABLE (identical content tags get re-pushed), force_delete, scan_on_push, and the keep-5 lifecycle policy. outputs.tf: replace the singular string output ecr_repository_url with ecr_repository_urls (a map service -> url, read via `tofu output -json`) and keep ecr_registry; leave region, cluster_name, cluster_endpoint, nodegroup_name, node_count, node_platform, scheduler_name, kubeconfig_command, vpc_id and subnet_ids exactly as they are. DO NOT change var.name, the state bucket or the state key (constraint 3 — the live cluster depends on them). demo-values.yaml keeps its current content (backends off, product-catalog and checkout limits, otlphttp/clickstack exporter, extraEnvsFrom clickstack-otlp-token) and gains the additions in the design's static-values section: chatbot disabled, imageOverride.pullPolicy IfNotPresent on the four custom services, frontend envOverrides (PUBLIC_HYPERDX_ENABLED, AGENT_BASE_URL, ASSISTANT_TRANSPORT), agent envOverrides + 750Mi memory limit + the optional secretKeyRefs, mcp envOverrides, the collector's extraEnvsFrom and the traces-pipeline processor-list fix. Delete deploy/eks/scripts/, demo.sh, envvars.aws.example, envvars.clickhouse.example and patches/ (the replay patch is task 4's input — read it before deleting, or read it from the sibling checkout). README.md is trimmed to cluster design decisions, costs and recovery; runbooks move to the root README in task 15, and every command it does mention is spelled `demo.py eks ...`.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "`tofu -chdir=deploy/eks/tofu fmt -check` and `tofu -chdir=deploy/eks/tofu init -backend=false -input=false && tofu -chdir=deploy/eks/tofu validate` all pass",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "ecr.tf creates exactly four MUTABLE repositories named ch-opentelemetry-demo/{frontend,frontend-proxy,agent,mcp}, each with scan_on_push and the keep-5 lifecycle policy, via for_each rather than four copied blocks",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "outputs.tf exposes ecr_repository_urls as a map of service to URL and retains ecr_registry; `tofu output -json` is the documented read path",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "var.name, the S3 state bucket name and the state key are unchanged from the imported tree — verified by diffing tofu/variables.tf and tofu/backend.tf against the subtree import",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "`helm template` against demo-values.yaml with the four imageOverride repository/tag pairs set to example values renders successfully, emits no chatbot Deployment, and the agent Deployment carries OTEL_EXPORTER_OTLP_ENDPOINT plus the optional langfuse-credentials and llm-credentials secretKeyRefs",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The rendered collector ConfigMap defines every processor and exporter its pipelines reference, and the traces pipeline runs transform/assistant_routes and transform/sanitize_spans (fixing the upstream slip where sanitize_spans was never run)",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "No bash remains anywhere under deploy/eks: `find deploy/eks -name '*.sh'` is empty and demo.sh, envvars.* and patches/ are gone",
+          "critical": true
+        },
+        {
+          "id": "ac8",
+          "text": "demo-values.yaml contains no account id, registry host, cluster endpoint or any other account-specific or secret value",
+          "critical": true
+        },
+        {
+          "id": "ac9",
+          "text": "deploy/eks/README.md covers cluster design decisions, costs and recovery only; ordinary demo lifecycle commands are spelled `demo.py eks ...`, while explicitly labelled low-level disaster-recovery procedures may invoke aws, tofu, kubectl or lsof directly. No command anywhere references a deleted script (demo.sh, scripts/*.sh, envvars.*)"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "4",
+      "title": "Session replay in the single frontend image, gated on SESSION_REPLAY",
+      "status": "pending",
+      "depends_on": [
+        "1"
+      ],
+      "origin": "planned",
+      "files": [
+        "frontend/patches/0000-package-lint-and-hyperdx.patch",
+        "frontend/patches/0001-app-assistant-provider.patch",
+        "frontend/patches/0006-document-assistant-env.patch",
+        "frontend/patches/0009-frontend-tracer-session-replay.patch",
+        "frontend/patches/0010-package-lock-hyperdx.patch",
+        "frontend/patches/README.md",
+        "tests/test_frontend_overlay.py",
+        "compose.native.yaml",
+        "launcher/stack.py",
+        "tests/test_integration_config.py",
+        "docker/README.md"
+      ],
+      "why": "There can be only one frontend image, so the EKS replay patch and the concierge assistant patches must become one coherent patch set on the 3.0.0 pin.",
+      "notes": "The repo rule is one patch per upstream file (frontend/patches/README.md:1-5, enforced dynamically by tests/test_frontend_overlay.py:166-171), and the EKS replay patch touches five files, three of which the concierge patches already own. So fold the replay hunks INTO 0000 (package.json: keep the lint script, add @hyperdx/browser ^0.25.1), 0001 (_app.tsx: add NEXT_PUBLIC_HYPERDX_ENABLED/URL to the window.ENV typing) and 0006 (_document.tsx: destructure PUBLIC_HYPERDX_ENABLED/URL and emit NEXT_PUBLIC_HYPERDX_* in envString), and add two NEW patches: 0009 for utils/telemetry/FrontendTracer.ts (the HyperDX.init block with url NEXT_PUBLIC_HYPERDX_URL || origin + '/otlp-http', apiKey 'managed-clickstack', tracePropagationTargets [/.*/], consoleCapture, advancedNetworkCapture, the demo.synthetic_request resource attribute, plus setGlobalAttributes({ userId, 'session.id': userId }) to compensate for losing session.id on non-assistant spans in replay mode) and 0010 for package-lock.json. REGENERATE every patch from the pristine export per frontend/patches/README.md:11-27 (demo.py stage, edit under .runtime/build/src/frontend/, git -C .runtime/build diff -- <path>); never hand-merge hunks. The 0010 lock patch is the output of `npm install @hyperdx/browser@0.25.1 --package-lock-only` inside .runtime/build/src/frontend (the EKS patch's own lock hunk has 3,703 lines of drift against 3.0.0 and will not apply). Register 0009 and 0010 in EXPECTED_PATCH_TARGETS (tests/test_frontend_overlay.py:78-89 — note 0000 is deliberately absent from that registry, so renaming it is free) and keep test_patches_touch_distinct_upstream_files green. The assertion at test_frontend_overlay.py:573 that the RELEASED tracer contains exactly one `new WebTracerProvider(` still holds (HyperDX builds its provider internally). In launcher/stack.py, environment() derives PUBLIC_HYPERDX_ENABLED from SESSION_REPLAY (auto = on when ClickStack is configured, true forces on, false disables); compose.native.yaml's frontend service gets `- PUBLIC_HYPERDX_ENABLED=${PUBLIC_HYPERDX_ENABLED:-}` following the existing empty-default shape of ASSISTANT_DEMO_DETAILS at compose.native.yaml:20. Do NOT touch .env.example — task 2 owns it this wave. RISK: the replay code early-returns before the demo's SessionIdProcessor, exporter and auto-instrumentations when NEXT_PUBLIC_HYPERDX_ENABLED is true, replacing the whole WebTracerProvider path, so the assistant.turn -> fetch -> proxy -> frontend -> agent chain now rides on HyperDX's fetch instrumentation. ac6 is the gate on that.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes, including scripts/check-frontend.sh",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "`demo.py stage` applies all patches cleanly from scratch against the pinned 3.0.0 export",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "test_patches_touch_distinct_upstream_files stays green and EXPECTED_PATCH_TARGETS registers 0009 to src/frontend/utils/telemetry/FrontendTracer.ts and 0010 to src/frontend/package-lock.json",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "`demo.py build --service frontend` succeeds and the resulting image's bundle contains the HyperDX browser SDK (grep the built output, not just the lockfile)",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "@hyperdx/browser resolves at version 0.25.1 in the staged tree and 0010 is the output of `npm install @hyperdx/browser@0.25.1 --package-lock-only`, not a hand-merged diff",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "tests/test_frontend_overlay.py deterministically asserts that the replay-enabled branch of the patched FrontendTracer.ts initializes HyperDX with tracePropagationTargets covering same-origin requests and preserves the global @opentelemetry/api integration points AssistantTracing.ts depends on — so the tracer swap cannot silently break the assistant.turn -> fetch -> proxy -> agent chain",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "SESSION_REPLAY=false renders an empty PUBLIC_HYPERDX_ENABLED in the frontend service environment, and SESSION_REPLAY=auto renders it enabled only when CLICKSTACK_OTLP_ENDPOINT is set",
+          "critical": true
+        },
+        {
+          "id": "ac8",
+          "text": "Every patch was regenerated from the pristine export (the diff base is 3.0.0, so each patch is the complete patch for its file), and frontend/patches/README.md still describes the workflow accurately with the renamed 0000 and the two new patches"
+        },
+        {
+          "id": "ac9",
+          "text": "The released FrontendTracer.ts still contains exactly one `new WebTracerProvider(` and no overlay file shadows it"
+        },
+        {
+          "id": "ac10",
+          "text": "docker/README.md notes the session-replay SDK as a frontend image input"
+        },
+        {
+          "id": "ac11",
+          "text": "The implementer additionally runs `demo.py build && demo.py up` then `SESSION_REPLAY=true scripts/smoke.py` in its worktree and reports the outcome verbatim in its HANDOFF. This is reported evidence, not an evaluator gate — the plan verification command does not start the stack. A failure here is a blocked report, never grounds for weakening a patch or an assertion."
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "5",
+      "title": "EKS aws and k8s helper modules",
+      "status": "pending",
+      "depends_on": [
+        "2"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/aws.py",
+        "launcher/eks/k8s.py",
+        "tests/test_eks_aws.py",
+        "tests/test_eks_k8s.py"
+      ],
+      "why": "Every other EKS subcommand shells out through these two modules, so they carry the argv shapes and the no-secrets-on-argv rule for the whole port.",
+      "notes": "Port deploy/eks/scripts/lib/aws.sh and lib/k8s.sh (read them from the sibling checkout at /Users/barretta/workspace/ch/ch-otel-demo-eks or from the subtree before task 3 deletes them). aws.py: aws_login (SSO), state_bucket, tf_outputs() reading `tofu output -json` ONCE per process and caching (the map output from task 3 requires -json; the old tf_out read -raw one value at a time), tf_out(name) on top of the cache, ecr_login, ecr_has_image, ng_desired/ng_status/ng_scale, scheduler_get/scheduler_set_state, purge_state_bucket. Leave ecr_image_digest to task 9. k8s.py: kubeconfig, wait_nodes_ready, ensure_namespace, secret_manifest (build the JSON/YAML Secret object in Python with base64 values) -> apply_manifest (piped to `kubectl apply -f -` on stdin), delete_secret, helm_repo_ensure, helm_upgrade_args, exec_read/exec_write for the flagd-ui file. helm_upgrade_args must produce the exact argv from the design's deploy mapping row: helm upgrade --install otel-demo open-telemetry/opentelemetry-demo --version 0.41.0 -n otel-demo -f demo-values.yaml -f values.generated.yaml --wait --timeout 20m, with the static values file first.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "No secret value appears in any recorded argv across the module's tests — every Secret goes through secret_manifest and apply_manifest's stdin, and the ECR password reaches `docker login --password-stdin` on stdin",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "tf_outputs() invokes `tofu output -json` at most once per process no matter how many callers ask, and tf_out(name) reads from that cache",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "secret_manifest produces a valid Secret object with base64-encoded data values and the correct namespace, and apply_manifest pipes it to `kubectl apply -f -` on stdin rather than writing a temp file",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "helm_upgrade_args returns the exact expected argv including both -f flags in order (static demo-values.yaml then values.generated.yaml) and --wait --timeout 20m",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "ng_scale is a no-op when the node group already has the requested desired size, and waits through an UPDATING status rather than returning early"
+        },
+        {
+          "id": "ac7",
+          "text": "ensure_namespace is idempotent (applying a namespace manifest, not `create namespace`, so a second call is not an error)"
+        },
+        {
+          "id": "ac8",
+          "text": "exec_write uses the temp-file-then-mv argv shape (`sh -c 'cat > F.tmp && mv F.tmp F'`) so flagd's fsnotify watch sees an inode swap"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "6",
+      "title": "EKS tunnel: detached port-forward loop with pidfile lifecycle",
+      "status": "pending",
+      "depends_on": [
+        "2"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/tunnel.py",
+        "tests/test_eks_tunnel.py"
+      ],
+      "why": "The cluster is private and kubectl port-forward is the only access path, so the tunnel has to survive SSO expiry and never leak a process group.",
+      "notes": "Port deploy/eks/scripts/tunnel.sh and the k8s.sh loop. The detached loop re-invokes this CLI: sys.executable scripts/demo.py eks tunnel --loop with start_new_session=True, logging to .runtime/eks/tunnel.log, re-running `aws sso login` on credential expiry and re-running `kubectl -n otel-demo port-forward --address 127.0.0.1 svc/frontend-proxy PORT:PORT`. Pidfile at .runtime/eks/tunnel.pid. Refuse to start when the pidfile names a live process or the port is already bound; clean a stale pidfile silently. Probe readiness 20 times at 1 s intervals, and count a 503 from Envoy as up (the proxy answers before the upstream is ready). stop = killpg TERM, then KILL after 5 s. status exits 0 when up, 1 when down. The --loop body must be stdlib-only (it runs as a bare subprocess with no guarantee the venv's third-party packages are importable).",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "start refuses when the pidfile names a live process, refuses when the port is already bound, and silently removes a stale pidfile before starting",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The detached child is spawned with start_new_session=True and stop() sends TERM to the process GROUP (killpg), escalating to KILL after 5 seconds",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "`eks tunnel status` exits 0 when the tunnel is up and 1 when it is down",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The --loop code path imports only the standard library (plus launcher modules that themselves import only stdlib)",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The readiness probe polls 20 times at 1 s intervals and treats a 503 from Envoy as success"
+        },
+        {
+          "id": "ac7",
+          "text": "The pidfile lives at .runtime/eks/tunnel.pid and the child's output goes to .runtime/eks/tunnel.log"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "7",
+      "title": "Generated Helm values with the conditional Langfuse exporter",
+      "status": "pending",
+      "depends_on": [
+        "2"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/values.py",
+        "tests/test_eks_values.py"
+      ],
+      "why": "An otlphttp exporter with an unset ${env:LANGFUSE_BASE_URL} fails validation and CrashLoops the collector, so the Langfuse pipeline must be conditional — which a static values file cannot express.",
+      "notes": "eks_values(env, published, langfuse) returns the dict written to .runtime/eks/values.generated.yaml at deploy time. Single source of truth stays in Python: reuse collector.langfuse_span_filter() and collector.assistant_route_statements() rather than restating their content. Contents: components.<svc>.imageOverride.{repository,tag} for all four services read from the manifest's published section (shape published[svc] = {repository, tag, digest}, pinned by task 1 ac8) so helm upgrade needs zero --set; env-derived plain values (agent AGENT_MODE, MCP_ENABLED, LLM_BASE_URL, LLM_MODEL, LANGFUSE_PROMPT_LABEL, LANGFUSE_PROJECT_ID, LANGFUSE_PUBLIC_URL, CLICKSTACK_TRACE_URL_TEMPLATE; frontend ASSISTANT_DEMO_DETAILS); collector processors transform/assistant_routes (trace_statements from assistant_route_statements()) and filter/langfuse (from langfuse_span_filter()); and pipeline traces/langfuse with receivers [otlp], processors [memory_limiter, transform/assistant_routes, transform/sanitize_spans, filter/langfuse, gen_ai_normalizer, batch]. When Langfuse is configured the pipeline's exporters are [otlp_http/langfuse] and exporters.otlp_http/langfuse is defined with endpoint ${env:LANGFUSE_BASE_URL}/api/public/otel and headers Authorization ${env:LANGFUSE_AUTH_HEADER} plus x-langfuse-ingestion-version '4'; when it is not, the exporter is absent entirely and the pipeline's exporters are [debug] (still a valid pipeline, mirroring the laptop's preview-only mode). The subchart's kubernetesAttributes preset only rewrites pipelines named traces|metrics|logs|profiles, so traces/langfuse is deliberately left alone. NOTE the existing secret test at tests/test_integration_config.py:18-27 only asserts `\"sensitive\" not in json.dumps(config)` — it does NOT assert an ${env:...}-only pattern, so write a real check here rather than copying it.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "exporters.otlp_http/langfuse is present if and only if Langfuse is configured; when absent, pipeline traces/langfuse still exists with exporters [debug] and the rendered config passes collector validation",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "No credential value appears anywhere in the yaml.safe_dump output for a fully-configured Langfuse input — every credential is a ${env:NAME} reference, asserted by scanning the dumped string for each input secret value",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The traces/langfuse processors list is exactly [memory_limiter, transform/assistant_routes, transform/sanitize_spans, filter/langfuse, gen_ai_normalizer, batch] in that order",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "imageOverride repository and tag are emitted for all four services from the manifest's published section, and the function raises rather than emitting a partial set when a service is missing",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "filter/langfuse and transform/assistant_routes are built by calling collector.langfuse_span_filter() and collector.assistant_route_statements(), asserted by equality against those functions' output rather than against a copied literal",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "The env-derived agent and frontend overrides listed in the notes are all present with values taken from the parsed .env"
+        },
+        {
+          "id": "ac8",
+          "text": "otlp_http/langfuse, when present, uses endpoint ${env:LANGFUSE_BASE_URL}/api/public/otel with the Authorization and x-langfuse-ingestion-version headers"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "8",
+      "title": "EKS infra: init, apply, destroy, nightly",
+      "status": "pending",
+      "depends_on": [
+        "2"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/infra.py",
+        "tests/test_eks_infra.py"
+      ],
+      "why": "These four commands own the S3 state bucket and the cluster lifecycle, where a wrong argv either orphans a paid control plane or destroys state.",
+      "notes": "Port init.sh, apply.sh, destroy.sh and nightly.sh per the design's mapping table. init: need(aws, tofu, docker, git, kubectl, helm); create the state bucket idempotently (NO LocationConstraint in us-east-1 — that call fails), enable versioning and the public-access block; `tofu init` with -backend-config for bucket, key and region; ensure the helm repo; warn on blank EKS keys rather than dying. apply: refuse before init has run; run `tofu apply` interactively with stdin inherited; write kubeconfig; `kubectl get nodes`; print the next steps (build, publish, eks deploy). destroy: stop the tunnel, best-effort down, interactive `tofu destroy`; with --purge-state delete every object version AND delete marker in batches of at most 1000 keys, then the bucket, then rm -rf deploy/eks/tofu/.terraform. nightly: `aws scheduler get-schedule` as JSON, then `update-schedule` feeding back EVERY field (the API replaces the whole schedule, so any omitted field is lost), then print `get-schedule --output table`.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "init's bucket creation omits LocationConstraint when the region is us-east-1 and includes it otherwise, and is a no-op when the bucket already exists",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "init's `tofu init` argv carries -backend-config for bucket, key and region with the values from eks/config.py and the discovered account id",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "apply refuses with a clear message when init has not run, and never reaches tofu apply in that case",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "nightly's update-schedule call feeds back every field returned by get-schedule, asserted field-by-field against a recorded get-schedule fixture",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "destroy --purge-state deletes object versions and delete markers in batches of at most 1000 keys and deletes the bucket only after the last batch succeeds",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "init calls need() with aws, tofu, docker, git, kubectl and helm, and blank EKS keys produce a warning rather than an exit"
+        },
+        {
+          "id": "ac8",
+          "text": "apply runs tofu apply with stdin inherited so the interactive approval still works, and prints the build / publish / eks deploy next steps"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "9",
+      "title": "demo.py publish: push the four images to ECR with a platform gate",
+      "status": "pending",
+      "depends_on": [
+        "2",
+        "5"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/images.py",
+        "launcher/eks/aws.py",
+        "tests/test_publish.py"
+      ],
+      "why": "build-frontend.sh is retired and the cluster runs arm64, so a wrong-architecture image must be refused at push time rather than discovered as a CrashLoop.",
+      "notes": "Additive only: publish/record_published/require_published go into launcher/images.py, and ONLY ecr_image_digest is ADDED to launcher/eks/aws.py — task 5 already implements and tests ecr_login, so reuse it and modify nothing else in that file. Replaces build-frontend.sh: ECR login via `aws ecr get-login-password` piped to `docker login --password-stdin`; skip a service when its tag is already present in ECR unless --force; REFUSE when manifest.platform does not match tf_out('node_platform'), naming the fix (`demo.py build --platform <node_platform>`); record manifest.published[svc] = {repository, tag, digest} using the shape task 1 pinned. require_published() is the gate lifecycle.deploy calls first: it rejects a missing published section, a service missing from it, and a stale entry whose tag differs from the current build_tag().",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "publish refuses when manifest.platform differs from tf_out('node_platform') and its message names the exact `demo.py build --platform ...` command that fixes it",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The ECR password is passed to `docker login --password-stdin` on stdin and never appears in any recorded argv",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "A service whose tag is already in ECR is skipped, and --force pushes it anyway",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "manifest.published[svc] records repository, tag and digest, and publishing one service MERGES into any existing published section rather than replacing it",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "require_published() rejects three distinct cases with distinguishable messages: no published section at all, a service absent from it, and a service whose recorded tag is stale relative to build_tag()",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "The docker tag and docker push argv are exactly as expected for each of the four services against its own ECR repository URL"
+        },
+        {
+          "id": "ac8",
+          "text": "launcher/eks/aws.py gains only ecr_image_digest; task 9 reuses task 5's ecr_login without modifying any other function in that file"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "10",
+      "title": "flagd flags and scenario --target eks",
+      "status": "pending",
+      "depends_on": [
+        "2"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/flags.py",
+        "launcher/stack.py",
+        "tests/test_scenario.py",
+        "tests/test_eks_flags.py"
+      ],
+      "why": "The demo's fault scenarios are the whole point of the walkthrough, and they must behave identically on both targets from one pure transform.",
+      "notes": "Extract the scenario flag mutation in launcher/stack.py into a PURE function scenario_flags(document, name) -> document plus a thin local writer, so the laptop and EKS paths share one transform. Then flags.scenario_write_eks(name) applies the same transform through the flagd-ui exec path. VERIFIED TRAP from the design: flag.sh's defaultVariant edit does NOT control productCatalogFailure — its targeting.if always yields a variant — so the correct mutation is targeting.if[1], which the existing concierge scenario() already does. Preserve that. flags.flag(name, variant, reset) ports flag.sh: read the fsnotify-watched copy via `kubectl -n otel-demo exec deploy/flagd -c flagd-ui -- cat /app/data/demo.flagd.json`; write with the exec temp-file-then-mv shape from task 5's exec_write; validate both the flag name and the variant against the document; no-op when the flag is already set to that variant; re-read after 2 s to confirm; --reset does `rollout restart deploy/flagd` then `rollout status --timeout=120s`. Move the existing test_fault_targets_only_selected_product test onto the pure function. Do NOT touch launcher/eks/ops.py or lifecycle.py.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "scenario_flags is a pure function (same input document yields the same output, no I/O) and both the laptop writer and scenario_write_eks call it — asserted by comparing the two paths' resulting documents for the same scenario",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "scenario_flags mutates only targeting.if[1] and leaves defaultVariant untouched, with the moved test_fault_targets_only_selected_product asserting exactly that",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "scenario_write_eks writes through the temp-file-then-mv exec argv and re-reads the document afterward, asserting the change landed",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "flag() rejects an unknown flag name and an unknown variant with distinct messages, and is a no-op (no write argv recorded) when the flag already holds the requested variant",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "flag --reset issues `rollout restart deploy/flagd` followed by `rollout status --timeout=120s`"
+        },
+        {
+          "id": "ac7",
+          "text": "The flag subcommand's help notes that productCatalogFailure is scenario-controlled rather than settable directly"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "11",
+      "title": "EKS ops: verify and status",
+      "status": "pending",
+      "depends_on": [
+        "2",
+        "5"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/ops.py",
+        "tests/test_eks_ops.py"
+      ],
+      "why": "verify is the demo's proof that one trace id reached both ClickStack and Langfuse, and status is what tells you whether the cluster is costing money right now.",
+      "notes": "Port verify.sh and status.sh. verify: the same four ClickHouse SQL queries as the bash, but issued with httpx and IN-PROCESS auth (auth= kwarg or a header, never on argv — constraint 2), plus three new checks the merged repo makes possible: an agent-span count, a count of spans whose http.route matches /api/assistant/%, and one live POST /api/assistant/message through the tunnel that reports the trace id it produced. Also report collector pod status and recent logs. A zero replay-row count is REPORTED, not a failure (replay needs a real browser). status: identity, node group, node phases (only when desired > 0), pod phases counted with collections.Counter, the helm release, tunnel state, and ECR presence for all four images at the manifest tag with distinguishable 'no manifest' and 'not published' hints, plus the nightly schedule. status exits 0 whether the cluster is idle or up (it is a report, not an assertion).",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "ClickHouse credentials are passed to httpx in-process and appear in no recorded argv, asserted by scanning every recorded call for the password",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "verify issues the original four queries plus the agent-span count, the /api/assistant/% route-span count, and one POST /api/assistant/message whose resulting trace id is printed",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "A zero session-replay row count is reported as information and does not make verify exit non-zero",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "status exits 0 both when the node group is scaled to zero and when the stack is up",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "status reports ECR presence for all four services at the manifest tag and distinguishes 'no manifest' from 'built but not published'",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "status counts pod phases with collections.Counter and only queries nodes when the node group's desired size is greater than zero"
+        },
+        {
+          "id": "ac8",
+          "text": "verify reports collector pod status and a tail of collector logs"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "12",
+      "title": "EKS lifecycle: deploy, up, down",
+      "status": "pending",
+      "depends_on": [
+        "5",
+        "7",
+        "9"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/lifecycle.py",
+        "tests/test_eks_deploy.py"
+      ],
+      "why": "deploy is where a wrong ordering costs a 20-minute helm timeout or leaks credentials into a cluster that is not ready for them.",
+      "notes": "Port deploy.sh, up.sh and down.sh. deploy ORDER MATTERS and is the primary AC: (1) load env and run require_published() as a gate, (2) ECR login, (3) refuse when the node group desired size is zero — this must precede ANY kubectl call, (4) run kubeconfig and ensure both namespaces from JSON manifests on stdin (idempotent), (5) apply clickstack-credentials, (6) apply the collector manifest, `rollout status --timeout=300s`, tail 40 log lines, (7) apply clickstack-otlp-token, (8) apply-or-DELETE langfuse-credentials and llm-credentials depending on whether .env carries them, (9) write .runtime/eks/values.generated.yaml, (10) helm upgrade with both -f files and zero --set, (11) start the tunnel, tolerating failure, (12) print the /, /feature/ and /loadgen/ URLs. NOTE kubeconfig itself shells out to kubectl (lib/k8s.sh:8-14 runs `kubectl config use-context`), which is why it sits at step 4 and not alongside the ECR login. up = scale the node group, wait for nodes Ready and coredns, then deploy. down = tunnel stop, `helm uninstall --ignore-not-found --wait --timeout 5m`, delete both namespaces with --timeout=300s, scale to zero; --keep skips the workload removal and only scales down. Langfuse keys are all-or-nothing, same rule as collector_config().",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "deploy's recorded call order matches the 12 steps in the notes exactly, and the zero-node refusal is asserted to precede every kubectl invocation",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "deploy calls require_published() before any AWS or kubectl call and aborts on its failure",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "With no Langfuse keys in .env, deploy DELETES the langfuse-credentials Secret and the generated values omit the otlp_http/langfuse exporter; with them present it applies the Secret and the exporter appears",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "llm-credentials is applied only when API_KEY is set and deleted when it is not",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The helm upgrade argv carries exactly two -f flags (static then generated) and zero --set flags",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "up scales the node group, waits for nodes Ready and for coredns, then runs deploy — in that order",
+          "critical": true
+        },
+        {
+          "id": "ac8",
+          "text": "down runs tunnel stop, helm uninstall --ignore-not-found --wait --timeout 5m, deletes both namespaces with --timeout=300s, then scales to zero; --keep skips the uninstall and namespace deletion and only scales down",
+          "critical": true
+        },
+        {
+          "id": "ac9",
+          "text": "A tunnel start failure at the end of deploy is tolerated (logged, deploy still succeeds) and the three URLs are printed"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "13",
+      "title": "scripts/smoke.py --target eks",
+      "status": "pending",
+      "depends_on": [
+        "6",
+        "11"
+      ],
+      "origin": "planned",
+      "files": [
+        "scripts/smoke.py",
+        "tests/test_smoke_queries.py"
+      ],
+      "why": "The demo's claim is one trace id landing in both ClickStack and Langfuse; smoke is the only thing that asserts it end to end on the cluster.",
+      "notes": "Add --target local|eks, leaving local behavior byte-identical. On eks: drive a native assistant turn through the tunnel, then poll ClickHouse otel.otel_traces by that trace id for up to 60 s and assert the span set — services superset of {frontend-web, frontend-proxy, frontend, agent, product-catalog}, exactly one concierge.turn span, no orphan spans (every non-root span's parent is present), and http.route = /api/assistant/message on the route span. When Langfuse is configured, also GET /api/public/traces/<id> and assert the trace exists. The legacy /prompt block is skipped on eks. Reuse launcher.eks.config's load_clickstack_env / load_langfuse_env and the existing scenario() rather than re-reading .env.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "`smoke.py` with no --target, and with --target local, behaves exactly as before this task (no assertion changed, no step added or removed)",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "--target eks drives one assistant turn through the tunnel and polls otel.otel_traces by the resulting trace id for at most 60 s before failing",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The eks span assertions cover all four properties: the service superset, exactly one concierge.turn, no orphan spans, and http.route = /api/assistant/message",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "When Langfuse is configured, --target eks also asserts GET /api/public/traces/<trace id> returns the trace; when it is not, that check is skipped rather than failed",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The legacy /prompt block is skipped under --target eks and still runs under --target local"
+        },
+        {
+          "id": "ac7",
+          "text": "Credentials for ClickHouse and Langfuse are read through launcher.eks.config helpers and passed in-process, appearing in no argv"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "14",
+      "title": "demo.py eks check: offline validation of the whole EKS surface",
+      "status": "pending",
+      "depends_on": [
+        "3",
+        "7"
+      ],
+      "origin": "planned",
+      "files": [
+        "launcher/eks/check.py",
+        "tests/test_eks_check.py"
+      ],
+      "why": "Chart processor names are verified against 0.41.0 only, so a chart bump must fail here rather than as a CrashLooping collector on a live cluster.",
+      "notes": "Port check.sh and extend it. Runs with no AWS credentials and no cluster: `tofu fmt -check`, `tofu init -backend=false -input=false`, `tofu validate`; parse deploy/eks/k8s/clickstack-collector.yaml (kustomize, or kubectl --dry-run=client); then `helm template` TWICE — once with generated values that configure Langfuse and once with generated values that do not — each with example image overrides, asserting: all four imageOverride pairs landed; every processor and exporter referenced by any rendered collector pipeline is actually DEFINED in the rendered ConfigMap (this is the chart-bump tripwire); the agent Deployment carries the optional langfuse-credentials secretKeyRefs; and no chatbot Deployment exists. Missing tools are NAMED and make the command fail, not silently skipped — a check that skips is not a check. This is deliberately not part of the default pytest run (it downloads a chart); the unit tests cover the assertion logic against recorded helm template output.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "check runs tofu fmt -check, tofu init -backend=false -input=false and tofu validate, and parses the clickstack-collector manifest",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "check renders helm template twice — Langfuse configured and not configured — and asserts every processor and exporter referenced by a rendered pipeline is defined in the rendered collector ConfigMap",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "check asserts all four imageOverride repository/tag pairs reached the rendered Deployments, the agent carries the optional langfuse-credentials secretKeyRefs, and no chatbot Deployment is rendered",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "A missing tool (tofu, helm, kubectl) is named in the failure message and makes the command exit non-zero rather than skipping that check",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "check needs no AWS credentials and no cluster access to run, and its own tests run offline against recorded helm template output",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "check is reachable as `demo.py eks check` and is not invoked by the default pytest run"
+        }
+      ],
+      "verdicts": []
+    },
+    {
+      "id": "15",
+      "title": "One README for both targets, plus doc cleanup",
+      "status": "pending",
+      "depends_on": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "10",
+        "11",
+        "12",
+        "13",
+        "14"
+      ],
+      "origin": "planned",
+      "files": [
+        "README.md",
+        "deploy/eks/README.md",
+        "docker/README.md",
+        "frontend/overlay/README.md",
+        ".env.example"
+      ],
+      "why": "The merge's whole purpose is one repo someone can actually run, and two half-READMEs describing two dead repos is the failure mode.",
+      "notes": "Follow the README outline in the design doc's T15 section: (1) title ch-opentelemetry-demo and a paragraph naming the three additions to the stock 3.0.0 Astronomy Shop — ClickStack observability for every signal, browser session replay, and a native Langfuse-traced AI shopping assistant — and the two ways to run it; (2) a 'What is added' table mapping component to where it lives to what you see; (3) an architecture diagram (browser -> Envoy -> frontend /api/assistant -> agent -> shop services, collector fan-out to ClickStack and Langfuse, same trace id in both); (4) Run on a laptop, including SESSION_REPLAY; (5) Run on EKS — prerequisites, the .env EKS section, the runbook eks init -> eks apply -> build -> publish -> eks deploy (or eks up), the everyday cycle, costs and nightly scale-down, and a link to deploy/eks/README.md for design decisions and recovery; (6) the laptop-vs-EKS configuration table; (7) the existing Use the assistant / Connect ClickStack and Langfuse / Demo walkthrough / Live model / MCP transport / Test and develop (adding eks check and smoke --target eks) / Source and integration notes sections, edited for two targets; (8) a History note that the repo was merged from langfuse-sample-agent-app and ch-otel-demo-eks with planning records under docs/history/. Only cross-links change in deploy/eks/README.md.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Every command shown anywhere in README.md exists in `demo.py --help` (or a subcommand's --help) — verified by extracting the commands and checking each against the parser",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The configuration table's keys match the sections in .env.example exactly, in both directions (no documented key missing from .env.example and no key in .env.example undocumented)",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "No reference remains in README.md, deploy/eks/README.md, docker/README.md or frontend/overlay/README.md to demo.sh, envvars.*, build-frontend, DEMO_REF, langfuse-sample-agent-app or ch-otel-demo-eks, except inside README.md's History note. docs/history/ and .claude/plans/ are historical and planning records and are explicitly exempt",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "README.md contains all eight sections from the outline, with the EKS runbook giving the full first-run sequence and the everyday up/down/tunnel/status/verify cycle",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "deploy/eks/README.md changes only its cross-links; its design/costs/recovery content is not rewritten here"
+        },
+        {
+          "id": "ac7",
+          "text": "The architecture description makes the one-trace-id-in-both-backends claim explicit"
+        }
+      ],
+      "verdicts": []
+    }
+  ],
+  "plan_review_state": {
+    "rounds": [
+      {
+        "round": 1,
+        "started_at": "2026-09-14T11:35:17-04:00",
+        "duration_s": 436,
+        "model_resolved": null,
+        "verdict": "revise",
+        "findings": 6,
+        "applied": 6,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-14T11:45:00-04:00"
+      },
+      {
+        "round": 2,
+        "started_at": "2026-09-14T11:45:29-04:00",
+        "duration_s": 482,
+        "model_resolved": null,
+        "verdict": "revise",
+        "findings": 0,
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "timeout",
+        "recorded_at": "2026-09-14T11:53:44-04:00"
+      }
+    ],
+    "threshold": "medium",
+    "enabled_by": "auto",
+    "stop_reason": "timeout",
+    "summary": "2 rounds; round 1 verdict revise, 6 applied / 0 deferred / 0 rejected; round 2 timed out at 482s, plan unchanged",
+    "last_run_at": "2026-09-14T11:53:44-04:00"
+  },
+  "parallel_plan": {
+    "computed_at": "2026-09-14T11:54:30-04:00",
+    "base_branch": "main",
+    "cycle_base_sha": null,
+    "waves": [
+      {
+        "id": 1,
+        "tasks": [
+          "1"
+        ],
+        "notes": "The launcher split is the pivot every other task imports. Nothing else can safely run first: task 3 was originally authored with depends_on [] and would have colored into this wave, but its worktree would lack launcher/ and the plan verification command runs `ruff check ... launcher`, which exits non-zero on a missing path (Codex pr1, confirmed by running it)."
+      },
+      {
+        "id": 2,
+        "tasks": [
+          "2",
+          "3",
+          "4"
+        ],
+        "notes": "Write-disjoint: task 2 owns launcher/cli.py + launcher/eks/* + .env.example, task 3 owns deploy/eks/** only, task 4 owns frontend/patches/* + compose.native.yaml + launcher/stack.py. The stack.py collision that would have existed here was removed at plan time by moving the EKS-only-key drop from task 2 into task 1 (ac7)."
+      },
+      {
+        "id": 3,
+        "tasks": [
+          "5",
+          "6",
+          "7",
+          "8"
+        ],
+        "notes": "Four independent eks modules filling stubs task 2 declared; one file each plus its own test file. At the concurrency cap of 4."
+      },
+      {
+        "id": 4,
+        "tasks": [
+          "9",
+          "10",
+          "11",
+          "14"
+        ],
+        "notes": "Task 10 is here rather than wave 3 only because wave 3 hit the cap. Task 9 must follow task 5 (it adds ecr_image_digest to aws.py, which task 5 authors) and task 14 must follow tasks 3 and 7 (it renders the static and generated values together). At the cap of 4."
+      },
+      {
+        "id": 5,
+        "tasks": [
+          "12",
+          "13"
+        ],
+        "notes": "Lifecycle needs aws/k8s (5), values (7) and publish (9); smoke --target eks needs the tunnel (6) and the ops query shapes (11). Disjoint files."
+      },
+      {
+        "id": 6,
+        "tasks": [
+          "15"
+        ],
+        "notes": "Documentation last: its critical AC checks every README command against the finished `demo.py --help` tree, so it cannot run before the tree is complete."
+      }
+    ],
+    "predicted_files": {
+      "1": [
+        "scripts/demo.py",
+        "scripts/smoke.py",
+        "launcher/__init__.py",
+        "launcher/core.py",
+        "launcher/upstream.py",
+        "launcher/images.py",
+        "launcher/collector.py",
+        "launcher/stack.py",
+        "launcher/cli.py",
+        "tests/test_build.py",
+        "tests/test_integration_config.py",
+        "tests/compose_yaml.py",
+        "tests/conftest.py",
+        "pyproject.toml"
+      ],
+      "2": [
+        "launcher/cli.py",
+        "launcher/eks/__init__.py",
+        "launcher/eks/config.py",
+        "launcher/eks/aws.py",
+        "launcher/eks/k8s.py",
+        "launcher/eks/values.py",
+        "launcher/eks/tunnel.py",
+        "launcher/eks/infra.py",
+        "launcher/eks/lifecycle.py",
+        "launcher/eks/flags.py",
+        "launcher/eks/ops.py",
+        "launcher/eks/check.py",
+        ".env.example",
+        "tests/conftest.py",
+        "tests/test_cli.py",
+        "tests/test_eks_config.py"
+      ],
+      "3": [
+        "deploy/eks/tofu/ecr.tf",
+        "deploy/eks/tofu/outputs.tf",
+        "deploy/eks/k8s/demo-values.yaml",
+        "deploy/eks/README.md",
+        "deploy/eks/scripts",
+        "deploy/eks/demo.sh",
+        "deploy/eks/envvars.aws.example",
+        "deploy/eks/envvars.clickhouse.example",
+        "deploy/eks/patches/frontend-session-replay.patch"
+      ],
+      "4": [
+        "frontend/patches/0000-package-lint-and-hyperdx.patch",
+        "frontend/patches/0001-app-assistant-provider.patch",
+        "frontend/patches/0006-document-assistant-env.patch",
+        "frontend/patches/0009-frontend-tracer-session-replay.patch",
+        "frontend/patches/0010-package-lock-hyperdx.patch",
+        "frontend/patches/README.md",
+        "tests/test_frontend_overlay.py",
+        "compose.native.yaml",
+        "launcher/stack.py",
+        "tests/test_integration_config.py",
+        "docker/README.md"
+      ],
+      "5": [
+        "launcher/eks/aws.py",
+        "launcher/eks/k8s.py",
+        "tests/test_eks_aws.py",
+        "tests/test_eks_k8s.py"
+      ],
+      "6": [
+        "launcher/eks/tunnel.py",
+        "tests/test_eks_tunnel.py"
+      ],
+      "7": [
+        "launcher/eks/values.py",
+        "tests/test_eks_values.py"
+      ],
+      "8": [
+        "launcher/eks/infra.py",
+        "tests/test_eks_infra.py"
+      ],
+      "9": [
+        "launcher/images.py",
+        "launcher/eks/aws.py",
+        "tests/test_publish.py"
+      ],
+      "10": [
+        "launcher/eks/flags.py",
+        "launcher/stack.py",
+        "tests/test_scenario.py",
+        "tests/test_eks_flags.py"
+      ],
+      "11": [
+        "launcher/eks/ops.py",
+        "tests/test_eks_ops.py"
+      ],
+      "12": [
+        "launcher/eks/lifecycle.py",
+        "tests/test_eks_deploy.py"
+      ],
+      "13": [
+        "scripts/smoke.py",
+        "tests/test_smoke_queries.py"
+      ],
+      "14": [
+        "launcher/eks/check.py",
+        "tests/test_eks_check.py"
+      ],
+      "15": [
+        "README.md",
+        "deploy/eks/README.md",
+        "docker/README.md",
+        "frontend/overlay/README.md",
+        ".env.example"
+      ]
+    },
+    "post_merge_build": []
+  },
+  "managed_run": {
+    "started_at": "2026-09-14T12:11:59-04:00",
+    "go_confirmed_at": "2026-09-14T12:50:50-04:00",
+    "paused_at": null,
+    "pause_reason": "",
+    "resumes": [],
+    "completed_at": null,
+    "auto_decisions": [
+      {
+        "id": "ad1",
+        "timestamp": "2026-09-14T12:50:58-04:00",
+        "phase": "4.7b",
+        "decision": "go gate confirmed: full managed contract including pre-flight step 3 (public repo creation + origin repoint)",
+        "reason": "user selected 'Run managed (recommended)' from the four-option go gate"
+      },
+      {
+        "id": "ad2",
+        "timestamp": "2026-09-14T12:50:59-04:00",
+        "phase": "pre-flight",
+        "decision": "commit signing disabled per-worktree and per-merge (plan.signing_disabled=true)",
+        "reason": "probe: commit.gpgsign=false, gitsign configured as gpg.x509.program but inactive; stated in the go-gate echo"
+      },
+      {
+        "id": "ad3",
+        "timestamp": "2026-09-14T12:50:59-04:00",
+        "phase": "pre-flight",
+        "decision": "dirty-tree check passed: only the harness's own four plan files were uncommitted, absorbed by pre-flight housekeeping commit",
+        "reason": "no non-plan modifications in the working tree, so the dirty-tree pause condition does not apply"
+      }
+    ]
+  }
+}
