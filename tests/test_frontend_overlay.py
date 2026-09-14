@@ -357,6 +357,21 @@ def test_frontend_wire_limits_mirror_the_agent_contract_fields():
     assert not re.search(r"^const (MESSAGE_MAX_LENGTH|BUDGET_MAX|QUANTITY_MAX|CURRENCY_CODE|PRODUCT_ID|TRACE_ID) =", service, flags=re.MULTILINE)
 
 
+def test_composer_ui_cap_stays_within_the_agent_message_limit():
+    """The composer's maxLength is a UI cap on what a shopper types, distinct from the contract's
+    ASSISTANT_MESSAGE_MAX_LENGTH the service enforces on the wire, and never above it. It is not
+    exported, and no overlay file uses the bare MESSAGE_MAX_LENGTH name, so a grep for the message
+    limit finds one governing constant."""
+    composer = (OVERLAY / "components/Assistant/Composer.tsx").read_text()
+    match = re.search(r"^const COMPOSER_MAX_LENGTH = (\d+);$", composer, flags=re.MULTILINE)
+    assert match, "Composer.tsx does not declare a non-exported COMPOSER_MAX_LENGTH"
+    assert int(match.group(1)) <= field_constraint(contract.MessageRequest, "message", "max_length")
+    assert "maxLength={COMPOSER_MAX_LENGTH}" in composer
+    for path in sorted(OVERLAY.rglob("*")):
+        if path.suffix in {".ts", ".tsx"}:
+            assert not re.search(r"\bMESSAGE_MAX_LENGTH\b", path.read_text()), f"{path.relative_to(OVERLAY)} names MESSAGE_MAX_LENGTH"
+
+
 def test_demo_details_render_scenario_prompt_tools_and_links():
     source = (OVERLAY / "components/Assistant/DemoDetails.tsx").read_text()
     for field in ("demo.scenario", "demo.prompt_version", "demo.prompt_source", "demo.tools", "demo.links"):

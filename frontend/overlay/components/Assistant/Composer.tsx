@@ -4,7 +4,8 @@ import { CypressFields } from '../../utils/enums/CypressFields';
 import Input from '../Input';
 import * as S from './AssistantPanel.styled';
 
-export const MESSAGE_MAX_LENGTH = 500;
+// UI cap on one typed message, deliberately below the contract's ASSISTANT_MESSAGE_MAX_LENGTH (types/Assistant.ts).
+const COMPOSER_MAX_LENGTH = 500;
 
 const Composer = () => {
   const { draft, setDraft, sendMessage, pending, resuming, productContext, clearProductContext } = useAssistant();
@@ -42,7 +43,7 @@ const Composer = () => {
           onChange={event => setDraft(event.target.value)}
           disabled={busy}
           autoComplete="off"
-          maxLength={MESSAGE_MAX_LENGTH}
+          maxLength={COMPOSER_MAX_LENGTH}
         />
         <S.PanelButton type="submit" data-cy={CypressFields.AssistantSend} disabled={busy}>
           Send
