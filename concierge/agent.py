@@ -390,11 +390,12 @@ class ConciergeAgent(Agent):
                     state.touched = time.monotonic()
             return self.remember(state, request.request_id, result, key)
 
-    async def assistant_conversation(self, conversation_id: UUID):
-        state = self.conversation(conversation_id)
+    async def assistant_conversation(self, conversation_id: UUID, shop_session_id: UUID):
+        # The caller names its own session (a required query parameter); the bound one is never
+        # returned, so a leaked conversation id alone does not yield the storefront cart key.
+        state = self.owned_conversation(conversation_id, shop_session_id)
         return ConversationStatus(
             conversation_id=str(conversation_id),
-            shop_session_id=state.shop_session_id,
             turns=state.turns,
             currency_code=state.currency_code,
             expires_at=state.expires_at(),

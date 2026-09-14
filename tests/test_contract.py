@@ -422,11 +422,11 @@ async def test_conversation_status_and_expiry(agent, client):
         )
     ).json()
     conversation_id = body["conversation_id"]
-    status = await client.get(f"/assistant/conversations/{conversation_id}")
+    owner = {"shop_session_id": shop_session}
+    status = await client.get(f"/assistant/conversations/{conversation_id}", params=owner)
     assert status.status_code == 200
     assert status.json() == {
         "conversation_id": conversation_id,
-        "shop_session_id": shop_session,
         "turns": 1,
         "currency_code": "EUR",
         "expires_at": status.json()["expires_at"],
@@ -434,8 +434,8 @@ async def test_conversation_status_and_expiry(agent, client):
     expires_at = datetime.fromisoformat(status.json()["expires_at"])
     assert expires_at.tzinfo is not None
     assert 3500 < (expires_at - datetime.now(UTC)).total_seconds() <= 3600
-    assert (await client.get(f"/assistant/conversations/{uuid4()}")).status_code == 404
-    assert (await client.get("/assistant/conversations/not-a-uuid")).status_code == 422
+    assert (await client.get(f"/assistant/conversations/{uuid4()}", params=owner)).status_code == 404
+    assert (await client.get("/assistant/conversations/not-a-uuid", params=owner)).status_code == 422
     with pytest.raises(HTTPException) as wrong:
         await agent.feedback(
             FeedbackRequest(session_id=conversation_id, trace_id="0" * 32, value=1)
@@ -446,11 +446,37 @@ async def test_conversation_status_and_expiry(agent, client):
     )
     assert unconfigured.status_code == 503
     agent.sessions[conversation_id].touched -= 3601
-    expired = await client.get(f"/assistant/conversations/{conversation_id}")
+    expired = await client.get(f"/assistant/conversations/{conversation_id}", params=owner)
     assert expired.status_code == 404
     assert conversation_id not in agent.sessions
     stale = message(shop_session, conversation_id, "Show my cart")
     assert (await client.post("/assistant/message", json=stale)).status_code == 404
+
+
+async def test_conversation_status_is_answered_only_to_the_owning_shop_session(agent, client):
+    shop_session = str(uuid4())
+    first = (await client.post("/assistant/message", json=message(shop_session))).json()
+    conversation_id = first["conversation_id"]
+    state = agent.sessions[conversation_id]
+    route = f"/assistant/conversations/{conversation_id}"
+    # The owner learns the conversation is alive, and nothing it did not already know.
+    owned = await client.get(route, params={"shop_session_id": shop_session})
+    assert owned.status_code == 200, owned.text
+    assert "shop_session_id" not in owned.json()
+    assert owned.json()["conversation_id"] == conversation_id
+    # Knowing a conversation id alone yields neither the bound cart id nor the conversation.
+    foreign = await client.get(route, params={"shop_session_id": str(uuid4())})
+    assert "storefront session" in conflict(foreign, "foreign")
+    assert shop_session not in foreign.text
+    assert (await client.get(route)).status_code == 422
+    assert (await client.get(route, params={"shop_session_id": "not-a-uuid"})).status_code == 422
+    # Asking is not a turn and does not keep the conversation alive.
+    assert state.turns == 1
+    # An unknown conversation is still 404 for every caller: the expired path is unchanged.
+    unknown = await client.get(
+        f"/assistant/conversations/{uuid4()}", params={"shop_session_id": str(uuid4())}
+    )
+    assert unknown.status_code == 404
 
 
 async def test_currency_flows_into_prompt_reply_and_budget_score(agent, client, spans):
