@@ -63,6 +63,14 @@ components:
   # The demo's Gradio chat client: a second, separate assistant with no session,
   # no Langfuse prompt and no storefront context. Replaced by the Assistant
   # panel in our frontend image, and unreachable through our front proxy.
+  #
+  # The rendered front proxy still carries CHATBOT_HOST / CHATBOT_PORT. The
+  # chart lists them unconditionally and `envOverrides` merges by name, so a
+  # values file can change an entry but never remove one; dropping them would
+  # mean restating the chart's whole front-proxy `env` list here and re-pinning
+  # it on every chart bump. They are inert: our proxy image has no chatbot
+  # route to substitute them into. The four disabled backends above leave the
+  # same residue (JAEGER_HOST, GRAFANA_HOST, ...) for the same reason.
   chatbot:
     enabled: false
 

@@ -121,7 +121,7 @@ variable "scale_down_timezone" {
 }
 
 variable "nightly_scale_down_enabled" {
-  description = "Whether the nightly scale-to-zero schedule is ENABLED. `./demo.sh nightly off` toggles it at run time without a tofu apply."
+  description = "Whether the nightly scale-to-zero schedule is ENABLED. `demo.py eks nightly off` toggles it at run time without a tofu apply."
   type        = bool
   default     = true
 }
