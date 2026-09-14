@@ -29,6 +29,18 @@ def session_replay(values):
     return bool(values.get("CLICKSTACK_OTLP_ENDPOINT"))
 
 
+def replay_flag(values):
+    """PUBLIC_HYPERDX_ENABLED as the frontend server reads it, for either target.
+
+    Both targets hand the frontend the same variable -- Compose from `environment()` below, EKS
+    from the generated Helm values (`launcher.eks.values.frontend_env`) -- so the rendering
+    lives here beside the decision rather than once per target. Off is empty rather than
+    `"false"` because the browser's test is `NEXT_PUBLIC_HYPERDX_ENABLED === 'true'`, and an
+    empty value is also what the Compose default renders for an unset key.
+    """
+    return "true" if session_replay(values) else ""
+
+
 # Keys only the EKS target consumes. They are dropped before the environment reaches
 # `docker compose`, which has no reader for them: CLICKHOUSE_PASSWORD and OTLP_AUTH_TOKEN
 # would otherwise sit in the environment of every container in the laptop stack.
@@ -71,9 +83,9 @@ def environment():
             "AGENT_PORT": "8010",
             "CHATBOT_PORT": "7860",
             "MCP_PORT": "8011",
-            # Read by the frontend server and handed to the browser as window.ENV; empty rather
-            # than "false" so the browser's strict `=== 'true'` test reads it as unset.
-            "PUBLIC_HYPERDX_ENABLED": "true" if session_replay(values) else "",
+            # Read by the frontend server and handed to the browser as window.ENV (see
+            # replay_flag for why off is empty rather than "false").
+            "PUBLIC_HYPERDX_ENABLED": replay_flag(values),
         }
     )
     built = (images.read_manifest() or {}).get("images", {})

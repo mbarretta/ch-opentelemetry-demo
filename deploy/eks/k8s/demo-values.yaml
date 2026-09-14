@@ -5,8 +5,9 @@
 # file needs no placeholders and no sed step:
 #   * `.runtime/eks/values.generated.yaml`, written by `demo.py eks deploy` from
 #     the root `.env` and the build manifest: the four ECR image repositories and
-#     tags, the agent's model and Langfuse settings, and the collector's Langfuse
-#     pipeline. `helm upgrade` gets both files, this one first.
+#     tags, the agent's model and Langfuse settings, the frontend's demo-details
+#     and session-replay switches, and the collector's Langfuse pipeline.
+#     `helm upgrade` gets both files, this one first.
 #   * Kubernetes Secrets, read at run time: `clickstack-otlp-token` for the
 #     collector, `langfuse-credentials` and `llm-credentials` for the agent.
 #
@@ -81,17 +82,18 @@ components:
     # never changes meaning, so a node that already has it has the right bytes.
     imageOverride:
       pullPolicy: IfNotPresent
-    # PUBLIC_HYPERDX_ENABLED only *activates* SDK code that must already be in
-    # the bundle -- hence the custom image. PUBLIC_HYPERDX_URL is intentionally
-    # absent: the SDK falls back to window.location.origin + /otlp-http, which
-    # is the same-origin path through the port-forward to the gateway collector.
+    # PUBLIC_HYPERDX_URL is intentionally absent: the SDK falls back to
+    # window.location.origin + /otlp-http, which is the same-origin path through
+    # the port-forward to the gateway collector.
     # AGENT_BASE_URL is server-side only (the Next.js /api/assistant routes call
     # the agent with it); no agent or model address reaches the browser bundle.
     # ASSISTANT_DEMO_DETAILS is optional prose and comes from .env via
-    # values.generated.yaml.
+    # values.generated.yaml, and so does PUBLIC_HYPERDX_ENABLED -- the session
+    # replay switch, derived from SESSION_REPLAY per deployment rather than set
+    # here, where it recorded every session whatever .env asked for. It only
+    # *activates* SDK code that must already be in the bundle -- hence the
+    # custom image; turning it off does not need a rebuild.
     envOverrides:
-      - name: PUBLIC_HYPERDX_ENABLED
-        value: "true"
       - name: AGENT_BASE_URL
         value: http://agent:8010
       - name: ASSISTANT_TRANSPORT

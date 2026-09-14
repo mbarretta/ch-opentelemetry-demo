@@ -68,7 +68,8 @@ COLLECTOR_POD = "otel-collector"
 # A zero here is the one count that routinely means nothing is wrong, so it says so itself.
 REPLAY_NOTE = (
     "zero is information, not a failure: session replay is recorded by the browser, so it "
-    "counts only once somebody has visited the storefront through the tunnel."
+    "counts only once somebody has visited the storefront through the tunnel -- and only when "
+    "the deployment has the recorder on (SESSION_REPLAY in .env)."
 )
 # What `eks status` reports about the nightly scale-down; `infra.nightly` prints the same three
 # fields after it flips the state.

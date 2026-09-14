@@ -9,7 +9,7 @@ the credentials, while the pipeline that carries the filtered spans stays valid 
 import pytest
 import yaml
 
-from launcher import collector, core
+from launcher import collector, core, stack
 from launcher.eks import config, values
 
 # A fully filled-in `.env`: the values the generated document is allowed to render plus the
@@ -70,6 +70,9 @@ CHART_PROCESSORS = (
     "batch",
 )
 CHART_EXPORTERS = ("debug",)
+
+# The frontend's session-replay switch: the runtime half of the SDK compiled into its image.
+REPLAY_KEY = "PUBLIC_HYPERDX_ENABLED"
 
 
 def collector_config(document):
@@ -232,6 +235,79 @@ def test_the_agent_and_frontend_env_come_from_the_parsed_dotenv(configured):
     }
     for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "API_KEY"):
         assert agent[key].get("value") is None, f"{key} is a secretKeyRef, never a value"
+
+
+def replay_override(**env):
+    """The frontend's session-replay switch in the generated document, for a `.env` fragment.
+
+    Indexed rather than fetched with a default: the entry has to be emitted on every deploy,
+    off included, because `eks check` asserts every generated name reaches the rendered
+    workload and because a name Helm never sees is a name `helm upgrade` cannot change back.
+    """
+    document = values.eks_values({**FULL_ENV, **env}, PUBLISHED, LANGFUSE)
+    return overrides(document, "frontend")[REPLAY_KEY]["value"]
+
+
+def test_session_replay_reaches_the_cluster_in_every_mode():
+    """The switch the operator actually sets, which this target used to ignore.
+
+    `PUBLIC_HYPERDX_ENABLED: "true"` in the static values recorded every session of every
+    deployment whatever `.env` said, so `SESSION_REPLAY=false` was inert here while it worked
+    on the laptop. Off renders empty rather than `"false"` because the browser's test is
+    `NEXT_PUBLIC_HYPERDX_ENABLED === 'true'` -- the same string the laptop renders.
+    """
+    assert replay_override(SESSION_REPLAY="true") == "true"
+    assert replay_override(SESSION_REPLAY="false") == "", "the case that was broken"
+    assert replay_override(SESSION_REPLAY="auto") == "true", (
+        "auto records whenever ClickStack is configured, which this target always is"
+    )
+    assert replay_override() == "true", "an unset SESSION_REPLAY is auto"
+    # Whatever the spelling, off has to be a value the browser does not read as 'true'.
+    assert replay_override(SESSION_REPLAY=" Off ") != "true"
+
+
+def test_the_replay_switch_is_generated_rather_than_hardcoded():
+    """Deploy-time, from `.env`: in the static file it was a decision nobody could revisit."""
+    static = {entry["name"] for entry in static_values()["components"]["frontend"]["envOverrides"]}
+
+    assert REPLAY_KEY not in static, f"{REPLAY_KEY} is generated per deploy, not committed"
+    assert REPLAY_KEY in values.FRONTEND_ENV_KEYS
+
+
+def test_the_two_targets_share_one_session_replay_derivation():
+    """One helper, so `auto`, `true`, `false` and a typo cannot mean two different things.
+
+    A forked derivation is how the switch came to be inert on this target in the first place,
+    so the test is that `launcher.stack`'s is the one in the path: its rendering for the same
+    `.env`, and its refusal of a mode it cannot read. The one per-target input is where
+    ClickStack is, which `auto` asks about.
+    """
+    where_clickstack_is = {"CLICKSTACK_OTLP_ENDPOINT": values.clickstack_endpoint(static_values())}
+    for mode in ("true", "false", "auto", "YES", "0"):
+        assert replay_override(SESSION_REPLAY=mode) == stack.replay_flag(
+            {"SESSION_REPLAY": mode, **where_clickstack_is}
+        ), mode
+
+    with pytest.raises(SystemExit, match="SESSION_REPLAY must be auto, true, or false"):
+        replay_override(SESSION_REPLAY="sometimes")
+
+
+def test_auto_follows_the_clickstack_exporter_the_release_has(monkeypatch):
+    """What `auto` reads on this target: not a key in `.env`, but the hop replay events take.
+
+    The laptop's `auto` asks whether the collector exports to ClickStack (its
+    CLICKSTACK_OTLP_ENDPOINT); here the same question is the static values' `otlphttp/clickstack`
+    exporter, which is what carries a recorded session to ClickHouse.
+    """
+    static = static_values()
+    assert values.clickstack_endpoint(static).startswith("http://clickstack-otel-collector")
+    assert values.clickstack_endpoint({}) == "", "no exporter, nowhere for a replay to land"
+
+    del static["opentelemetry-collector"]["config"]["exporters"][values.CLICKSTACK_EXPORTER]
+    monkeypatch.setattr(values, "static_values", lambda: static)
+
+    assert replay_override(SESSION_REPLAY="auto") == ""
+    assert replay_override(SESSION_REPLAY="true") == "true", "true is the operator's own call"
 
 
 def test_a_silent_dotenv_falls_back_to_the_defaults_the_laptop_uses():
