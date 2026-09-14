@@ -1,6 +1,6 @@
 """The Compose stack: its environment, the generated configuration, and the demo scenarios."""
 
-import base64
+import copy
 import json
 import os
 import re
@@ -81,10 +81,15 @@ def environment():
             built[service]["image"] if service in built else images.image_name(service, "unbuilt")
         )
     if values.get("LANGFUSE_PUBLIC_KEY") and values.get("LANGFUSE_SECRET_KEY"):
-        encoded = base64.b64encode(
-            f"{values['LANGFUSE_PUBLIC_KEY']}:{values['LANGFUSE_SECRET_KEY']}".encode()
-        ).decode()
-        values["LANGFUSE_AUTH_HEADER"] = "Basic " + encoded
+        # Imported here rather than at module level: `launcher.eks` pulls in the whole EKS
+        # target, and the laptop path has no business loading it to encode one header. The
+        # header itself is defined once, in eks.config, because a trace that authenticates on
+        # one target and not the other lands in one place and is a bug nobody sees for a day.
+        from .eks import config as eks_config
+
+        values["LANGFUSE_AUTH_HEADER"] = eks_config.langfuse_auth_header(
+            values["LANGFUSE_PUBLIC_KEY"], values["LANGFUSE_SECRET_KEY"]
+        )
     return {
         key: str(value)
         for key, value in values.items()
@@ -140,19 +145,82 @@ def compose(env, args, dev=False, debug_chatbot=False, **kwargs):
     )
 
 
+# The fault scenario is one flag and one value. `targeting.if` is a JsonLogic if/then/else, so
+# index 1 is the variant served for the product the fault is aimed at and index 2 the variant
+# served for every other product. `defaultVariant` decides nothing here, because the targeting
+# rule always yields a variant -- which is why the retired `flag.sh`, whose only edit was to
+# `defaultVariant`, could never switch this flag, and why the EKS scenario writer goes through
+# the transform below instead of the generic `eks flag` setter.
+FAULT_FLAG = "productCatalogFailure"
+FAULT_SCENARIO = "backend-failure"
+
+
+def fault_enabled(name):
+    """Whether a scenario name means the product-catalog fault is serving errors."""
+    return name == FAULT_SCENARIO
+
+
+def _fault_branch(document):
+    """`productCatalogFailure`'s `targeting.if` list inside a flagd document, validated.
+
+    Validated rather than indexed blind: this runs against a file a chart bump or a hand edit
+    could have reshaped, and a scenario that silently did nothing is the worst thing that can
+    happen halfway through a walkthrough. Returned as the live list, so the caller writing to
+    it writes into `document`.
+    """
+    try:
+        branch = document["flags"][FAULT_FLAG]["targeting"]["if"]
+    except (KeyError, TypeError):
+        core.die(f"the flagd configuration has no {FAULT_FLAG} targeting rule")
+    if not isinstance(branch, list) or len(branch) != 3:
+        core.die(f"{FAULT_FLAG}'s targeting.if is not an if/then/else: {branch!r}")
+    return branch
+
+
+def fault_variant(document):
+    """The variant `productCatalogFailure` serves for the product the fault is aimed at.
+
+    What a scenario actually sets, so the EKS writer can read the file back and check the same
+    value this module wrote rather than a value of its own devising.
+    """
+    return _fault_branch(document)[1]
+
+
+def scenario_flags(document, name):
+    """A flagd document with the catalog fault set for the scenario `name`.
+
+    The whole of what a scenario means, as a pure function: the local writer below and
+    `eks.flags.scenario_write_eks()` both call it, so `backend-failure` cannot come to mean one
+    thing on the laptop and another on the cluster. `document` is left exactly as it was given,
+    and nothing but `targeting.if[1]` differs in the result.
+    """
+    updated = copy.deepcopy(document)
+    _fault_branch(updated)[1] = "on" if fault_enabled(name) else "off"
+    return updated
+
+
+def scenario_summary(name):
+    """The line both writers print once the scenario has landed."""
+    state = "enabled" if fault_enabled(name) else "disabled"
+    return f"Catalog fault {state}. Choose '{name}' in the chat UI."
+
+
+def flagd_file():
+    """The laptop's flagd configuration: the copy the Compose stack mounts into flagd."""
+    return core.RUNTIME / "flagd/demo.flagd.json"
+
+
 def scenario(name):
-    path = core.RUNTIME / "flagd/demo.flagd.json"
-    config = json.loads(path.read_text())
-    flag = config["flags"]["productCatalogFailure"]
-    flag["state"] = "ENABLED"
-    flag["defaultVariant"] = "off"
-    flag["targeting"]["if"][1] = "on" if name == "backend-failure" else "off"
+    """Apply a scenario to the laptop's flagd file: read, transform, write through a rename."""
+    path = flagd_file()
+    updated = scenario_flags(json.loads(path.read_text()), name)
     temp = path.with_suffix(".tmp")
-    temp.write_text(json.dumps(config, indent=2) + "\n")
+    temp.write_text(json.dumps(updated, indent=2) + "\n")
+    # The rename is the point: flagd fsnotify-watches this file, and an inode swap arrives as
+    # one event instead of a truncate followed by a series of appends. The EKS writer performs
+    # the same swap inside the container with `mv` (see k8s.exec_write).
     temp.replace(path)
-    print(
-        f"Catalog fault {'enabled' if name == 'backend-failure' else 'disabled'}. Choose '{name}' in the chat UI."
-    )
+    print(scenario_summary(name))
 
 
 async def seed_prompts():
