@@ -4,7 +4,7 @@
   "kind": "feature",
   "mode": "dev",
   "created": "2026-09-11",
-  "status": "planned",
+  "status": "complete",
   "context": "Implements NATIVE_AGENT_UI_PLAN.md (September 11, 2026): replace the Gradio chat with a native React assistant panel inside the OpenTelemetry Demo 3.0.0 storefront (Next.js Pages Router, styled-components, React Query), bind conversations to the shopper's existing cart/session, return structured product and cart results, share currency, keep one correlated OTel trace from browser to agent to shop with a Langfuse filter that retains the full ancestor chain, and ship locally buildable images (frontend, agent, MCP, proxy) selected by a native Compose override. Upstream source under .upstream/ stays unmodified: new frontend files live in frontend/overlay/, edits to upstream files are checked patches applied at stage time into .runtime/build/. Authored managed-ready: every task runs in a fresh git worktree, so task 1 makes worktrees self-bootstrapping (symlinked .upstream/.venv/.env from the main checkout) and the verification command begins with that setup. Only wave 2 is parallel; every later task needs the single Docker stack on port 8080 (compose project astronomy-concierge), which serializes them. EKS/registry publishing, token streaming, and session replay are out of scope per the source document. Pre-dispatch prerequisite: the repo has zero commits; an initial commit of the current tree must land on main before the go gate (pre-flight requires a clean tree).",
   "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
   "constraints": [
@@ -16,7 +16,7 @@
   ],
   "parallelism": "auto",
   "wave_execution": "runner",
-  "autonomy": "interactive",
+  "autonomy": "managed",
   "security_audit": "auto",
   "quality_review": "auto",
   "plan_review": "auto",
@@ -27,7 +27,7 @@
     {
       "id": "1",
       "title": "Worktree-portable dev setup and frontend overlay build path",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [],
       "files": [
         "scripts/dev-setup.sh",
@@ -75,12 +75,49 @@
           "text": "The plan's verification command passes when run from a fresh linked worktree of this repository (dev-setup, ruff, pytest, check-frontend)."
         }
       ],
-      "notes": "Layout decision: frontend/overlay/<path relative to src/frontend/> for new files; frontend/patches/NNNN-<topic>.patch (generated with `git -C .runtime/build diff -- src/frontend`) for edits to upstream files. .runtime/build must be a real copy so the released Dockerfiles' `COPY ./src/frontend/...` contexts resolve. Baseline verification fails before this task exists (scripts/dev-setup.sh is missing); record that in the HANDOFF rather than reporting blocked. Docker image builds of the Next.js frontend take several minutes; run them in the background and poll. Do not modify .upstream/; bootstrap() refuses a dirty upstream checkout."
+      "notes": "Layout decision: frontend/overlay/<path relative to src/frontend/> for new files; frontend/patches/NNNN-<topic>.patch (generated with `git -C .runtime/build diff -- src/frontend`) for edits to upstream files. .runtime/build must be a real copy so the released Dockerfiles' `COPY ./src/frontend/...` contexts resolve. Baseline verification fails before this task exists (scripts/dev-setup.sh is missing); record that in the HANDOFF rather than reporting blocked. Docker image builds of the Next.js frontend take several minutes; run them in the background and poll. Do not modify .upstream/; bootstrap() refuses a dirty upstream checkout.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit — stage skips frontend/overlay/README.md rather than copying literally overlay/**; documented and sensible, but a deviation from the AC text.",
+            "ac6: nit — the staged-tree rule is **/.env, so upstream committed .env.override (comment-only template) enters the frontend build context; **/.env.* would match the root ruleset intent.",
+            "ac1: nit — a second dev-setup.sh run rewrites .runtime/tools.py (identical, gitignored) via bootstrap, so its mtime changes while git status stays clean.",
+            "quality: npm run lint emits one warning on upstream utils/telemetry/SessionIdProcessor.ts (unused eslint-disable directive); cosmetic, exit code unaffected.",
+            "tdd: single commit with tests and code together (informational).",
+            "evaluator side effect: demo.py build rerun re-tagged astronomy-concierge-frontend:5c9aff5dda6d to a new identical-content image id; running container image now dangling until next demo.py up."
+          ],
+          "notes": "Verification green in the task worktree and in a fresh scratch linked worktree. All seven ACs actively probed: fresh-clone dev-setup on both branches twice, type/lint failure injection against check-frontend, staged Dockerfile identity, a real build run with manifest inspection, demo.py config/up error path, 10 product cards counted via headless Chrome (Playwright MCP unavailable), Docker COPY-probe context listings. Constraints checked by grepping extracted .next/static, upstream porcelain status, and the diff. Test surface additive only.",
+          "timestamp": "2026-09-11T16:43:59-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 5,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-11T16:44:00-04:00"
+      },
+      "drift": {
+        "predicted": 9,
+        "touched": 12,
+        "unpredicted": 3,
+        "ratio": 0.25,
+        "recorded_at": "2026-09-11T16:44:00-04:00"
+      }
     },
     {
       "id": "2",
       "title": "Agent conversation contract v2: bound cart, structured results, currency, dedupe",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "1"
       ],
@@ -137,12 +174,50 @@
           "text": "Conversation lifetime (1 h idle, 20 turns, in-memory, lost on agent restart) and the fact that a restart makes an in-flight mutation's outcome uncertain are documented in concierge/contract.py's module docstring and surface as the 404 in ac6."
         }
       ],
-      "notes": "Keep subclassing the released Agent base class and register the new routes on self.app. Pydantic models stay strict (UUID types; shop_session_id is the storefront SessionGateway userId, a uuid v4 string). Add no dependencies. The shop's /api/products and /api/cart accept a currencyCode query parameter and return Money with the converted currencyCode. Mirror contract_version as a constant the frontend types will copy (task 3). This task edits scripts/demo.py only in bootstrap()'s tools patch; task 1 owns stage/build in the same file and lands first."
+      "notes": "Keep subclassing the released Agent base class and register the new routes on self.app. Pydantic models stay strict (UUID types; shop_session_id is the storefront SessionGateway userId, a uuid v4 string). Add no dependencies. The shop's /api/products and /api/cart accept a currencyCode query parameter and return Money with the converted currencyCode. Mirror contract_version as a constant the frontend types will copy (task 3). This task edits scripts/demo.py only in bootstrap()'s tools patch; task 1 owns stage/build in the same file and lands first.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: nit — AC says extend test_cart_identity_not_in_model_schema; that test is unchanged and the coverage landed as a new test (test_cart_identity_and_currency_are_injected_on_every_tool in tests/test_contract.py) checking every tool for user_id and currency_code absence and asserting injected values. Intent met, letter not.",
+            "ac3: MCP-path injection verified statically only (scoped wrappers front Agent.get_tool_list); no MCP server in this sandbox.",
+            "ac8: live scripts/smoke.py run SKIPPED — the port-8080/8010 Docker stack is owned by task 3 and runs base code; compatibility verified statically (smoke reads reply/tools/scores/trace_id/session_id, all present).",
+            "ac2: informational — DemoDetails carries an extra scenario field beyond the AC list; additive.",
+            "no_test_weakening: informational — evaluation-span input key rename also renamed trace metadata attribute langfuse.trace.metadata.budget_usd to .budget; telemetry only.",
+            "quality: nit — assistant_add_to_cart extends state.messages before await self.langfuse.prompt(); if the prompt fetch raises, history grows without the turn counted or a reply stored.",
+            "tdd: single commit with tests and code together (informational)."
+          ],
+          "notes": "Verification green in the task worktree (ruff clean, 49 passed, check-frontend ok). All five critical ACs verified by tests plus an in-process httpx/ASGI probe confirming 409 on repeat-while-in-flight, exact stored-response replay with a single add_to_cart invocation, and a legacy /prompt key set identical to base. Constraints: no frontend/compose/docker files in the diff; .upstream porcelain empty; cart identity injected by scoped_tools and absent from every model-visible schema. Test surface: +1 file, 0 deletions, 0 skips; the two test_agent.py edits are a fixture signature adaptation and a same-value key rename with an added assertion, not a weakening.",
+          "timestamp": "2026-09-11T17:03:09-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 5,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-11T17:03:10-04:00"
+      },
+      "drift": {
+        "predicted": 7,
+        "touched": 7,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-11T17:03:10-04:00"
+      }
     },
     {
       "id": "3",
       "title": "Native assistant shell with fixtures on real storefront pages",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "1"
       ],
@@ -208,12 +283,50 @@
           "text": "CypressFields gains data-cy hooks for the trigger, panel, composer, send, message, product card, suggestion, and close control; frontend/patches contains one patch per modified upstream file and `demo.py stage` applies them cleanly."
         }
       ],
-      "notes": "Upstream references: styles/Theme.ts (tokens), components/Header/Header.tsx and Header.styled.ts (Controls flex row, 768 px breakpoint), components/Layout/Layout.tsx, pages/_app.tsx (provider tree), pages/_document.tsx (window.ENV injection; add ASSISTANT_* keys there), pages/product/[productId]/index.tsx, components/ProductCard and ProductPrice, components/Button. The Gradio UI's examples live in concierge/chatbot.py for copy. Build with `demo.py build --service frontend` then `demo.py up` to review at 8080; only this task and task 2 share the wave and task 2 never touches the Docker stack."
+      "notes": "Upstream references: styles/Theme.ts (tokens), components/Header/Header.tsx and Header.styled.ts (Controls flex row, 768 px breakpoint), components/Layout/Layout.tsx, pages/_app.tsx (provider tree), pages/_document.tsx (window.ENV injection; add ASSISTANT_* keys there), pages/product/[productId]/index.tsx, components/ProductCard and ProductPrice, components/Button. The Gradio UI's examples live in concierge/chatbot.py for copy. Build with `demo.py build --service frontend` then `demo.py up` to review at 8080; only this task and task 2 share the wave and task 2 never touches the Docker stack.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: nit — the AC lists colors.textLightGray among the tokens to reference; nothing in frontend/overlay/ uses it (all other listed tokens are used; no hex literal duplicates a Theme color). Letter deviation only.",
+            "ac5: nit — composer is cleared at send (setDraft(\"\") in Assistant.provider.tsx), so after an error the draft is empty; the sent text survives as the user transcript entry and Retry re-runs it with the same request_id. Intent met, literal composer text not retained.",
+            "ac2: informational — at 767 px the upstream 280x90 logo overhangs the 80 px nav by ~5 px (upstream Header.styled behavior, unchanged by patch 0007); cart fully visible.",
+            "ac6: informational — the budget number input sits between suggestions and composer in Tab order; one more stop, consistent with the AC sequence.",
+            "quality: nit — the fixture addToCart path invalidates React Query [cart] although fixtures change no real cart; harmless refetch, same code path task 6 needs live.",
+            "evaluator: no Playwright MCP tools in this sandbox; UI ACs verified with own headless-Chrome playwright-core scripts against http://localhost:8080.",
+            "tdd: single commit with tests and code together (informational)."
+          ],
+          "notes": "Verification green in the task worktree. Running frontend image confirmed built from HEAD inputs (content tag 9be3134f131e). Every AC actively probed in a real browser at 1440/1024/768/767/390 px: layout, no horizontal scroll, header visibility, focus movement, Tab order, focus trap, Escape/focus return, live region, contrast (min 5.72:1), empty state, all fixture states including error/retry and demo-details off, product-context chip, transcript persistence across home/product/cart and close/reopen; static checks covered contract version, patches (one per upstream file, staging clean), and Cypress hooks. All five constraints checked by bundle extraction, upstream porcelain, compose config, and diff greps. Test surface additive only.",
+          "timestamp": "2026-09-11T17:29:30-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 5,
+        "deferred": 0,
+        "rejected": 1,
+        "recorded_at": "2026-09-11T17:29:30-04:00"
+      },
+      "drift": {
+        "predicted": 20,
+        "touched": 24,
+        "unpredicted": 4,
+        "ratio": 0.17,
+        "recorded_at": "2026-09-11T17:29:31-04:00"
+      }
     },
     {
       "id": "4",
       "title": "Complete native image set, build manifest, and default native stack",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "1",
         "2",
@@ -271,12 +384,48 @@
           "text": "`demo.py up` without built images names each missing image and the build command, exiting non-zero before invoking compose."
         }
       ],
-      "notes": "Resolve digests with `docker buildx imagetools inspect ghcr.io/open-telemetry/demo:3.0.0-agent` (and -mcp, -frontend-proxy). The released envoy.tmpl.yaml is rendered with envsubst at container start; copy it into docker/ and edit, keeping ${VAR} placeholders. compose.agent.yaml (upstream) adds frontend-proxy.depends_on.chatbot; use `!reset` in the override. The existing compose.concierge.yaml mounts become compose.dev.yaml; keep the collector, flagd, and proxy port overrides in compose.concierge.yaml. Only this task runs in its wave; nothing else touches the Docker stack concurrently."
+      "notes": "Resolve digests with `docker buildx imagetools inspect ghcr.io/open-telemetry/demo:3.0.0-agent` (and -mcp, -frontend-proxy). The released envoy.tmpl.yaml is rendered with envsubst at container start; copy it into docker/ and edit, keeping ${VAR} placeholders. compose.agent.yaml (upstream) adds frontend-proxy.depends_on.chatbot; use `!reset` in the override. The existing compose.concierge.yaml mounts become compose.dev.yaml; keep the collector, flagd, and proxy port overrides in compose.concierge.yaml. Only this task runs in its wave; nothing else touches the Docker stack concurrently.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac4: nit — logs, restart, down and every non-up lifecycle command always pass --profile debug, so demo.py config/ps output differs from up default service set only by the flag; documented in a comment.",
+            "ac1: nit — docker/mcp.Dockerfile copies prompts/ into the mcp image although the MCP server never reads prompts; rationale stated in the Dockerfile comment (package layout parity).",
+            "quality: npm run lint still emits the pre-existing upstream SessionIdProcessor.ts unused-directive warning (exit unaffected; implementer rejected patching an upstream file for it).",
+            "evaluator side effects: two scripts/smoke.py runs toggled and restored the catalog fault flag; agent container recreated twice (MCP_ENABLED toggle), dropping in-memory conversations; stack left at tools_transport: http.",
+            "tdd: single commit with tests and code together (informational)."
+          ],
+          "notes": "Verification green in the task worktree (ruff clean, 72 passed, check-frontend ok). All five critical and both non-critical ACs verified actively against the running stack built from tag 01a65aee6fa0: baked files, CMDs and PID 1 inside agent/mcp containers, rendered Envoy config in the live proxy, empty Mounts on all four custom containers, compose renderings with and without --dev/--debug-chatbot, smoke passing over HTTP and MCP transports, frontend spans in captured telemetry, require_images error messages. All five constraints checked by grepping extracted .next/static, upstream porcelain at the pinned commit, the diff for concierge/frontend/NEXT_PUBLIC/push changes, and the DEMO_VERSION pin. Test surface additive/strengthening only.",
+          "timestamp": "2026-09-11T17:54:21-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 1,
+        "recorded_at": "2026-09-11T17:54:21-04:00"
+      },
+      "drift": {
+        "predicted": 14,
+        "touched": 14,
+        "unpredicted": 1,
+        "ratio": 0.07,
+        "recorded_at": "2026-09-11T17:54:21-04:00"
+      }
     },
     {
       "id": "5",
       "title": "Connect the storefront panel to the agent through same-origin API routes",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "4"
       ],
@@ -329,12 +478,52 @@
           "text": "Demo details, when ASSISTANT_DEMO_DETAILS is on, shows scenario, prompt version and source, tool names, and trace links from the response demo object; it stays hidden by default."
         }
       ],
-      "notes": "Upstream pages/api/cart.ts shows the handler + InstrumentationMiddleware pattern; the collector's transform/sanitize_spans sets http.route for known frontend API paths by http.target match and will need a /api/assistant statement (task 7 owns collector config). AGENT_BASE_URL is a runtime env of the frontend service in compose.native.yaml (http://agent:8010); it must not be added to next.config.js env{} which would inline it into the client bundle. Add no npm dependencies; hand-written validation is enough for this contract."
+      "notes": "Upstream pages/api/cart.ts shows the handler + InstrumentationMiddleware pattern; the collector's transform/sanitize_spans sets http.route for known frontend API paths by http.target match and will need a /api/assistant statement (task 7 owns collector config). AGENT_BASE_URL is a runtime env of the frontend service in compose.native.yaml (http://agent:8010); it must not be added to next.config.js env{} which would inline it into the client bundle. Add no npm dependencies; hand-written validation is enough for this contract.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac6: letter deviation — the frontend /api/assistant/message HTTP SERVER span is the great-grandparent, not the direct parent, of the undici CLIENT span: Next.js inserts a next.js SERVER span and an executing api route (pages) INTERNAL span between them (same shape as upstream /api/products). The undici client span is the direct parent of the agent /assistant/message server span; no traceparent hand-built; single connected trace confirmed (30 spans).",
+            "ac4: nit — composer draft cleared at send; message survives as user transcript entry and Retry re-posts with the same request_id (verified). Same deviation recorded on task 3.",
+            "ac4: timeout branch (AbortSignal.timeout to 504 timeout) verified by code and test only; 5xx/outage branch probed live (agent stopped to 502 unavailable, storefront still working).",
+            "ac2: ASSISTANT_TRANSPORT=fixtures still selecting fixtures asserted statically (pytest + gateway ternary); not flipped live.",
+            "ac7: hidden-by-default not re-probed live (stack runs ASSISTANT_DEMO_DETAILS=true); gating code unchanged from task 3 where off state was verified. Trace links section renders nothing because scripted agent without Langfuse returns links: {}.",
+            "quality: nit — live POSTs go to /api/assistant/message? (trailing ? from upstream utils/Request.ts); harmless, visible in http.url.",
+            "quality: nit — contract-mismatch errors are non-retryable (no Retry button); AC recoverable still holds.",
+            "evaluator side effects: agent container stopped/started twice (in-memory conversations dropped), one item added to a throwaway browser session cart.",
+            "tdd: single commit with tests and code together (informational)."
+          ],
+          "notes": "Verification green in the task worktree. All three critical ACs verified actively against the running stack (frontend image tag recomputed from HEAD inputs, e8f56ba61e5e): curl-level contract and validation probes of all four routes, a headless-Chrome run covering pending state, recommendation card from product_refs, request-body fields, currency and product-context propagation, contract-mismatch handling, feedback not-saved on the agent Langfuse 503, demo details content, and the agent-stopped outage with Retry reusing request_id. Telemetry shows one connected trace from frontend-proxy through the Next route and undici client to the agent and shop services. Constraints checked by extracting .next/static from the image, inspecting image/container env, diff scope, upstream porcelain, compose config. Test surface additive only.",
+          "timestamp": "2026-09-11T18:31:55-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 6,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-11T18:31:55-04:00"
+      },
+      "drift": {
+        "predicted": 13,
+        "touched": 14,
+        "unpredicted": 4,
+        "ratio": 0.29,
+        "recorded_at": "2026-09-11T18:31:55-04:00"
+      }
     },
     {
       "id": "6",
       "title": "Unify shopping state: shared cart actions, currency, retries, resume",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "5"
       ],
@@ -386,12 +575,47 @@
           "text": "One in-flight turn per conversation is enforced client-side (composer and card actions disabled) and a server 409 renders as a recoverable message rather than an unhandled error."
         }
       ],
-      "notes": "CartProvider (upstream providers/Cart.provider.tsx) queries ['cart', selectedCurrency]; invalidate with queryClient.invalidateQueries({ queryKey: ['cart'] }) from the assistant provider, which sits inside QueryClientProvider. Agent-side changes here are limited to what the UI flow exposes (status endpoint fields, 409 messages, scripted product-context replies); the contract shape itself is task 2's."
+      "notes": "CartProvider (upstream providers/Cart.provider.tsx) queries ['cart', selectedCurrency]; invalidate with queryClient.invalidateQueries({ queryKey: ['cart'] }) from the assistant provider, which sits inside QueryClientProvider. Agent-side changes here are limited to what the UI flow exposes (status endpoint fields, 409 messages, scripted product-context replies); the contract shape itself is task 2's.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1: browser-visible half (header count increments after a single click, [cart] invalidation observed in the DOM) not exercised by the evaluator — no Playwright MCP tools or local browser in its sandbox; server half verified by live probe (one action to +1, dedupe on repeated request_id), client half by code read and source-assertion tests in tests/test_frontend_overlay.py. Implementer own browser suite (playwright-core, 41/41) covered the DOM ACs.",
+            "ac2/ac4/ac7: disabled-while-pending controls, the uncertain box, transcript survival across navigation, and the expired note after an agent restart not rendered in a browser by the evaluator; equivalent server state (404 to code expired) probed and client logic (inFlightRef guard, timeout to setUnresolved + cart invalidate, no setTimeout/setInterval, conflictKind to foreign/expired/exhausted/busy) read and covered by new grep-style tests.",
+            "quality: the six new frontend tests are source-string assertions rather than behavioral tests; matches the repo pattern (no JS test runner in the released image) but would not catch a logic regression preserving the asserted substrings.",
+            "TDD (informational): a single commit carries tests and code together."
+          ],
+          "notes": "Verification green and the test surface strictly additive (+147/-0, no skips, no threshold or config edits; the only patch edit adds three Cypress field enum entries). All seven ACs hold on the parts verifiable without a browser: live curl probes confirmed one-add-per-request, request_id dedupe with cart unchanged, foreign-session 409 plus owner-reporting status route, 404 to expired for unknown conversations, EUR card price equal to catalog EUR price with USD never relabeled, product-context get_product in demo details, typed 409 payloads for turn-limit and in-flight cases. All five constraints checked with named greps/diffs (bundle scan of .next/static, no .upstream paths, model tool args carry no session id, no streaming/animation/replay, DEMO_VERSION and /prompt untouched). Remaining uncertainty confined to DOM-level rendering, listed as unverified rather than failed.",
+          "timestamp": "2026-09-11T19:14:03-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-11T19:14:03-04:00"
+      },
+      "drift": {
+        "predicted": 11,
+        "touched": 17,
+        "unpredicted": 8,
+        "ratio": 0.47,
+        "recorded_at": "2026-09-11T19:14:03-04:00"
+      }
     },
     {
       "id": "7",
       "title": "Observability: browser-to-agent trace, identity mappings, Langfuse filter",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "6"
       ],
@@ -439,12 +663,52 @@
           "text": "No duplicate browser instrumentation: the staged frontend source registers exactly one WebTracerProvider and one fetch instrumentation (grep), and utils/telemetry/FrontendTracer.ts is either unchanged or changed only through a checked patch."
         }
       ],
-      "notes": "Envoy emits a frontend-proxy span per request (envoy.tracers.opentelemetry) that sits between the browser fetch and the Next server span, so the filter must retain frontend-proxy spans for assistant paths too. Filter approach: OTTL span conditions on resource service.name plus attributes[\"http.route\"]/[\"http.target\"]/[\"url.path\"]/[\"http.url\"] containing /api/assistant; the browser fetch span exposes http.url. The agent already stamps gen_ai.conversation.id and langfuse.session.id via ConversationProcessor; the storefront session id arrives as W3C baggage session.id from the frontend's Api.gateway pattern or explicitly from the assistant gateway. A Langfuse instance is not required to pass this task; the preview file is the proof."
+      "notes": "Envoy emits a frontend-proxy span per request (envoy.tracers.opentelemetry) that sits between the browser fetch and the Next server span, so the filter must retain frontend-proxy spans for assistant paths too. Filter approach: OTTL span conditions on resource service.name plus attributes[\"http.route\"]/[\"http.target\"]/[\"url.path\"]/[\"http.url\"] containing /api/assistant; the browser fetch span exposes http.url. The agent already stamps gen_ai.conversation.id and langfuse.session.id via ConversationProcessor; the storefront session id arrives as W3C baggage session.id from the frontend's Api.gateway pattern or explicitly from the assistant gateway. A Langfuse instance is not required to pass this task; the preview file is the proof.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1: ERROR status on failure verified from an existing real-browser assistant.turn span in .runtime/telemetry/langfuse-preview.jsonl (status.code=2) and the catch/setStatus/rethrow/finally-end code path in utils/telemetry/AssistantTracing.ts; outage not re-triggered by evaluator.",
+            "ac2: letter deviation — conversation/session/contract_version attributes land on Next executing api route (pages) /api/assistant/message INTERNAL span (the active span in the handler), not on the HTTP SERVER span that carries http.route; both in the same trace and the preview; smoke asserts the attribute-bearing span.",
+            "ac5: score attachment through /feedback not live-verifiable (no Langfuse credentials); code unchanged from task 5, observation input/output confirmed populated on native concierge.turn spans.",
+            "ac3: informational — preview file holds one stray GET /assistant/conversations/{conversation_id} agent span from before the collector restarted with the HEAD config; current filter drops that route.",
+            "no_test_weakening: informational — tests/test_frontend_overlay.py narrows the bare langfuse browser-source match to address/credential forms because ac1 requires langfuse.session.id on browser spans; net coverage broadened (https?://, NEXT_PUBLIC_, LANGFUSE_* env names, pk-lf-/sk-lf-, LLM_*, openai) with a guard self-test.",
+            "quality: informational — demo.py build --service frontend/proxy left .runtime/images/manifest.json with mixed per-image tags under the shared manifest tag; full demo.py build refreshes.",
+            "quality: Playwright MCP tools unavailable; UI/trace ACs probed with own playwright-core script.",
+            "evaluator side effects: smoke run toggled and restored the catalog fault flag; one browser conversation and one throwaway storefront session created; temporary container created and removed to extract .next/static.",
+            "tdd: single commit with tests and code together (informational)."
+          ],
+          "notes": "Verification green in the task worktree. All four critical ACs actively verified against the running stack (frontend/proxy/collector artifacts confirmed built from HEAD inputs): a real headless-Chrome turn yielded one 32-span trace from browser assistant.turn through proxy, storefront route (http.route set), undici client, agent concierge.turn, tools, and product-catalog, with the preview file retaining the full 18-span ancestor chain (no orphans, one concierge.turn) and dropping shop-side spans; scripts/smoke.py passed live including its native check. Constraints checked by extracting and grepping the built bundle, container env, upstream porcelain at the pin, diff scope, running image tags. Test surface +218/-27 across three files, no deletions or skips, every edited expectation mandated by ac1/ac3 or replaced by a stricter check.",
+          "timestamp": "2026-09-11T19:56:27-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 4,
+        "deferred": 0,
+        "rejected": 1,
+        "recorded_at": "2026-09-11T19:56:27-04:00"
+      },
+      "drift": {
+        "predicted": 11,
+        "touched": 12,
+        "unpredicted": 5,
+        "ratio": 0.42,
+        "recorded_at": "2026-09-11T19:56:27-04:00"
+      }
     },
     {
       "id": "8",
       "title": "Validate the packaged app and document the native run",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "7"
       ],
@@ -494,10 +758,216 @@
           "text": "Accessibility on the final image at 390 px and 1440 px: keyboard open, submit, and close work; the mobile dialog traps focus and returns it to the trigger; the live region announces the pending and completed states (asserted in Cypress or Playwright)."
         }
       ],
-      "notes": "Cypress is a devDependency of the upstream frontend (cypress.config.ts reads FRONTEND_ADDR/FRONTEND_PORT from ../../.env); run it from the staged tree with baseUrl http://localhost:8080. Cypress specs import from ../../utils/Cypress and CypressFields. Keep README edits in the style already used (Google developer style, tables, short sentences)."
+      "notes": "Cypress is a devDependency of the upstream frontend (cypress.config.ts reads FRONTEND_ADDR/FRONTEND_PORT from ../../.env); run it from the staged tree with baseUrl http://localhost:8080. Cypress specs import from ../../utils/Cypress and CypressFields. Keep README edits in the style already used (Google developer style, tables, short sentences).",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: letter deviation — existing Home, ProductDetail, and Checkout specs still pass is 4/7, not 7/7; the same three failures reproduced with identical assertion text against the released ghcr.io/open-telemetry/demo:3.0.0-frontend image, so this is upstream 3.0.0 behavior, not a regression. README states it as such.",
+            "ac1: the observable end state (manifest-only images, empty Mounts, no chatbot, storefront with assistant at 8080, HEAD build_tag == manifest tag) was probed; the from-a-clean-state provenance was not reproduced by the evaluator to avoid tearing down the stack and rests on the README Validated section.",
+            "ac7: nit — focus trap exercised via a dispatched keydown Tab and Enter via the trigger click default, not native key presses (Cypress limitation, documented in the spec comment); Escape and live-region announcements exercised for real.",
+            "ac4: nit — staged frontend context still includes upstream committed comment-only .env.override (pre-existing from task 1; no values).",
+            "quality: informational — the pytest guard for the Cypress spec is a source-string assertion; the behavioral proof is the Cypress run, not part of the verification command.",
+            "evaluator: no Playwright MCP tools; UI ACs verified by running Cypress against the live stack.",
+            "evaluator side effects: pulled ghcr.io/open-telemetry/demo:3.0.0-frontend (left on disk); temporary side container on :18080 created and removed; agent container recreated twice (in-memory conversations dropped); .env restored to MCP_ENABLED=False; smoke runs toggled and restored the catalog flag; Cypress runs created throwaway carts and one order attempt each.",
+            "tdd: single commit with tests, spec, and docs together (informational)."
+          ],
+          "notes": "Verification green in the task worktree (ruff clean, 101 pytest passed, check-frontend ok). All five critical ACs actively verified: Assistant.cy.ts 3/3, both smoke transports passing on tag 28c8a6773491, upstream-spec non-regression proven by a side-by-side run against the released image, build-context listings and image env/history/filesystem/bundle scans clean, manifest complete with HEAD tag match, README and NATIVE_AGENT_UI_PLAN.md updated with accurate claims (arm64 tested, amd64 stated untested). All five constraints checked by named greps and diffs. Test surface strictly additive; the smoke.py change tightens the poll condition without dropping any assertion.",
+          "timestamp": "2026-09-11T20:30:46-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 3,
+        "recorded_at": "2026-09-11T20:30:46-04:00"
+      },
+      "drift": {
+        "predicted": 8,
+        "touched": 8,
+        "unpredicted": 1,
+        "ratio": 0.13,
+        "recorded_at": "2026-09-11T20:30:47-04:00"
+      }
+    },
+    {
+      "id": "sec-sec1",
+      "title": "Enforce conversation ownership on the add-to-cart action route",
+      "status": "complete",
+      "kind": "fix",
+      "origin": "remediation",
+      "depends_on": [],
+      "files": [
+        "concierge/contract.py",
+        "concierge/agent.py",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
+      ],
+      "why": "Security audit finding sec1 (medium access-control): POST /assistant/actions/add-to-cart mutates the cart bound to a conversation without checking the caller is that conversation's storefront session, so anyone holding a leaked conversation_id can add items to another shopper's cart, contradicting plan constraint 3 and task 6 ac3; the /assistant/message path already enforces this check.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "critical": true,
+          "text": "Add shop_session_id: UUID to AddToCartAction in concierge/contract.py, and in assistant_add_to_cart raise the same 409 as assistant_message when state.shop_session_id != str(request.shop_session_id) before calling stored_or_ready. On the storefront, add shop_session_id to the allow-list and uuid() check in parseActionRequest (frontend/overlay/services/Assistant.service.ts) and have Assistant.provider.tsx addToCart populate it from SessionGateway.getSession().userId, matching the message path. Applied at concierge/agent.py:298-301 and the named storefront files."
+        },
+        {
+          "id": "ac2",
+          "critical": true,
+          "text": "A test in tests/test_contract.py asserts that POST /assistant/actions/add-to-cart with a foreign shop_session_id returns 409 and the fake add_to_cart tool is not called, and that the owning session's request still succeeds and dedupes by request_id as before."
+        },
+        {
+          "id": "ac3",
+          "text": "The frontend types in frontend/overlay/types/Assistant.ts and the fixtures transport mirror the new contract field (the existing pytest comparing contract and type field sets still passes), and plan.verification still PASSes after the fix."
+        }
+      ],
+      "notes": "Mirror the exact 409 payload shape assistant_message uses for a foreign session so the provider's existing conflictKind → foreign handling covers the action route unchanged. Alone in its wave; owns the Docker stack on port 8080 (rebuild agent + frontend images from this worktree with demo.py build then demo.py up if a live check is wanted; the pytest suite is the primary gate).",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: nit — frontend/overlay/gateways/AssistantFixtures.ts addToCart carries shop_session_id only via the AssistantActionRequest type; it does not simulate the 409 for a foreign session. Acceptable given the file documented every-id-is-bound-to-this-shopper fixture semantics, but the provider conflictKind to foreign path is exercised only against the live agent. Non-blocking."
+          ],
+          "notes": "Verification green (ruff, 102 pytest, tsc, eslint, upstream pin verified). Both critical ACs verified by the new test in tests/test_contract.py, also run in isolation; the 409 is raised through a shared owned_conversation helper used by both routes so the payload shape matches exactly. ac3 confirmed by the passing field-set mirror test. All five constraints checked by grep/diff; the change strengthens constraint 3 since the tool call still receives only state.shop_session_id. Test surface enumerated: one test added, three tests updated only to supply the now-required field, two pins swapped one-for-one, one pin dropped alongside the deleted baggageSessionId helper it targeted — no weakening. Tests and code landed in the same commit.",
+          "timestamp": "2026-09-11T20:50:02-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 3,
+        "deferred": 0,
+        "rejected": 1,
+        "recorded_at": "2026-09-11T20:50:02-04:00"
+      },
+      "drift": {
+        "predicted": 10,
+        "touched": 10,
+        "unpredicted": 1,
+        "ratio": 0.1,
+        "recorded_at": "2026-09-11T20:50:02-04:00"
+      }
     }
   ],
-  "deferrals": [],
+  "deferrals": [
+    {
+      "id": "d1",
+      "task_id": "6",
+      "source": "security-finding",
+      "finding_id": "sec2",
+      "severity": "low",
+      "reason_code": "contract",
+      "location": "concierge/agent.py:380-384",
+      "note": "GET /assistant/conversations/{id} returns the bound shop_session_id to any caller knowing a conversation id; pass the caller session as a query param, compare server-side, answer 409 on mismatch, omit shop_session_id from ConversationStatus; treat 409 as foreign in Assistant.provider.tsx.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:36:25-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d2",
+      "task_id": "4",
+      "source": "security-finding",
+      "finding_id": "sec3",
+      "severity": "low",
+      "reason_code": "contract",
+      "location": "compose.native.yaml:18",
+      "note": "ASSISTANT_DEMO_DETAILS defaults to true in compose.native.yaml and .env.example although task 5 ac7 says hidden by default; demo.links exposes Langfuse base URL/project id and ClickStack trace URL to anonymous shoppers. Flip the default off and document opt-in.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:36:25-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d3",
+      "task_id": "5",
+      "source": "quality-finding",
+      "finding_id": "q1",
+      "severity": "medium",
+      "reason_code": "contract",
+      "location": "frontend/overlay/services/Assistant.service.ts:20-27 / concierge/contract.py:45-73",
+      "note": "Storefront pre-validation limits (message 4000, budget 100000, quantity 10, currency/product/trace regexes) are hand-copied from the Pydantic contract; mirror tests pin only field names and MAX_TURNS. Add a bounds/pattern mirror test or centralize as ASSISTANT_* constants in types/Assistant.ts.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:58:04-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d4",
+      "task_id": "5",
+      "source": "quality-finding",
+      "finding_id": "q2",
+      "severity": "low",
+      "reason_code": "contract",
+      "location": "frontend/overlay/components/Assistant/Composer.tsx:7 / services/Assistant.service.ts:21",
+      "note": "MESSAGE_MAX_LENGTH is declared twice with different values (500 UI cap in Composer.tsx, 4000 wire limit in the service). Rename the composer one to COMPOSER_MAX_LENGTH and import the wire limit from a shared constant.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:58:04-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d5",
+      "task_id": "6",
+      "source": "quality-finding",
+      "finding_id": "q3",
+      "severity": "low",
+      "reason_code": "contract",
+      "location": "concierge/agent.py 409 sites / gateways/http/Agent.gateway.ts:48-50 / Assistant.provider.tsx conflictKind",
+      "note": "Four agent 409 reasons are free text; the gateway flattens them to one retryable conflict and the provider re-derives the kind via a second GET plus a mirrored MAX_TURNS; the rebind 409 falls into busy and offers a Retry that cannot succeed. Emit a structured reason in the 409 detail and branch on it client-side.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:58:04-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d6",
+      "task_id": "5",
+      "source": "quality-finding",
+      "finding_id": "q4",
+      "severity": "low",
+      "reason_code": "contract",
+      "location": "concierge/contract.py:113 / frontend/overlay/components/Assistant/Transcript.tsx:90",
+      "note": "feedback_enabled is produced by the agent and mirrored in the types but never consumed by the overlay (Feedback renders unconditionally; a test forbids gating). Either surface the not-saved hint up front from the field or drop the field from the contract.",
+      "status": "carried",
+      "deferred_at": "2026-09-11T20:58:04-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    }
+  ],
   "gap_notes": [],
   "log": [
     {
@@ -515,6 +985,218 @@
     {
       "timestamp": "2026-09-11T16:02:14-04:00",
       "note": "Plan echoed and accepted by the user as-is (interactive /harness plan). Charter creation offer answered no (not never); may re-offer after ~30 days."
+    },
+    {
+      "timestamp": "2026-09-11T16:06:34-04:00",
+      "note": "Managed run started: go confirmed by user. cycle_base_sha set to ae214ee (initial commit). No remote configured, so wave closeout pushes are skipped."
+    },
+    {
+      "timestamp": "2026-09-11T16:07:44-04:00",
+      "note": "Wave dispatch mode: runner (Claude Code 2.1.269)."
+    },
+    {
+      "timestamp": "2026-09-11T16:07:44-04:00",
+      "note": "Dispatched task 1 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-1"
+    },
+    {
+      "timestamp": "2026-09-11T16:09:30-04:00",
+      "note": "Claimed task 1: Worktree-portable dev setup and frontend overlay build path (implementer, worktree task-1)."
+    },
+    {
+      "timestamp": "2026-09-11T16:31:38-04:00",
+      "note": "Task 1 implemented: dev-setup.sh symlinks .upstream/.venv from the main checkout in linked worktrees and recreates a venv whose entry points no longer run (the shared .venv had shebangs from the repo's previous path, so .venv/bin/pytest was broken everywhere); demo.py stage exports the pinned commit with git archive into an index-only git repo under .runtime/build so git apply resolves paths there (inside the project repo, patch paths outside the cwd are silently skipped) and git diff yields patches; build tags the frontend image with a 12-hex sha256 over upstream commit + Dockerfile + package-lock + overlay + patches. Upstream's npm run lint is unrunnable on Next 16/ESLint 9 (next lint removed; .eslintrc crashes), so a real overlay eslint.config.mjs plus patch 0000 (lint script -> eslint .) make it work; unchanged upstream files with pre-existing findings get per-file rule relaxations. Code review: 5 findings applied (npm ci cache stamp, Popen pipe close, compose stderr passthrough, manifest_path helper, dead test assertions), 0 deferred, 0 rejected. Baseline verification failed before this task only because scripts/dev-setup.sh did not exist."
+    },
+    {
+      "timestamp": "2026-09-11T16:44:00-04:00",
+      "note": "2026-09-11T16:09:30-04:00: Claimed task 1: Worktree-portable dev setup and frontend overlay build path (implementer, worktree task-1)."
+    },
+    {
+      "timestamp": "2026-09-11T16:44:00-04:00",
+      "note": "2026-09-11T16:31:38-04:00: Task 1 implemented: dev-setup.sh symlinks .upstream/.venv from the main checkout in linked worktrees and recreates a venv whose entry points no longer run; demo.py stage exports the pinned commit into an index-only git repo under .runtime/build so git apply resolves paths there and git diff yields patches; build tags the frontend image with a 12-hex sha256 over upstream commit + Dockerfile + package-lock + overlay + patches; upstream's npm run lint is unrunnable on Next 16/ESLint 9, so a real overlay eslint.config.mjs plus patch 0000 make it work. Code review: 5 applied / 0 deferred / 0 rejected. Baseline verification failed before this task only because scripts/dev-setup.sh did not exist."
+    },
+    {
+      "timestamp": "2026-09-11T16:44:01-04:00",
+      "note": "Task 1 drift: 3 unpredicted files (frontend/overlay/eslint.config.mjs, frontend/patches/0000-package-lint-script.patch, README.md) — upstream npm run lint is unrunnable on Next 16/ESLint 9 so an overlay flat config plus patch 0000 were required. README.md is also predicted for tasks 7 and 8 (later waves, no wave-2 impact). Side effects noted by runner: shared .venv rebuilt (stale shebangs); Docker stack recreated from the task-1 worktree and left up."
+    },
+    {
+      "timestamp": "2026-09-11T16:44:01-04:00",
+      "note": "Wave 1 merged: task 1 → main (ec01567). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T16:44:13-04:00",
+      "note": "Dispatched task 2 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-2"
+    },
+    {
+      "timestamp": "2026-09-11T16:44:14-04:00",
+      "note": "Dispatched task 3 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-3"
+    },
+    {
+      "timestamp": "2026-09-11T16:45:53-04:00",
+      "note": "Claimed task 2: Agent conversation contract v2: bound cart, structured results, currency, dedupe (implementer, worktree task-2)."
+    },
+    {
+      "timestamp": "2026-09-11T16:47:00-04:00",
+      "note": "Claimed task 3: Native assistant shell with fixtures on real storefront pages (implementer, worktree task-3)."
+    },
+    {
+      "timestamp": "2026-09-11T16:58:33-04:00",
+      "note": "Task 2 implemented: concierge/contract.py (CONTRACT_VERSION \"1\", strict request/response models, lifetime docstring) and three routes on ConciergeAgent (/assistant/message, /assistant/actions/add-to-cart, GET /assistant/conversations/{id}) sharing one execute_turn with legacy /prompt; Session gained shop_session_id/currency_code/replies so request ids dedupe per conversation and are dropped with it, a locked conversation answers 409 instead of queueing (legacy /prompt still queues). product_refs prefer get_product results over list_products so a list-then-inspect turn recommends one product while a list-only turn references the catalog. Evaluation-span input key renamed budget_usd -> budget + currency_code because the budget is now denominated in the conversation's currency; the one existing assertion moved to the new key with the same value plus a currency check (strengthened, not weakened). session.id on agent spans is now the storefront session (shop_session_id) so traces align with the frontend; legacy conversations keep one id for both. bootstrap's tools patch became TOOLS_PATCH/patch_tools giving list_products/get_product/get_cart a currency_code parameter, drift-checked per hunk. Code review: 5 applied / 0 deferred / 0 rejected (reverted formatter-only hunks in demo.py, simplified scripted cart subtotal, docstring shape, two test-precision fixes)."
+    },
+    {
+      "timestamp": "2026-09-11T17:15:10-04:00",
+      "note": "Task 3 implemented: assistant shell as 13 overlay files (provider above the pages, fixture transport picked from window.ENV.ASSISTANT_TRANSPORT, panel/trigger/composer/transcript/cards/feedback/demo details) plus 8 one-file patches and tests/test_frontend_overlay.py. Two extra patches were needed (0007 Header.styled, 0008 CurrencySwitcher.styled) because the released header already overflows a 390 px viewport (scrollWidth 539: 280 px logo + 130 px select + 40 px margin) and the AC requires no horizontal scroll; the brand now shrinks via flexbox and the switcher is narrower below the desktop breakpoint, and the trigger is icon-only there. The panel's top edge tracks the storefront header's bottom (scroll listener) so the logo and cart stay visible at every width instead of being covered by the fixed overlay. matchMedia/window.ENV reads use useSyncExternalStore because the overlay eslint config enforces react-hooks/set-state-in-effect. Code review: 5 applied (uncontrolled budget input, single live region, dead LinkButton, honest 'unconfigured' transport name, 'request time' wording), 0 deferred, 1 rejected (unescaped quotes in window.ENV inline script: upstream's own pattern for operator-set env, same as the four keys beside it). Playwright review (scratchpad review.mjs, 88/88) covered 1440/1024/768/767/390 layouts, fixture states, keyboard order/trap/Escape, and 4.5:1 contrast (min 5.72); demo details verified absent with ASSISTANT_DEMO_DETAILS=off."
+    },
+    {
+      "timestamp": "2026-09-11T17:29:31-04:00",
+      "note": "Task 3 drift: 4 unpredicted files (components/Assistant/AskAboutProduct.tsx, tests/test_frontend_overlay.py, patches 0007-header-styled-brand-fit and 0008-currency-switcher-mobile-width) — the released 3.0.0 header overflows a 390 px viewport, which ac2's no-horizontal-scroll requirement exposed. compose.native.yaml now defaults ASSISTANT_TRANSPORT=fixtures; tasks 4/5 own flipping that default and documenting the vars in .env.example. Docker stack recreated from the task-3 worktree and left up."
+    },
+    {
+      "timestamp": "2026-09-11T17:29:31-04:00",
+      "note": "Wave 2 merged: tasks 2, 3 → main (c26ec28). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T17:29:37-04:00",
+      "note": "Dispatched task 4 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-4"
+    },
+    {
+      "timestamp": "2026-09-11T17:30:53-04:00",
+      "note": "Claimed task 4: Complete native image set, build manifest, and default native stack (implementer, worktree task-4)."
+    },
+    {
+      "timestamp": "2026-09-11T17:47:37-04:00",
+      "note": "Task 4 implemented: docker/{agent,mcp,frontend-proxy}.Dockerfile extend the released 3.0.0 images by multi-platform index digest (docker/base-images.json records digests, per-platform manifests, and the imagetools inspect command); agent/mcp bake concierge/, prompts/, and the corrected tools.py, proxy swaps only envoy.tmpl.yaml (derived from upstream by text substitution: /api/assistant/ -> frontend at 120 s ahead of the catch-all, chatbot route and cluster removed, placeholders intact). demo.py builds all four under one tag that now also covers docker/, concierge/, prompts/ (no bytecode or Markdown, mirroring the overlay README rule) and the TOOLS_PATCH output; manifest adds contract_version and base_images; require_images names each missing image as '<service> (never built)' or its tag. Root context is a deny-list (.env.example, compose files, docs, tests, scripts now excluded) verified by a COPY probe: only concierge/, prompts/, docker/, .runtime/tools.py. compose.native.yaml selects the four images, resets agent volumes and frontend-proxy.depends_on.chatbot, puts chatbot behind the 'debug' profile, and defaults ASSISTANT_TRANSPORT=live with AGENT_BASE_URL for task 5; compose.dev.yaml holds the agent/mcp source mounts (--dev); the chatbot keeps its concierge mount in compose.concierge.yaml because it has no image and --debug-chatbot must work without --dev. Non-up lifecycle commands always pass --profile debug so a debug chatbot is covered by logs/restart/down. Live checks from the built images: no Mounts on agent/mcp/frontend/proxy, healthz ok, smoke passed over http and mcp, frontend service spans captured, proxy starts without chatbot. Test change: the single-image compose assertion from task 1 was replaced by the four-image assertion ac4 requires (stricter, no skips or deletions). Code review: 1 finding applied (docker/README.md was hashed into the tag), 1 pre-existing applied (stale README tools-patch bullet), 1 rejected (upstream SessionIdProcessor.ts lint warning: a patch to an upstream file for cosmetic lint noise is not worth the patch surface)."
+    },
+    {
+      "timestamp": "2026-09-11T17:54:21-04:00",
+      "note": "Task 4 drift: 1 unpredicted file (README.md — two paragraphs made false by the build-before-up flow; task 8 owns the full rewrite); tests/test_integration_config.py predicted but untouched. .dockerignore now excludes .env.example (names agent/model addresses). ASSISTANT_TRANSPORT defaults to live; panel shows a recoverable not-connected error until task 5. Docker stack up from the task-4 worktree on tag 01a65aee6fa0."
+    },
+    {
+      "timestamp": "2026-09-11T17:54:21-04:00",
+      "note": "Wave 3 merged: task 4 → main (1d2fe1a). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T17:54:24-04:00",
+      "note": "Dispatched task 5 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-5"
+    },
+    {
+      "timestamp": "2026-09-11T17:55:39-04:00",
+      "note": "Claimed task 5: Connect the storefront panel to the agent through same-origin API routes (implementer, worktree task-5)."
+    },
+    {
+      "timestamp": "2026-09-11T18:19:21-04:00",
+      "note": "Task 5 implemented: four same-origin routes under pages/api/assistant (message, action, feedback, conversation/[conversationId]) wrap InstrumentationMiddleware and delegate to services/Assistant.service.ts (hand-written allow-list validation rebuilding each request field by field; AssistantRouteError -> {error:{code,message,retryable}} envelope) and gateways/http/Agent.gateway.ts (reads process.env.AGENT_BASE_URL per call, AbortSignal.timeout 100 s under Envoy's 120 s, maps 404->expired, 409->conflict, 400/422->invalid, 5xx/network->unavailable, deadline->timeout). The predicted utils/assistant/ paths were not used because the released Dockerfile copies only fixed directories (services/, gateways/, pages/...), so files there would never reach the image. Live transport is the default in Assistant.gateway.ts via utils/Request.ts; fixtures stay selectable. types/Assistant.ts now mirrors concierge/contract.py field for field (demo.tools are {name,arguments,ok}, demo.scenario added) and a pytest compares the two. Feedback renders on every answer so the agent's 503 'Configure Langfuse' shows as 'Feedback not saved. <reason>'. Verified in the browser (playwright-core + system Chrome, 28/29 checks; the one miss was a stale regex in the script after a review fix): Explorascope card from product_refs, pending indicator, 503 feedback -> not saved, agent stopped -> 502 outage with catalog/cart/product page still 200, Retry reuses request_id, agent restart -> 404 expired -> next message opens a new conversation, 400/405/404/409 route mappings, real 100 s timeout -> 504 with Retry deduped by the agent. Trace 9a6c1d7b31707c11500fff9342b050da shows frontend SERVER -> Next 'executing api route' -> undici CLIENT -> agent SERVER in one trace. Bundle check: .next/static of image e8f56ba61e5e has no AGENT_BASE_URL, :8010, langfuse, or model strings. Code review: 6 applied (body read inside the timeout try, addToCart on an expired conversation shows an error instead of silently returning, budget bound message, UNREACHABLE constant reuse, server-source address test + scenario literal mirror, demo prompt label), 0 deferred, 0 rejected. Side effects: a docker network disconnect/connect experiment stripped the agent container's 'agent' alias (restored with --alias); Docker stack up from the task-5 worktree on tag 33173785ca29 with frontend rebuilt as e8f56ba61e5e."
+    },
+    {
+      "timestamp": "2026-09-11T18:31:55-04:00",
+      "note": "Task 5 drift: 4 unpredicted files — gateways/http/Agent.gateway.ts and services/Assistant.service.ts replace the predicted utils/assistant/* paths (the released Dockerfile copies only fixed directories), plus AssistantFixtures.ts (adopted task 2 demo shape) and tests/test_frontend_overlay.py. compose.native.yaml predicted but untouched. Note for task 7: the Next.js route span chain is SERVER -> next.js SERVER -> executing api route INTERNAL -> undici CLIENT -> agent SERVER. Docker stack up from the task-5 worktree on tag 33173785ca29 (frontend e8f56ba61e5e)."
+    },
+    {
+      "timestamp": "2026-09-11T18:31:56-04:00",
+      "note": "Wave 4 merged: task 5 → main (caaa256). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T18:31:59-04:00",
+      "note": "Dispatched task 6 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-6"
+    },
+    {
+      "timestamp": "2026-09-11T18:33:32-04:00",
+      "note": "Claimed task 6: Unify shopping state: shared cart actions, currency, retries, resume (implementer, worktree task-6)."
+    },
+    {
+      "timestamp": "2026-09-11T19:05:00-04:00",
+      "note": "Task 6 implemented: Assistant.provider persists {conversationId, transcript, budget, contractVersion, uncertain} through gateways/AssistantSession.gateway.ts (mirrors Session.gateway) and on page load resumes only after GET /api/assistant/conversation/{id} answers 200 with the shopper's own shop_session_id; anything else (404, unreachable, another session) starts fresh with a notice entry (new TranscriptEntry kind 'notice'). Every 409 is classified via the status route (foreign -> fresh conversation with the message back in the composer; expired -> fresh; exhausted (turns >= ASSISTANT_MAX_TURNS, mirrored from contract.MAX_TURNS) -> non-retryable message; busy -> recoverable error with Retry). A card action that times out (504 'timeout') becomes an unresolved ActionTurn carrying the cart quantity snapshot taken at click time: the cart is invalidated, nothing is retried automatically, and the uncertain box resolves to 'confirmed' as a derived value (useMemo over useCart items, not an effect, because react-hooks/set-state-in-effect is on for overlay files) or on shopper Retry with the same request_id. inFlightRef guards the same-frame double click. New conversation button in the panel header calls startFresh (cart untouched). Cards refetch the catalog price through the product page's own query key when the header currency differs from the ref's currency; the ref's amount stays labeled with its own currency until then. DemoDetails now renders tool arguments (get_product(product_id=..., currency_code=...)) so AC6's id is visible. Agent: assistant_add_to_cart fetches the prompt before the cart call so no await follows the mutation; ScriptedModel adds the product-context product on 'add this' when nothing was looked up; Agent.gateway reads the agent's {detail:{message}} so the add-to-cart 502 reason reaches the browser. Browser-verified with playwright-core + system Chrome against the rebuilt native stack: 41/41 checks (one action per click, 0 POST /api/cart, header 0->1, 3 rapid clicks = 1 call, EUR card == product page EUR price and reply €90.19 EUR, get_product(OLJCESPC7Z) in demo details, reload resume after status 200, agent restart -> 404 -> expired note, second context 409 -> foreign note + draft restored, faked 409 -> Retry reuses request_id, docker pause -> 504 at 100 s -> uncertain, no auto-retry, retry deduped: quantity +1). Code review: 2 applied (turn-limit 409 non-retryable; note constants made private), 0 deferred, 0 rejected. One static check string I wrote this session was renamed with its state variable (setUncertain -> setUnresolved), not loosened."
+    },
+    {
+      "timestamp": "2026-09-11T19:14:03-04:00",
+      "note": "2026-09-11T19:20:00-04:00: Task 6 drift: 6 unpredicted files (gateways/AssistantSession.gateway.ts for persistence, Composer.tsx and AssistantPanel.styled.ts for the resuming state and header layout, DemoDetails.tsx to render tool arguments so AC6's product id is visible, gateways/http/Agent.gateway.ts to surface the agent's {detail:{message}}, gateways/AssistantFixtures.ts for the new transport method); the predicted pages/api/assistant/action.ts and conversation/[conversationId].ts needed no change. Docker stack up from the task-6 worktree on tag 7c3560b4550d (all four native images)."
+    },
+    {
+      "timestamp": "2026-09-11T19:14:03-04:00",
+      "note": "Task 6 consolidated: drift ratio 8/17 (implementer counted 6; patches/0005 and tests/test_frontend_overlay.py also unpredicted). Both earlier-verdict nits addressed (composer draft restored on non-retryable failure; prompt fetch precedes cart mutation). Task 7 shares Assistant.gateway.ts — recheck before dispatch: task 7 is alone in its wave, so no conflict."
+    },
+    {
+      "timestamp": "2026-09-11T19:14:03-04:00",
+      "note": "Wave 5 merged: task 6 → main (27a8a05). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T19:14:06-04:00",
+      "note": "Dispatched task 7 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-7"
+    },
+    {
+      "timestamp": "2026-09-11T19:15:43-04:00",
+      "note": "Claimed task 7: Observability: browser-to-agent trace, identity mappings, Langfuse filter (implementer in worktree task-7)"
+    },
+    {
+      "timestamp": "2026-09-11T19:45:52-04:00",
+      "note": "Task 7 implemented: browser turns run inside an assistant.turn span from @opentelemetry/api's global tracer (utils/telemetry/AssistantTracing.ts, a Dockerfile-copied dir; the predicted utils/assistant/ path never reaches the image) with gen_ai.conversation.id/langfuse.session.id (from the answer on a first turn), session.id, assistant.request_id, assistant.turn.kind, ERROR status on rejection, plus session.id W3C baggage like Api.gateway; the message/action routes stamp the same identity plus assistant.contract_version on Next's 'executing api route' span (the only span reachable from a handler; both SERVER spans carry http.route from Next itself, with collector transform statements as the fallback). Key discovery: with upstream's spawn_upstream_span Envoy emits a second 'router <cluster> egress' span with no URL between its ingress span and the frontend server span, so per-span OTTL could not keep it without keeping every storefront egress; docker/envoy.tmpl.yaml now routes /api/assistant/ to a same-address cluster named frontend-assistant, which the filter matches by upstream_cluster. traces/langfuse always runs (memory_limiter, transform/sanitize_spans, filter/langfuse, gen_ai_normalizer, batch) with an always-on file/langfuse-preview exporter and otlp_http/langfuse added only with credentials; filter = negated keep-set (agent/mcp/chatbot; frontend-web assistant.turn+request_id or http.url ~ /api/assistant; frontend-proxy http.url ~ /api/assistant or upstream_cluster == frontend-assistant; frontend http.route/http.target/url.path/next.span_name ~ /api/assistant or url.full/http.url ~ /assistant/(message|actions)) plus drops for /healthz, /feedback, the agent conversation-status route (code review found its span arrived orphaned), and /api/public/scores; error_mode ignore so an odd span is kept rather than a batch lost. smoke.py adds native_turn/check_native_trace (synthetic frontend-web parent via /otlp-http, traceparent+baggage into /api/assistant/message, preview must hold the parent, no orphans, one concierge.turn, identity attrs, http.route) and reads telemetry*.jsonl vs langfuse-preview*.jsonl separately so preview copies do not double-count roots. Test expectation changes, all AC-driven and none loosening: test_capture_mode asserted traces/langfuse absent without credentials (ac3 now requires the preview pipeline always), the exporter list and filter name, the Envoy cluster name (new cluster pinned to equal upstream's frontend cluster exactly), and the browser/server address guard's blunt 'langfuse' word match replaced by an address/credential pattern with a self-test because ac1 puts langfuse.session.id on browser spans. Verified live: smoke passes; real Chrome (playwright-core) 12/12 checks incl. fetch child of assistant.turn, trace id == agent trace, ERROR status on an intercepted 502; preview for the browser trace = 18 spans, root assistant.turn, 0 orphans, 1 concierge.turn, shop services dropped; .next/static has no agent/model/Langfuse address; collector logs no OTTL errors. Code review: 4 applied (status-route orphan drop, export trim, RETAINED_SERVICES rename, line wraps), 0 deferred, 1 rejected (test-integrity item: expectation updates authorized by ac1/ac3 and the cluster mechanism). Stack rebuilt from this worktree (frontend + frontend-proxy)."
+    },
+    {
+      "timestamp": "2026-09-11T19:56:27-04:00",
+      "note": "Task 7 drift: 5 unpredicted files — utils/telemetry/AssistantTracing.ts replaces predicted utils/assistant/tracing.ts (Dockerfile copies fixed dirs only); docker/envoy.tmpl.yaml + docker/README.md + tests/test_build.py because the Envoy egress span is filterable only by cluster name (new same-address cluster frontend-assistant); tests/test_frontend_overlay.py guard narrowed. concierge/telemetry.py, concierge/agent.py, tests/test_telemetry.py predicted but untouched. Docker stack up from task-7 worktree with mixed image tags (frontend 425218b64e78, proxy f584fb571a85, agent/mcp 7c3560b4550d); task 8 should run a full demo.py build. Collector needs demo.py restart otel-collector after up when only collector.yaml changed."
+    },
+    {
+      "timestamp": "2026-09-11T19:56:27-04:00",
+      "note": "Wave 6 merged: task 7 → main (d30c434). No upstream configured for main; skipped push."
+    },
+    {
+      "timestamp": "2026-09-11T19:56:31-04:00",
+      "note": "Dispatched task 8 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-8"
+    },
+    {
+      "timestamp": "2026-09-11T19:57:57-04:00",
+      "note": "Claimed task 8: Validate the packaged app and document the native run (implementer in worktree task-8)"
+    },
+    {
+      "timestamp": "2026-09-11T20:17:31-04:00",
+      "note": "Task 8 implemented: clean-state down/rm .runtime/build+images -> bootstrap -> build -> up reproduced the native stack (final tag 28c8a6773491 after the spec landed; four custom containers, empty Mounts, no chatbot). frontend/overlay/cypress/e2e/Assistant.cy.ts (3 tests: flow incl. cart page and New conversation; keyboard/live-region/focus-trap at 1440 and 390 px) passes from .runtime/build/src/frontend. No cypress-config patch was needed: upstream .env has FRONTEND_PORT=8080 and Cypress honors CYPRESS_BASE_URL, so the predicted 0009 patch was dropped. Upstream Home/ProductDetail/Checkout: 4/7 pass, and the same 3 fail identically with the released 3.0.0-frontend image swapped into the stack (verified by temporarily editing the manifest's frontend entry and restoring it) - documented as upstream behavior, not hidden. Smoke passes over HTTP and MCP on the final images; smoke.py's native check now polls the full capture for product-catalog too (the preview and capture exporters batch separately, so the one-shot assert raced). Cypress artifacts (screenshots/videos/downloads) added to the staged .dockerignore with a test. README Start rewritten around bootstrap/build/up with step table, Options table (--dev, --debug-chatbot, AGENT_BASE_URL, ASSISTANT_TRANSPORT, ASSISTANT_DEMO_DETAILS), Use the assistant, Conversation and cart, Browser tests, and a Validated table naming exactly what ran; walkthrough adapted (panel has no scenario selector, fault path via product context verified live); docker/README gains Platforms (arm64 tested, amd64 untested, shared tag means one platform at a time); NATIVE_AGENT_UI_PLAN.md gets the completion status and eight deviations. Code review: 0 applied, 0 deferred, 3 rejected (redundant timeout assert kept as diagnostic; first-p coupling in spec would force a component change and image rebuild; upstream lint warning)."
+    },
+    {
+      "timestamp": "2026-09-11T20:30:47-04:00",
+      "note": "Task 8 drift: 1 unpredicted file (tests/test_frontend_overlay.py); predicted cypress-config patch deliberately not created (upstream .env already yields baseUrl 8080; CYPRESS_BASE_URL documented). Docker stack up on tag 28c8a6773491 from the task-8 worktree; main needs demo.py build after merge to regenerate .runtime/images/manifest.json (cache-fast re-tag). Evaluator left ghcr.io/open-telemetry/demo:3.0.0-frontend on disk."
+    },
+    {
+      "timestamp": "2026-09-11T20:30:47-04:00",
+      "note": "Wave 7 merged: task 8 → main (ffc97fe). No upstream configured for main; skipped push. All 7 planned waves consolidated."
+    },
+    {
+      "timestamp": "2026-09-11T20:36:26-04:00",
+      "note": "Security audit: 3 findings (sec1 medium access-control; sec2, sec3 low data-exposure). Added 1 remediation task (sec-sec1) from security audit; recomputed parallel_plan → wave 8 (single task). sec2/sec3 deferred and carried (d1, d2) per managed policy."
+    },
+    {
+      "timestamp": "2026-09-11T20:36:40-04:00",
+      "note": "Dispatched task sec-sec1 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-sec-sec1"
+    },
+    {
+      "timestamp": "2026-09-11T20:38:10-04:00",
+      "note": "Claimed task sec-sec1: Enforce conversation ownership on the add-to-cart action route (implementer in worktree feat-native-assistant-ui-task-sec-sec1)."
+    },
+    {
+      "timestamp": "2026-09-11T20:45:32-04:00",
+      "note": "sec-sec1 implemented: AddToCartAction gains required shop_session_id; ownership check hoisted into ConciergeAgent.owned_conversation (shared with assistant_message, same 409 payload) and run before stored_or_ready so a stored reply never reaches another session. Storefront mirrors the field (types, parseActionRequest allow-list+uuid, provider addToCart and retryUncertain fill it from SessionGateway); action route and browser gateway now stamp the validated body value on their spans like the message path, so baggageSessionId in AssistantTracing.ts was removed as dead code. Test changes: cart_action() helper replaces three inline dicts, new test_add_to_cart_action_from_another_shop_session_is_rejected; two overlay assertions replaced by their body-sourced message-route analogs and the assertion pinning the deleted baggageSessionId body dropped (AC1: match the message path) - rejected the code-review dim-7 flag on that basis. Applied code-review: reworded stale baggage comment and contract docstring (GET conversation status is deliberately not session-gated), retryUncertain fills shop_session_id for actions stored before the field existed."
+    },
+    {
+      "timestamp": "2026-09-11T20:50:03-04:00",
+      "note": "Wave 8 (security remediation) merged: task sec-sec1 → main (cb245f5). No upstream configured for main; skipped push. Drift: 1 unpredicted file (utils/telemetry/AssistantTracing.ts, dead baggageSessionId helper removed)."
+    },
+    {
+      "timestamp": "2026-09-11T20:50:06-04:00",
+      "note": "Security gate settled: sec1 remediated, sec2/sec3 carried. Quality review gate conditions hold (dev, auto, 9 tasks consolidated, source material); dispatching harness-quality-reviewer over ae214ee..cb245f58c122fcba67a46621be0b3e27673225de."
+    },
+    {
+      "timestamp": "2026-09-11T20:58:04-04:00",
+      "note": "Quality review: 4 findings (q1 medium test-gap; q2 low naming; q3, q4 low integration). None at the high threshold; all four deferred and carried (d3–d6) per managed policy. No qual- remediation wave."
+    },
+    {
+      "timestamp": "2026-09-11T20:58:04-04:00",
+      "note": "Deferred-items review (7.65): no open entries (6 carried, all dispositioned at the 7.5/7.6 gates); silent skip. Run /harness deferred feat-native-assistant-ui to review the carried set."
+    },
+    {
+      "timestamp": "2026-09-11T20:58:05-04:00",
+      "note": "Charter reconciliation (7.7) skipped: no CHARTER.md in the project (creation offer declined at plan time)."
+    },
+    {
+      "timestamp": "2026-09-11T20:58:05-04:00",
+      "note": "Managed run complete: 8 waves (7 planned + 1 security remediation), 9 tasks passed, 0 retries, 0 blocked. main at cb245f5; no upstream, nothing pushed. Plan JSON changes are uncommitted in the working tree."
     }
   ],
   "plan_review_state": {
@@ -719,7 +1401,7 @@
     }
   ],
   "parallel_plan": {
-    "computed_at": "2026-09-11T15:53:27-04:00",
+    "computed_at": "2026-09-11T20:36:26-04:00",
     "base_branch": "main",
     "waves": [
       {
@@ -771,6 +1453,13 @@
           "8"
         ],
         "notes": "Alone: final validation over the running stack; edits README and smoke.py."
+      },
+      {
+        "id": 8,
+        "tasks": [
+          "sec-sec1"
+        ],
+        "notes": "Security remediation wave: single task, runs alone (touches concierge/agent.py, contract.py, Assistant.provider/service/types and tests; needs the stack if a live probe is wanted)."
       }
     ],
     "predicted_files": {
@@ -882,8 +1571,263 @@
         "scripts/demo.py",
         "tests/test_build.py",
         "docker/README.md"
+      ],
+      "sec-sec1": [
+        "concierge/contract.py",
+        "concierge/agent.py",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/pages/api/assistant/action.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
       ]
     },
-    "post_merge_build": []
-  }
+    "post_merge_build": [],
+    "cycle_base_sha": "ae214ee57e91815e595d8953442a0130c7823f90"
+  },
+  "managed_run": {
+    "started_at": "2026-09-11T16:05:08-04:00",
+    "go_confirmed_at": "2026-09-11T16:06:34-04:00",
+    "paused_at": null,
+    "pause_reason": "",
+    "resumes": [],
+    "completed_at": "2026-09-11T20:58:05-04:00",
+    "auto_decisions": [
+      {
+        "id": "ad1",
+        "timestamp": "2026-09-11T16:06:34-04:00",
+        "phase": "pre-flight",
+        "decision": "signing_disabled=true: commits in worktrees and merge commits use commit.gpgsign=false for this run",
+        "reason": "repo enforces commit.gpgsign=true via gitsign (x509); unattended commits would block on auth; stated in go-gate echo"
+      },
+      {
+        "id": "ad2",
+        "timestamp": "2026-09-11T16:06:34-04:00",
+        "phase": "4.5",
+        "decision": "wave layout accepted as computed: 7 waves for 8 tasks, only wave 2 parallel",
+        "reason": "serialization is class-4 interference on the single Docker stack (port 8080) plus scripts/demo.py and compose.native.yaml overlap; layout shown in go-gate echo"
+      },
+      {
+        "id": "ad3",
+        "timestamp": "2026-09-11T16:06:34-04:00",
+        "phase": "7.4",
+        "decision": "merge-and-push authorized for the whole run at the go gate; pushes skipped because main has no tracked upstream",
+        "reason": "user chose Run managed; git rev-parse @{u} fails (no remote configured)"
+      },
+      {
+        "id": "ad4",
+        "timestamp": "2026-09-11T16:07:43-04:00",
+        "phase": "pre-flight",
+        "decision": "dirty-tree check exempts .claude/plans/*.json (tracked orchestrator state files modified by plan-edit.sh); all other paths must be clean",
+        "reason": "plan JSON is committed in this repo, so every plan write dirties the tree; no task branch touches .claude/plans/, so merges are unaffected; plan state left uncommitted for the user to commit after the run"
+      },
+      {
+        "id": "ad5",
+        "timestamp": "2026-09-11T16:44:01-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 1: task 1 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; evaluator PASS transcribed as verdict 1; validate-taskreport OK with SHA 5a0fd37 verified"
+      },
+      {
+        "id": "ad6",
+        "timestamp": "2026-09-11T17:29:31-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 2: tasks 2,3 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; both tasks PASS on first attempt (verdicts transcribed); validate-taskreport OK with SHAs 829f94c and 9606f5c verified"
+      },
+      {
+        "id": "ad7",
+        "timestamp": "2026-09-11T17:54:21-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 3: task 4 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt (verdict transcribed); validate-taskreport OK with SHA 848fcd5 verified"
+      },
+      {
+        "id": "ad8",
+        "timestamp": "2026-09-11T18:31:56-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 4: task 5 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt (verdict transcribed); validate-taskreport OK with SHA c5c8890 verified"
+      },
+      {
+        "id": "ad9",
+        "timestamp": "2026-09-11T19:14:03-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 5: task 6 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt (verdict transcribed); validate-taskreport OK with SHA 70b00d1 verified"
+      },
+      {
+        "id": "ad10",
+        "timestamp": "2026-09-11T19:56:27-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 6: task 7 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt (verdict transcribed); validate-taskreport OK with SHA 28421c8 verified"
+      },
+      {
+        "id": "ad11",
+        "timestamp": "2026-09-11T20:30:47-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 7: task 8 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt (verdict transcribed); validate-taskreport OK with SHA b1a86cb verified"
+      },
+      {
+        "id": "ad12",
+        "timestamp": "2026-09-11T20:36:26-04:00",
+        "phase": "7.5",
+        "decision": "security triage: sec1 (medium, confidence high) → remediation task sec-sec1; sec2 and sec3 (low, confidence high) → deferred and carried to the ledger (d1, d2)",
+        "reason": "go-gate policy: auto-remediate severity ≥ medium and confidence ≥ medium; carry everything else for interactive review; no re-audit after remediation"
+      },
+      {
+        "id": "ad13",
+        "timestamp": "2026-09-11T20:50:03-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 8: sec-sec1 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate (remediation waves included); PASS on first attempt; validate-taskreport OK with SHA c7b338f verified"
+      },
+      {
+        "id": "ad14",
+        "timestamp": "2026-09-11T20:58:04-04:00",
+        "phase": "7.6",
+        "decision": "quality triage: 0 findings remediated; q1 (medium), q2, q3, q4 (low) → deferred and carried to the ledger (d3–d6)",
+        "reason": "go-gate policy: auto-remediate only severity ≥ high with confidence high; none qualified; everything else carried for interactive review"
+      },
+      {
+        "id": "ad15",
+        "timestamp": "2026-09-11T20:58:05-04:00",
+        "phase": "7.65",
+        "decision": "deferred review skipped: 0 open entries; 6 carried entries (d1–d6) left for interactive review",
+        "reason": "policy: carry all open entries; none were open because every deferral this cycle came from a finding the gate policy had already carried"
+      },
+      {
+        "id": "ad16",
+        "timestamp": "2026-09-11T20:58:05-04:00",
+        "phase": "7.7",
+        "decision": "charter reconciliation skipped: no charter exists",
+        "reason": "7.7 conditions require a charter; none discovered (CHARTER.md, docs/CHARTER.md, Charter: line in CLAUDE.md)"
+      }
+    ]
+  },
+  "signing_disabled": true,
+  "security_audit_state": {
+    "range": "ae214ee57e91815e595d8953442a0130c7823f90..ffc97fe4f8cd63815e95b3794cdcf8fa87eab113",
+    "last_run_at": "2026-09-11T20:36:25-04:00",
+    "summary": "3 findings: 1 medium (access-control), 2 low (data-exposure); 62 files audited"
+  },
+  "security_findings": [
+    {
+      "status": "remediated",
+      "justification": "",
+      "remediation_task_id": "sec-sec1",
+      "remediated_at": "2026-09-11T20:50:06-04:00",
+      "discovered_at": "2026-09-11T20:36:25-04:00",
+      "id": "sec1",
+      "severity": "medium",
+      "category": "access-control",
+      "location": "concierge/agent.py:298-301",
+      "evidence": "async def assistant_add_to_cart(self, request: AddToCartAction): key = str(request.conversation_id); state = self.conversation(key); stored = self.stored_or_ready(state, request.request_id)",
+      "description": "POST /assistant/actions/add-to-cart mutates the cart bound to the conversation but never checks that the caller is that conversation storefront session; AddToCartAction (concierge/contract.py:66) carries no shop_session_id, and pages/api/assistant/action.ts only reads the baggage session id for telemetry. Anyone holding a conversation_id (visible in localStorage, in every exported span as gen_ai.conversation.id/langfuse.session.id, and in the Langfuse preview file) can add items to another shopper cart, contradicting plan constraint 3 and task 6 ac3; the /assistant/message path enforces exactly this check at agent.py:274.",
+      "remediation": "Add shop_session_id: UUID to AddToCartAction in concierge/contract.py, and in assistant_add_to_cart raise the same 409 as assistant_message when state.shop_session_id != str(request.shop_session_id) before calling stored_or_ready. On the storefront, add shop_session_id to the allow-list and uuid() check in parseActionRequest (frontend/overlay/services/Assistant.service.ts) and have Assistant.provider.tsx addToCart populate it from SessionGateway.getSession().userId, matching the message path. Add a test in tests/test_contract.py asserting a foreign shop_session_id on the action route returns 409 and the fake add_to_cart is not called.",
+      "confidence": "high"
+    },
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:36:25-04:00",
+      "id": "sec2",
+      "severity": "low",
+      "category": "data-exposure",
+      "location": "concierge/agent.py:380-384",
+      "evidence": "async def assistant_conversation(self, conversation_id: UUID): state = self.conversation(conversation_id); return ConversationStatus(conversation_id=str(conversation_id), shop_session_id=state.shop_session_id, ...",
+      "description": "GET /assistant/conversations/{id} (proxied unchanged by pages/api/assistant/conversation/[conversationId].ts) returns the bound shop_session_id to any caller who knows a conversation id. The shop session id is the storefront cart key (upstream /api/cart sessionId), so this converts knowledge of one identifier into the other and lets a holder of a leaked conversation id read or modify the shopper cart through the ordinary storefront cart API. Ownership is currently decided client-side by comparing the returned id (Assistant.provider.tsx:147,160).",
+      "remediation": "Make the storefront route pass the caller session as ?shop_session_id= (validated with the existing uuid() helper in Assistant.service.ts) and have assistant_conversation compare it to state.shop_session_id, answering 409 on mismatch and omitting shop_session_id from ConversationStatus. Change resolveStored/conflictKind in Assistant.provider.tsx to treat the 409 (code: conflict) as foreign instead of comparing ids, and extend tests/test_contract.py with a foreign-session 409 case for the status route.",
+      "confidence": "high"
+    },
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:36:25-04:00",
+      "id": "sec3",
+      "severity": "low",
+      "category": "data-exposure",
+      "location": "compose.native.yaml:18",
+      "evidence": "- ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-true}",
+      "description": "The demo-details panel is on by default in both compose.native.yaml and .env.example:24, although task 5 ac7 specifies it stays hidden by default. When on, every shopper browser receives, per answer, the tool calls with arguments, prompt version/source, agent mode, and demo.links, which embeds the Langfuse base URL and project id (agent.py:600-611) and the ClickStack trace URL. Runtime response data rather than bundle content, so not a breach of constraint 1 letter, but it puts observability backend addresses in front of anonymous storefront users by default.",
+      "remediation": "Change the compose default to ${ASSISTANT_DEMO_DETAILS:-} (off) and set ASSISTANT_DEMO_DETAILS=false in .env.example with a comment explaining it is an opt-in for demo runs; keep the existing gating code unchanged. Optionally add an assertion in tests/test_integration_config.py that the rendered frontend service environment has demo details off when the variable is unset.",
+      "confidence": "high"
+    }
+  ],
+  "quality_review_state": {
+    "range": "ae214ee57e91815e595d8953442a0130c7823f90..cb245f58c122fcba67a46621be0b3e27673225de",
+    "last_run_at": "2026-09-11T20:58:04-04:00",
+    "summary": "4 findings: 1 medium (test-gap), 3 low (naming, integration x2); 62 files reviewed; none at the high threshold"
+  },
+  "quality_findings": [
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:58:04-04:00",
+      "id": "q1",
+      "severity": "medium",
+      "category": "test-gap",
+      "location": "frontend/overlay/services/Assistant.service.ts:20-27 and concierge/contract.py:45-46,61,65,73 (pinned only partially by tests/test_frontend_overlay.py:94-97,276-286)",
+      "evidence": "Assistant.service.ts: const MESSAGE_MAX_LENGTH = 4000; const BUDGET_MAX = 100000; const QUANTITY_MAX = 10; const CURRENCY_CODE = /^[A-Z]{3}$/; const PRODUCT_ID = /^[A-Za-z0-9_-]{1,64}$/; const TRACE_ID = /^[a-f0-9]{32}$/; contract.py: message max_length=4000, budget le=100000, quantity le=10, CurrencyCode pattern ^[A-Z]{3}$; mirror tests pin only field-name sets and MAX_TURNS.",
+      "description": "Task 2 defines the wire limits and patterns in Pydantic; task 5 hand-copied them into the storefront pre-validation with a comment promising they match; tasks 5 and 6 added mirror tests covering only field-name sets and MAX_TURNS, not the numeric bounds or regexes. If either side changes, the storefront will accept bodies the agent 422s (non-retryable invalid error) or reject bodies the agent would accept, and no test in plan.verification notices.",
+      "remediation": "Add one test to tests/test_frontend_overlay.py beside test_frontend_response_types_mirror_the_agent_contract_models that parses MESSAGE_MAX_LENGTH, BUDGET_MAX, QUANTITY_MAX, CURRENCY_CODE, PRODUCT_ID and TRACE_ID out of services/Assistant.service.ts and asserts them against the contract model_fields metadata (MaxLen/Le) and Field patterns, and agent.FeedbackRequest trace_id pattern; alternatively move the numeric limits into types/Assistant.ts as ASSISTANT_* constants imported by the service and pin those the same way ASSISTANT_MAX_TURNS is pinned.",
+      "confidence": "high"
+    },
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:58:04-04:00",
+      "id": "q2",
+      "severity": "low",
+      "category": "naming",
+      "location": "frontend/overlay/components/Assistant/Composer.tsx:7 and frontend/overlay/services/Assistant.service.ts:21",
+      "evidence": "Composer.tsx (task 3): export const MESSAGE_MAX_LENGTH = 500; Assistant.service.ts (task 5): const MESSAGE_MAX_LENGTH = 4000;",
+      "description": "Two tasks introduced the same identifier for two different limits in the same overlay: task 3 UI cap (500, exported) and task 5 contract wire limit (4000). A reader grepping for the message limit finds both and cannot tell which governs; the exported 500 invites a future import into server code where 4000 is what the agent enforces.",
+      "remediation": "Rename Composer.tsx constant to COMPOSER_MAX_LENGTH (drop the export unless something imports it) with a one-line comment that it is a UI cap below the contract 4000, and, if q1 remediation moves the wire limits into types/Assistant.ts, have Assistant.service.ts import ASSISTANT_MESSAGE_MAX_LENGTH from there instead of redeclaring MESSAGE_MAX_LENGTH.",
+      "confidence": "high"
+    },
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:58:04-04:00",
+      "id": "q3",
+      "severity": "low",
+      "category": "integration",
+      "location": "concierge/agent.py:139,154-157,166,168-170,287 (producer) and frontend/overlay/gateways/http/Agent.gateway.ts:48-50 and frontend/overlay/providers/Assistant.provider.tsx:157-165,286-294 (consumers)",
+      "evidence": "agent.py: four distinct 409 reasons distinguishable only by prose (rebind, foreign session, in flight, turn limit); Agent.gateway.ts: case 409 collapses all to one retryable conflict code; Assistant.provider.tsx: conflictKind re-derives the reason via a second GET and a mirrored ASSISTANT_MAX_TURNS.",
+      "description": "Task 2 (and sec-sec1) emit four 409 reasons as free text, task 5 flattens them to a single retryable conflict, and task 6 recovers the reason client-side with an extra status round trip plus a mirrored constant. The seam has a hole: the scenario/budget rebind 409 has no class, so conflictKind returns busy and the panel offers Retry for a request that can never succeed; any future 409 reason lands in the same bucket. Reaching the rebind case needs an out-of-band budget change, so this is drift risk more than a live bug today.",
+      "remediation": "Have the agent raise its 409s with a structured detail like the existing 502s, {message, reason: foreign | in_flight | turn_limit | rebind}; extend agentDetail/failureFor in Agent.gateway.ts to pass reason through as an optional error.reason in AssistantErrorPayload with retryable=false for turn_limit/rebind/foreign; then have Assistant.provider.tsx fail() branch on failure.reason and delete conflictKind and the ASSISTANT_MAX_TURNS mirror (and its pin in test_frontend_overlay.py). Add a tests/test_contract.py assertion that each 409 carries its reason.",
+      "confidence": "medium"
+    },
+    {
+      "status": "deferred",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-11T20:58:04-04:00",
+      "id": "q4",
+      "severity": "low",
+      "category": "integration",
+      "location": "concierge/agent.py:404 and concierge/contract.py:113 (producer) vs frontend/overlay/components/Assistant/Transcript.tsx:90 and tests/test_frontend_overlay.py:296-299 (consumer)",
+      "evidence": "agent.py/contract.py (task 2): feedback_enabled=self.langfuse.enabled; Transcript.tsx (task 5) renders Feedback for every answer and never reads the field; test_frontend_overlay.py forbids gating on it.",
+      "description": "Task 2 added feedback_enabled to the contract for the storefront to act on; task 5, satisfying its AC5 (a click must surface not saved), renders Feedback unconditionally and its test forbids gating on the field. Result: a contract field with a producer, a TS type, a fixture value, and a mirror test keeping it present, but no consumer anywhere in the overlay; shoppers can click Helpful on a stack that will never store the score and are only told afterwards.",
+      "remediation": "Pass response.feedback_enabled into Feedback.tsx and, when false, render the Feedback not saved hint up front (keeping the two buttons so the click-to-not-saved path and Cypress hooks still hold); or drop feedback_enabled from contract.AssistantResponse, types/Assistant.ts, AssistantFixtures.ts and the agent, letting the field-set mirror test confirm alignment. Pick one and update tests/test_contract.py:129 accordingly.",
+      "confidence": "high"
+    }
+  ]
 }
