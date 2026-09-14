@@ -1,0 +1,110 @@
+# Helm values for open-telemetry/opentelemetry-demo (chart 0.41.0).
+#
+# Static and committed as-is: nothing in here is account-specific. The two
+# values that are -- the ECR repository holding the patched frontend image and
+# its tag -- arrive as `--set components.frontend.imageOverride.{repository,tag}`
+# from scripts/deploy.sh, and the OTLP auth token is read from a Secret at run
+# time (see extraEnvsFrom below). No placeholders, no sed step.
+#
+# Changes vs. the upstream chart:
+#   1. The bundled backends (Jaeger / Prometheus / Grafana / OpenSearch) are
+#      switched off: ClickStack replaces them, and dropping them frees ~4 GB.
+#   2. The demo's gateway collector gains an `otlphttp/clickstack` exporter and
+#      every signal pipeline is pointed at it.
+#   3. The frontend runs our own image with the ClickStack browser SDK compiled
+#      in (session replay), built by scripts/build-frontend.sh.
+#
+# Not set here, deliberately: no `service.type` for frontend-proxy -- the
+# storefront is reached only through `kubectl port-forward` (./demo.sh tunnel),
+# and the chart's default PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+# (http://localhost:8080/otlp-http/v1/traces) is already right for that path.
+
+jaeger:
+  enabled: false
+prometheus:
+  enabled: false
+grafana:
+  enabled: false
+opensearch:
+  enabled: false
+
+components:
+  # The upstream chart caps these two at limits.memory 20Mi. Carried over from
+  # the laptop workshop, where OrbStack's kernel accounts container memory
+  # differently and OOMKilled both (exit 137). A limit is a ceiling, not a
+  # reservation, so on EKS this costs nothing and keeps the file identical in
+  # spirit to the workshop's.
+  product-catalog:
+    resources:
+      limits:
+        memory: 128Mi
+  checkout:
+    resources:
+      limits:
+        memory: 128Mi
+
+  frontend:
+    # repository and tag are supplied by deploy.sh (`--set`), because the ECR
+    # URL contains the account id. The tag is deterministic (demo commit plus a
+    # hash of the session-replay patch), so it can be reused across builds
+    # that produce the same content; Always makes sure a rebuilt image under the
+    # same tag is actually pulled.
+    imageOverride:
+      pullPolicy: Always
+    # The workshop layered this as a second values file rendered at build time;
+    # here it is folded into the one static file. Helm replaces lists rather
+    # than merging them, so this list is the complete override set: the
+    # chart's own frontend env (including the trace endpoint) is untouched.
+    #
+    # PUBLIC_HYPERDX_ENABLED only *activates* SDK code that must already be in
+    # the bundle -- hence the custom image. PUBLIC_HYPERDX_URL is intentionally
+    # absent: the SDK falls back to window.location.origin + /otlp-http, which
+    # is the same-origin path through the port-forward.
+    envOverrides:
+      - name: PUBLIC_HYPERDX_ENABLED
+        value: "true"
+
+  # Optional trims, off by default for parity with the workshop. Uncommenting
+  # these four drops ~1.6 GiB of requests and four pods (the GenAI side of the
+  # demo), which is worth it on a two-node cluster if you never show them.
+  # chatbot:
+  #   enabled: false
+  # agent:
+  #   enabled: false
+  # mcp:
+  #   enabled: false
+  # telemetry-docs:
+  #   enabled: false
+
+opentelemetry-collector:
+  # The demo's gateway collector (a DaemonSet). It forwards every signal to the
+  # ClickStack collector in the clickstack namespace, which requires the shared
+  # OTLP_AUTH_TOKEN on each request. The token lives in the Secret
+  # otel-demo/clickstack-otlp-token created by deploy.sh; it is injected as an
+  # environment variable and expanded by the collector itself at start-up via
+  # ${env:...}, so the token is never written into this file or the ConfigMap.
+  extraEnvsFrom:
+    - secretRef:
+        name: clickstack-otlp-token
+  config:
+    exporters:
+      otlphttp/clickstack:
+        # In-cluster address of the Service in k8s/clickstack-collector.yaml.
+        endpoint: http://clickstack-otel-collector.clickstack.svc.cluster.local:4318
+        headers:
+          authorization: "${env:OTLP_AUTH_TOKEN}"
+        retry_on_failure:
+          enabled: true
+        sending_queue:
+          enabled: true
+          batch: {}
+    service:
+      pipelines:
+        # The chart's own exporters (otlp_grpc/jaeger, otlp_http/prometheus,
+        # opensearch) stay defined but unreferenced; the collector allows that.
+        traces:
+          exporters: [otlphttp/clickstack, debug, span_metrics]
+        metrics:
+          exporters: [otlphttp/clickstack, debug]
+        logs:
+          exporters: [otlphttp/clickstack, debug]

@@ -1,0 +1,113 @@
+# ClickStack distribution of the OpenTelemetry Collector.
+#
+# Runs in "managed ClickStack" mode: no OPAMP_SERVER_URL, so the collector takes
+# its ClickHouse target straight from env vars and secures its own OTLP
+# receivers with OTLP_AUTH_TOKEN (clients must send `authorization: <token>`).
+#
+# The five env vars (CLICKHOUSE_ENDPOINT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD,
+# HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE, OTLP_AUTH_TOKEN) come from the
+# Secret clickstack/clickstack-credentials, which scripts/deploy.sh creates from
+# the gitignored envvars.clickhouse at deploy time. This manifest is static and
+# holds no secret values, so it is applied as-is.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: clickstack
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: clickstack-otel-collector
+  namespace: clickstack
+  labels:
+    app: clickstack-otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: clickstack-otel-collector
+  template:
+    metadata:
+      labels:
+        app: clickstack-otel-collector
+    spec:
+      containers:
+        - name: collector
+          # Pinned so the collector's baked-in config cannot change under the
+          # demo between one session and the next; bump it deliberately.
+          image: clickhouse/clickstack-otel-collector:2.38.0
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: clickstack-credentials
+          env:
+            # Quieten the collector's own logs. Its baked-in config parses JSON
+            # out of log bodies with:
+            #
+            #   set(log.cache, ExtractPatterns(log.body, "(?P<0>(\{.*\}))")) where IsString(log.body)
+            #   merge_maps(log.attributes, ParseJSON(log.cache["0"]), "upsert") where IsMap(log.cache)
+            #
+            # The second guard is wrong: log.cache is *always* a map, so on a
+            # plain-text body -- which is most of what the demo emits -- it
+            # calls ParseJSON(nil) and warns. error_mode is already `ignore`,
+            # but in OTTL `ignore` still logs; only `silent` suppresses. The
+            # result is one warn line per non-JSON log record, which drowns
+            # everything else. Dropping to `error` hides them.
+            #
+            # Trade-off: genuine warn-level messages (e.g. export retries) are
+            # hidden too. Set to `warn` or `info` when debugging the pipeline.
+            - name: HYPERDX_LOG_LEVEL
+              value: error
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+            - name: health
+              containerPort: 13133
+            - name: metrics
+              containerPort: 8888
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 20
+            periodSeconds: 15
+            failureThreshold: 6
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              memory: 2Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: clickstack-otel-collector
+  namespace: clickstack
+  labels:
+    app: clickstack-otel-collector
+spec:
+  type: ClusterIP
+  selector:
+    app: clickstack-otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: health
+      port: 13133
+      targetPort: 13133
+    - name: metrics
+      port: 8888
+      targetPort: 8888

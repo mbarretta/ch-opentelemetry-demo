@@ -1,0 +1,37 @@
+# Copy to tofu/terraform.tfvars (gitignored) and edit. Every variable has a
+# default (see variables.tf); this file only shows the ones people change.
+
+# Network. us-east-1 in the demo account is at its 5-VPC quota, so the cluster
+# runs in the account default VPC (172.31.0.0/16, default public subnets), which
+# OpenTofu only reads and never modifies or deletes. To get a dedicated
+# 10.20.0.0/16 VPC instead (an account with VPC headroom), set
+# use_default_vpc = false BEFORE the first apply: a cluster cannot move between
+# VPCs, so changing it later means `./demo.sh destroy` and a fresh apply.
+# eks_excluded_azs keeps the control plane out of AZs EKS does not support
+# (us-east-1e) or that have no default subnet.
+use_default_vpc  = true
+eks_excluded_azs = ["us-east-1e"]
+
+# Local time at which the nightly schedule scales the node group to 0.
+scale_down_hour     = 23
+scale_down_timezone = "America/New_York"
+
+# Source addresses allowed to reach the public EKS API endpoint. The default
+# admits any source address; IAM authentication still applies, so an unknown
+# caller reaches the TLS endpoint but not the cluster. Narrow it to your own
+# egress IP when you can (`curl -s https://checkip.amazonaws.com` prints it;
+# one /32 per address, one entry per office or VPN exit):
+# endpoint_public_access_cidrs = ["203.0.113.7/32"]
+endpoint_public_access_cidrs = ["0.0.0.0/0"]
+
+# Node shape. Cheaper: "m7g.large" (slower startup). x86 instead of Graviton:
+# instance_type = "m7i.xlarge", ami_type = "AL2023_x86_64_STANDARD",
+# node_platform = "linux/amd64".
+instance_type = "m7g.xlarge"
+node_count    = 2
+
+# Teammates' IAM principals (for example SSO permission-set role ARNs) that
+# should be cluster admins alongside whoever runs `tofu apply`.
+extra_admin_principal_arns = [
+  # "arn:aws:iam::<account-id>:role/aws-reserved/sso.amazonaws.com/AWSReservedSSO_<PermissionSet>_<hash>",
+]
