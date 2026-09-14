@@ -1,4 +1,10 @@
-"""The four images: their build inputs, the content tag over them, staging, and the manifest."""
+"""The four images: their build inputs, the content tag, staging, the manifest, and publishing.
+
+Building and publishing are one story with two halves and one manifest between them: `build`
+records what it built and for which platform, and `publish` pushes those images to the
+account's ECR repositories, refuses a platform the cluster's nodes cannot run, and records
+where they landed for `demo.py eks deploy` to point Helm at.
+"""
 
 import hashlib
 import json
@@ -199,6 +205,14 @@ def contract_version():
     return CONTRACT_VERSION
 
 
+def save_manifest(manifest):
+    """Write the manifest, creating `.runtime/images` on the way."""
+    path = manifest_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2) + "\n")
+    return manifest
+
+
 def write_manifest(tag, platform, image_ids):
     """Record the build; services built separately keep their entries.
 
@@ -219,22 +233,27 @@ def write_manifest(tag, platform, image_ids):
             "images": images,
         }
     )
-    path = manifest_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(manifest, indent=2) + "\n")
-    return manifest
+    return save_manifest(manifest)
 
 
 def build_context(service):
     return core.RUNTIME / "build" if service in STAGED_IMAGES else core.ROOT
 
 
-def build(services, platform=None):
+def require_known(services):
+    """Refuse a service name that is not one of the four, naming the four.
+
+    `build` and `publish` take the same `--service` argument, so they refuse it identically.
+    """
     unknown = sorted(set(services) - set(core.IMAGES))
     if unknown:
         raise SystemExit(
             f"Unknown service(s) {', '.join(unknown)}; choose from {', '.join(core.IMAGES)}."
         )
+
+
+def build(services, platform=None):
+    require_known(services)
     if STAGED_IMAGES & set(services):
         stage()
     upstream.write_tools()
@@ -272,9 +291,154 @@ def publish(services, force=False):
     inputs, refuses a platform the cluster's nodes cannot run, and writes
     `manifest.published[service]` (see PUBLISHED_FIELDS) for the deploy to point Helm at.
 
-    The body lands with the publish task.
+    This replaces `build-frontend.sh`, which built and pushed one image inside one script. The
+    split is the reason for the platform gate: `build` runs wherever the developer is and
+    records what it built for, and `publish` is the first step that knows what the node group
+    runs, so it is the last chance to refuse an image that would only fail as a CrashLoop.
+
+    Every requested service ends up recorded, whether or not this run pushed it: a tag already
+    in the registry is skipped (that is what `--force` overrides), but the deploy's gate reads
+    `manifest.published`, not ECR, so skipping the push must not mean skipping the record.
     """
-    raise SystemExit("not implemented yet")
+    # Deferred rather than module-scope, as a guard rather than a fix: nothing under
+    # launcher.eks imports this module yet, so a top-level import would load cleanly today.
+    # `eks deploy` calls require_published() from launcher.eks.lifecycle, and the day that body
+    # lands, importing launcher.eks from here would close a cycle through its __init__.
+    from .eks import aws
+
+    require_known(services)
+    core.need("aws", "docker", "tofu")
+    manifest = require_built(services)
+    tag, platform = manifest["tag"], manifest["platform"]
+
+    aws.aws_login()
+    node_platform = aws.tf_out("node_platform")
+    if platform != node_platform:
+        core.die(
+            f"the images in {manifest_path()} were built for {platform} but the cluster's nodes "
+            f"run {node_platform}; rebuild them with `demo.py build --platform {node_platform}`"
+        )
+    repositories = aws.tf_out("ecr_repository_urls")
+    missing = sorted(service for service in services if service not in repositories)
+    if missing:
+        core.die(
+            f"no ECR repository for {', '.join(missing)} in the OpenTofu outputs: "
+            "run `demo.py eks apply` to create the four repositories"
+        )
+
+    pushing = [
+        service
+        for service in services
+        if force or not aws.ecr_has_image(repositories[service], tag)
+    ]
+    for service in services:
+        if service not in pushing:
+            core.log(
+                f"{repositories[service]}:{tag} is already in ECR; not pushing it again "
+                "(use --force to push anyway)"
+            )
+    if pushing:
+        aws.ecr_login()
+
+    published = {}
+    for service in services:
+        repository = repositories[service]
+        remote = f"{repository}:{tag}"
+        if service in pushing:
+            core.log(f"pushing {remote} ({platform})")
+            core.run("docker", "tag", image_name(service, tag), remote)
+            core.run("docker", "push", remote)
+        published[service] = {
+            "repository": repository,
+            "tag": tag,
+            "digest": aws.ecr_image_digest(repository, tag),
+        }
+    record_published(published)
+    for service in services:
+        print(f"{published[service]['repository']}:{tag} {published[service]['digest']}")
+    print(f"Manifest: {manifest_path()}")
+    print("Next: demo.py eks deploy (rolls the release onto these images)")
+
+
+def record_published(published):
+    """Merge per-service publish records into `manifest.published` and rewrite the manifest.
+
+    A merge rather than a replace, so `publish --service frontend` does not unpublish the other
+    three: the deploy's gate reads every service out of this one section.
+    """
+    manifest = read_manifest() or {}
+    recorded = manifest.get("published") or {}
+    recorded.update(published)
+    manifest["published"] = recorded
+    return save_manifest(manifest)
+
+
+def require_built(services):
+    """The manifest, once `build` has recorded those services and their images are still local.
+
+    `publish` retags what is on this Docker host, so a recorded image that has since been
+    pruned has to be caught here rather than by a `docker tag` failure.
+    """
+    manifest = read_manifest()
+    hint = "run `demo.py build` first."
+    if manifest is None:
+        raise SystemExit(f"No build manifest at {manifest_path()}; {hint}")
+    missing = missing_images(manifest, services)
+    if missing:
+        raise SystemExit(f"Missing local image(s): {', '.join(missing)}; {hint}")
+    return manifest
+
+
+def require_published():
+    """The `published` section, once every service is in it at the current build tag.
+
+    The gate `eks deploy` runs first, and it refuses in three shapes because the fix differs:
+    nothing published at all, a service absent from an otherwise published set, and a set
+    published at a tag the build inputs have moved past. The last one is the dangerous case --
+    the Helm release would roll out happily, pointing at last week's images.
+    """
+    manifest = read_manifest()
+    hint = "run `demo.py build` then `demo.py publish` first."
+    if manifest is None:
+        core.die(f"no build manifest at {manifest_path()}: {hint}")
+    published = manifest.get("published") or {}
+    if not published:
+        core.die(f"nothing published from {manifest_path()} yet: {hint}")
+    absent = [
+        service
+        for service in core.IMAGES
+        if not all((published.get(service) or {}).get(field) for field in PUBLISHED_FIELDS)
+    ]
+    if absent:
+        core.die(f"no published image for {', '.join(absent)}: {hint}")
+    current = build_tag()
+    stale = [service for service in core.IMAGES if published[service]["tag"] != current]
+    if stale:
+        # Every distinct stale tag, not just the first one's: publishing service by service as
+        # the inputs move leaves a published section at more than one tag, and naming one of
+        # them would describe the others wrongly.
+        tags = sorted({published[service]["tag"] for service in stale})
+        core.die(
+            f"the published image(s) for {', '.join(stale)} are at build tag "
+            f"{', '.join(tags)}, but the current build inputs are {current}: {hint}"
+        )
+    return published
+
+
+def missing_images(manifest, services):
+    """Those services' recorded images that are not on this Docker host, as message fragments.
+
+    A service the manifest has never seen and one whose image has been pruned are both missing,
+    and both name themselves in the refusal that follows.
+    """
+    missing = []
+    for service in services:
+        recorded = manifest.get("images", {}).get(service)
+        if recorded is None:
+            missing.append(f"{service} (never built)")
+        elif not image_exists(recorded["image"]):
+            missing.append(recorded["image"])
+    return missing
 
 
 def require_images():
@@ -283,13 +447,7 @@ def require_images():
     hint = "run `scripts/demo.py build` first."
     if manifest is None:
         raise SystemExit(f"No build manifest at {manifest_path()}; {hint}")
-    missing = []
-    for service in core.IMAGES:
-        recorded = manifest["images"].get(service)
-        if recorded is None:
-            missing.append(f"{service} (never built)")
-        elif not image_exists(recorded["image"]):
-            missing.append(recorded["image"])
+    missing = missing_images(manifest, core.IMAGES)
     if missing:
         raise SystemExit(f"Missing local image(s): {', '.join(missing)}; {hint}")
     current = build_tag()
