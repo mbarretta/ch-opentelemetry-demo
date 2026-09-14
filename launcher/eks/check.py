@@ -28,9 +28,8 @@ from pathlib import Path
 from .. import core
 from . import config, infra, k8s, values
 
-# The static manifest `eks deploy` applies as-is, and the workload kinds a rendered chart can
-# put a container in. Both live here because `check` is the first module to need them.
-COLLECTOR_MANIFEST = "clickstack-collector.yaml"
+# The workload kinds a rendered chart can put a container in. The collector manifest's own name
+# is `config.COLLECTOR_MANIFEST`: `eks deploy` applies the same file this parses.
 WORKLOAD_KINDS = ("Deployment", "DaemonSet", "StatefulSet")
 
 # The image references the render is done with. The real ones are account-specific (the ECR URL
@@ -123,20 +122,22 @@ def check_collector_manifest():
     for this command -- `kubectl kustomize` is the offline equivalent: it parses every document
     and requires apiVersion, kind and metadata.name on each.
     """
-    manifest = config.k8s_dir() / COLLECTOR_MANIFEST
+    manifest = config.k8s_dir() / config.COLLECTOR_MANIFEST
     if not manifest.is_file():
         core.die(f"missing {manifest}: `eks deploy` applies this manifest as-is")
 
     if cluster_reachable():
-        core.log(f"kubectl apply --dry-run=client -f {COLLECTOR_MANIFEST}")
+        core.log(f"kubectl apply --dry-run=client -f {config.COLLECTOR_MANIFEST}")
         core.run("kubectl", "apply", "--dry-run=client", "-f", manifest, stdout=core.DEVNULL)
         return
 
-    core.log(f"kubectl kustomize {COLLECTOR_MANIFEST} (no cluster reachable; offline parse)")
+    core.log(
+        f"kubectl kustomize {config.COLLECTOR_MANIFEST} (no cluster reachable; offline parse)"
+    )
     with tempfile.TemporaryDirectory() as directory:
         staged = Path(directory)
-        (staged / COLLECTOR_MANIFEST).write_text(manifest.read_text())
-        (staged / "kustomization.yaml").write_text(f"resources:\n  - {COLLECTOR_MANIFEST}\n")
+        (staged / config.COLLECTOR_MANIFEST).write_text(manifest.read_text())
+        (staged / "kustomization.yaml").write_text(f"resources:\n  - {config.COLLECTOR_MANIFEST}\n")
         core.run("kubectl", "kustomize", staged, stdout=core.DEVNULL)
 
 

@@ -61,12 +61,10 @@ REPLY_CHARS = 200
 # the instant the storefront answers. Waiting here is the difference between the counts below
 # including the turn just driven and appearing to prove nothing.
 SETTLE_SECONDS = 10
-# The ClickStack collector is addressed as its Deployment, not as a pod: kubectl resolves it to
-# a live pod, so the rollout-generated pod name never has to be hardcoded here -- it changes on
-# every redeploy.
-COLLECTOR_DEPLOYMENT = "deploy/clickstack-otel-collector"
+# The demo's own gateway collector pods, matched by name in a `kubectl get pods` table. The
+# ClickStack collector beside it is addressed as `config.COLLECTOR_DEPLOYMENT` and tailed to
+# `config.COLLECTOR_LOG_TAIL`, the same names and depth `eks deploy` waits on and prints.
 COLLECTOR_POD = "otel-collector"
-LOG_TAIL = 40
 # A zero here is the one count that routinely means nothing is wrong, so it says so itself.
 REPLAY_NOTE = (
     "zero is information, not a failure: session replay is recorded by the browser, so it "
@@ -330,9 +328,14 @@ def report_collector():
         print(collector_pods(listing.stdout))
 
     print()
-    core.log(f"ClickStack collector logs (last {LOG_TAIL} lines)")
+    core.log(f"ClickStack collector logs (last {config.COLLECTOR_LOG_TAIL} lines)")
     report_command(
-        "kubectl", "-n", config.NS_CS, "logs", COLLECTOR_DEPLOYMENT, f"--tail={LOG_TAIL}"
+        "kubectl",
+        "-n",
+        config.NS_CS,
+        "logs",
+        config.COLLECTOR_DEPLOYMENT,
+        f"--tail={config.COLLECTOR_LOG_TAIL}",
     )
 
 
