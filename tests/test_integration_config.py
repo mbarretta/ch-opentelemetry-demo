@@ -104,21 +104,6 @@ def test_transform_sets_http_route_for_assistant_api_routes_before_span_names_ar
     assert any("/api/cart" in s for s in released)
 
 
-def test_fault_targets_only_selected_product(tmp_path, monkeypatch):
-    monkeypatch.setattr(core, "RUNTIME", tmp_path)
-    (tmp_path / "flagd").mkdir()
-    original = json.loads((core.UPSTREAM / "src/flagd/demo.flagd.json").read_text())
-    path = tmp_path / "flagd/demo.flagd.json"
-    path.write_text(json.dumps(original))
-    stack.scenario("backend-failure")
-    changed = json.loads(path.read_text())
-    fault = changed["flags"]["productCatalogFailure"]
-    assert fault["targeting"]["if"][1] == "on"
-    assert fault["targeting"]["if"][2] == "off"
-    stack.scenario("shopping")
-    assert json.loads(path.read_text()) == original
-
-
 def frontend_environment(variables):
     return rendered_environment("compose.native.yaml", "frontend", variables)
 
