@@ -171,13 +171,24 @@ IMPLEMENTED = {
     "apply": "tests/test_eks_infra.py",
     "destroy": "tests/test_eks_infra.py",
     "nightly": "tests/test_eks_infra.py",
+    "tunnel": "tests/test_eks_tunnel.py",
 }
 
 
-def test_every_eks_subcommand_dispatches_to_its_module():
-    """A reachable command in every case: a stub that says so, or a body with its own tests."""
+def test_every_eks_subcommand_dispatches_to_its_module(fake_sh):
+    """A reachable command in every case: a stub that says so, or a body with its own tests.
+
+    `fake_sh` is the safety net rather than a convenience. It stands in front of the three
+    `core` chokepoints every launcher module reaches the outside world through, so a body that
+    lands without its `IMPLEMENTED` entry is recorded here instead of running live `aws`,
+    `kubectl`, `helm` or `tofu` from a parser test. The closing assertion is what proves the
+    net held: this test is expected to reach no process at all.
+    """
     parser = cli.build_parser()
     assert set(EKS_INVOCATIONS) == set(subcommands(subcommands(parser)["eks"]))
+
+    for name, owner in IMPLEMENTED.items():
+        assert (core.ROOT / owner).exists(), f"{name} names a test file that does not exist"
 
     for name, line in EKS_INVOCATIONS.items():
         args = parser.parse_args(line.split())
@@ -188,8 +199,10 @@ def test_every_eks_subcommand_dispatches_to_its_module():
             args.handler(args)
         assert str(failure.value) == "not implemented yet", name
 
+    assert fake_sh.lines() == [], "a parser test reaches no aws, kubectl, helm or tofu call"
 
-def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch):
+
+def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch, fake_sh):
     """Both run on a laptop that has never staged the frontend; `up` and `stage` do not."""
     monkeypatch.setattr(core, "RUNTIME", tmp_path)
     assert not (tmp_path / "tools.py").exists()
@@ -197,6 +210,8 @@ def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch
     # only the default it sets can be asserted.
     assert cli.build_parser().parse_args(["bootstrap"]).needs_bootstrap is False
 
+    # `fake_sh` for the same reason as the dispatch test above: every line below reaches
+    # `cli.main`, so the day one of these stops being a stub it must be recorded, not run.
     for line in ("publish", "eks status", "eks check"):
         with pytest.raises(SystemExit) as failure:
             cli.main(line.split())
@@ -205,6 +220,8 @@ def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch
     for line in ("up", "stage"):
         with pytest.raises(SystemExit, match="bootstrap first"):
             cli.main(line.split())
+
+    assert fake_sh.lines() == [], "a stub and a refusal both reach no process"
 
 
 def test_logs_reaches_compose_with_the_debug_profile(bootstrapped, fake_sh):
