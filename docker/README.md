@@ -79,6 +79,13 @@ ones. The native stack has no application-code bind mounts on `agent`, `mcp`, or
 so a container restart picks up Python edits. The chatbot has no image of its own: it is the
 released chatbot image with the package mounted, kept behind the Compose `debug` profile.
 
+The frontend image bakes in no assistant settings. `compose.native.yaml` passes `AGENT_BASE_URL`,
+`ASSISTANT_TRANSPORT`, and `ASSISTANT_DEMO_DETAILS` from `.env` to the frontend container when
+it starts, so changing them needs `up`, not a rebuild. Demo details are off unless
+`ASSISTANT_DEMO_DETAILS=true`; that opt-in shows the scenario, prompt, tool calls, and trace
+links, which name the Langfuse and ClickStack backends, under each answer, so use it for demo
+runs only. `tests/test_integration_config.py` checks the rendered default.
+
 ## Envoy template
 
 `envoy.tmpl.yaml` is the released `src/frontend-proxy/envoy.tmpl.yaml` with two changes:
