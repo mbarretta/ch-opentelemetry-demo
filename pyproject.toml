@@ -12,6 +12,9 @@ pythonpath = [".", ".runtime/python"]
 [tool.ruff]
 target-version = "py314"
 line-length = 100
+# The trees ruff lints, `launcher` among them since the CLI moved out of scripts/demo.py. The
+# verification command names the same four, so a bare `ruff check` covers the same files.
+include = ["concierge/**/*.py", "launcher/**/*.py", "scripts/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I"]

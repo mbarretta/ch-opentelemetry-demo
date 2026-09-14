@@ -16,9 +16,9 @@ from uuid import uuid4
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from scripts.demo import RUNTIME, environment, scenario  # noqa: E402
+from launcher import RUNTIME, environment, scenario  # noqa: E402
 
-# What the Langfuse pipeline may retain from a storefront turn (see demo.langfuse_span_filter).
+# What the Langfuse pipeline may retain from a storefront turn (see collector.langfuse_span_filter).
 RETAINED_SERVICES = {"frontend-web", "frontend-proxy", "frontend", "agent", "mcp"}
 
 

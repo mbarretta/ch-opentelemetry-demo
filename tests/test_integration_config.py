@@ -3,7 +3,7 @@ import json
 import pytest
 from dotenv import dotenv_values
 
-from scripts import demo
+from launcher import collector, core, stack
 from tests.compose_yaml import rendered_environment
 
 BOTH_BACKENDS = {
@@ -16,7 +16,7 @@ BOTH_BACKENDS = {
 
 
 def test_both_backends_receive_intended_signals_without_secrets_in_config():
-    config = demo.collector_config(BOTH_BACKENDS)
+    config = collector.collector_config(BOTH_BACKENDS)
     pipelines = config["service"]["pipelines"]
     for signal in ("traces", "metrics", "logs"):
         assert "otlp_http/clickstack" in pipelines[signal]["exporters"]
@@ -29,22 +29,22 @@ def test_both_backends_receive_intended_signals_without_secrets_in_config():
 
 def test_incomplete_langfuse_config_rejected():
     with pytest.raises(SystemExit):
-        demo.collector_config({"LANGFUSE_BASE_URL": "https://lf.test"})
+        collector.collector_config({"LANGFUSE_BASE_URL": "https://lf.test"})
 
 
 def test_capture_mode_needs_no_backends_and_still_previews_the_langfuse_set():
-    config = demo.collector_config({})
+    config = collector.collector_config({})
     pipelines = config["service"]["pipelines"]
     assert "file/capture" in pipelines["traces"]["exporters"]
     assert "otlp_http/langfuse" not in config["exporters"]
     # The filtered set is always written, so the retained spans can be inspected without credentials.
     assert pipelines["traces/langfuse"]["exporters"] == ["file/langfuse-preview"]
-    assert config["exporters"]["file/langfuse-preview"]["path"] == demo.LANGFUSE_PREVIEW
-    assert demo.LANGFUSE_PREVIEW == "/var/lib/otel/langfuse-preview.jsonl"
+    assert config["exporters"]["file/langfuse-preview"]["path"] == collector.LANGFUSE_PREVIEW
+    assert collector.LANGFUSE_PREVIEW == "/var/lib/otel/langfuse-preview.jsonl"
 
 
 def test_langfuse_pipeline_filters_after_route_normalization():
-    config = demo.collector_config(BOTH_BACKENDS)
+    config = collector.collector_config(BOTH_BACKENDS)
     processors = config["service"]["pipelines"]["traces/langfuse"]["processors"]
     assert processors.index("transform/sanitize_spans") < processors.index("filter/langfuse")
     assert processors.index("filter/langfuse") < processors.index("gen_ai_normalizer")
@@ -52,7 +52,7 @@ def test_langfuse_pipeline_filters_after_route_normalization():
 
 
 def test_langfuse_filter_keeps_the_whole_assistant_ancestor_chain():
-    config = demo.collector_config({})
+    config = collector.collector_config({})
     span_filter = config["processors"]["filter/langfuse"]
     assert span_filter["error_mode"] == "ignore"
     conditions = span_filter["traces"]["span"]
@@ -66,7 +66,7 @@ def test_langfuse_filter_keeps_the_whole_assistant_ancestor_chain():
     assert 'resource.attributes["service.name"] == "frontend-web"' in keep
     # Proxy: the ingress span by URL and the egress span by the assistant cluster's name.
     assert 'resource.attributes["service.name"] == "frontend-proxy"' in keep
-    assert f'attributes["upstream_cluster"] == "{demo.ASSISTANT_CLUSTER}"' in keep
+    assert f'attributes["upstream_cluster"] == "{collector.ASSISTANT_CLUSTER}"' in keep
     # Storefront: inbound server spans by route or target, Next's api-route span, the agent call.
     assert 'resource.attributes["service.name"] == "frontend"' in keep
     for attribute in ("http.route", "http.target", "url.path", "next.span_name", "http.url"):
@@ -74,22 +74,22 @@ def test_langfuse_filter_keeps_the_whole_assistant_ancestor_chain():
     for attribute in ("url.full", "http.url"):
         assert f'IsMatch(attributes["{attribute}"], "/assistant/(message|actions)")' in keep
     # Unrelated storefront traffic has no keep rule; these are dropped explicitly.
-    for route in ("/healthz", "/feedback", demo.AGENT_STATUS_ROUTE):
+    for route in ("/healthz", "/feedback", collector.AGENT_STATUS_ROUTE):
         assert f'attributes["http.route"] == "{route}"' in conditions[1], route
     assert 'IsMatch(attributes["http.url"], "/api/public/scores")' in conditions[2]
 
 
 def test_assistant_cluster_name_matches_the_envoy_template():
-    template = (demo.DOCKER / "envoy.tmpl.yaml").read_text()
-    assert f"route: {{ cluster: {demo.ASSISTANT_CLUSTER}, timeout:" in template
-    assert f"- name: {demo.ASSISTANT_CLUSTER}\n" in template
+    template = (core.DOCKER / "envoy.tmpl.yaml").read_text()
+    assert f"route: {{ cluster: {collector.ASSISTANT_CLUSTER}, timeout:" in template
+    assert f"- name: {collector.ASSISTANT_CLUSTER}\n" in template
 
 
 def test_transform_sets_http_route_for_assistant_api_routes_before_span_names_are_normalized():
-    config = demo.collector_config({})
+    config = collector.collector_config({})
     statements = config["processors"]["transform/sanitize_spans"]["trace_statements"][0]["statements"]
     ours = [s for s in statements if "/api/assistant" in s]
-    assert [s.split('"')[3] for s in ours] == list(demo.ASSISTANT_ROUTES)
+    assert [s.split('"')[3] for s in ours] == list(collector.ASSISTANT_ROUTES)
     for statement in ours:
         assert statement.startswith('set(span.attributes["http.route"], "/api/assistant/')
         assert 'span.kind == SPAN_KIND_SERVER' in statement
@@ -105,17 +105,17 @@ def test_transform_sets_http_route_for_assistant_api_routes_before_span_names_ar
 
 
 def test_fault_targets_only_selected_product(tmp_path, monkeypatch):
-    monkeypatch.setattr(demo, "RUNTIME", tmp_path)
+    monkeypatch.setattr(core, "RUNTIME", tmp_path)
     (tmp_path / "flagd").mkdir()
-    original = json.loads((demo.UPSTREAM / "src/flagd/demo.flagd.json").read_text())
+    original = json.loads((core.UPSTREAM / "src/flagd/demo.flagd.json").read_text())
     path = tmp_path / "flagd/demo.flagd.json"
     path.write_text(json.dumps(original))
-    demo.scenario("backend-failure")
+    stack.scenario("backend-failure")
     changed = json.loads(path.read_text())
     fault = changed["flags"]["productCatalogFailure"]
     assert fault["targeting"]["if"][1] == "on"
     assert fault["targeting"]["if"][2] == "off"
-    demo.scenario("shopping")
+    stack.scenario("shopping")
     assert json.loads(path.read_text()) == original
 
 
@@ -138,6 +138,6 @@ def test_demo_details_are_off_unless_the_operator_opts_in():
 
 
 def test_env_example_documents_demo_details_as_opt_in():
-    example = dotenv_values(demo.ROOT / ".env.example")
+    example = dotenv_values(core.ROOT / ".env.example")
     assert example["ASSISTANT_DEMO_DETAILS"] == "false"
     assert example["ASSISTANT_TRANSPORT"] == "live"
