@@ -346,10 +346,27 @@ def test_ecr_image_digest_refuses_the_cli_s_word_for_nothing(cluster):
     assert TAG in str(failure.value)
 
 
+def test_ecr_image_digest_refuses_an_error_exit_rather_than_raising(cluster):
+    """`describe-images` errors on a tag it cannot find; that is the reachable failure.
+
+    A tag deleted between the presence probe and the digest read, an expired session and a
+    throttle all land here, and `SystemExit` rather than `CalledProcessError` is the assertion:
+    `fake_sh` raises the latter for a non-zero exit whenever the caller left `check` on.
+    """
+    cluster.reply(DIGEST_QUERY.format(service="frontend", tag=TAG), returncode=254)
+
+    with pytest.raises(SystemExit) as failure:
+        aws.ecr_image_digest(REPOSITORIES["frontend"], TAG)
+
+    assert "ch-opentelemetry-demo/frontend" in str(failure.value)
+    assert TAG in str(failure.value)
+
+
 # --- the deploy's gate ----------------------------------------------------------------------
 
 
 STALE = "0000deadbeef"
+OLDER = "1111feedface"
 
 
 @pytest.fixture
@@ -406,6 +423,22 @@ def test_require_published_rejects_nothing_absent_and_stale_with_distinct_messag
     assert len(set(messages.values())) == len(messages), messages
     for case, message in messages.items():
         assert "demo.py publish" in message, case
+
+
+def test_require_published_names_every_distinct_stale_tag(gate):
+    """Publishing service by service as the inputs move leaves more than one stale tag."""
+    build_manifest()
+    published = published_at(TAG)
+    published["frontend"]["tag"] = STALE
+    published["agent"]["tag"] = OLDER
+    images.record_published(published)
+
+    with pytest.raises(SystemExit) as failure:
+        images.require_published()
+
+    message = str(failure.value)
+    assert STALE in message and OLDER in message, message
+    assert "frontend" in message and "agent" in message, message
 
 
 def test_require_published_returns_the_section_when_every_service_is_current(gate):

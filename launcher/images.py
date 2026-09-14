@@ -300,9 +300,10 @@ def publish(services, force=False):
     in the registry is skipped (that is what `--force` overrides), but the deploy's gate reads
     `manifest.published`, not ECR, so skipping the push must not mean skipping the record.
     """
-    # Deferred: launcher.eks.lifecycle imports this module for require_published(), and
-    # importing launcher.eks at module scope would make that a cycle through launcher.eks's
-    # __init__.
+    # Deferred rather than module-scope, as a guard rather than a fix: nothing under
+    # launcher.eks imports this module yet, so a top-level import would load cleanly today.
+    # `eks deploy` calls require_published() from launcher.eks.lifecycle, and the day that body
+    # lands, importing launcher.eks from here would close a cycle through its __init__.
     from .eks import aws
 
     require_known(services)
@@ -413,9 +414,13 @@ def require_published():
     current = build_tag()
     stale = [service for service in core.IMAGES if published[service]["tag"] != current]
     if stale:
+        # Every distinct stale tag, not just the first one's: publishing service by service as
+        # the inputs move leaves a published section at more than one tag, and naming one of
+        # them would describe the others wrongly.
+        tags = sorted({published[service]["tag"] for service in stale})
         core.die(
             f"the published image(s) for {', '.join(stale)} are at build tag "
-            f"{published[stale[0]]['tag']}, but the current build inputs are {current}: {hint}"
+            f"{', '.join(tags)}, but the current build inputs are {current}: {hint}"
         )
     return published
 

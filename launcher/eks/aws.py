@@ -202,11 +202,14 @@ def ecr_image_digest(repository, tag):
     Read back from the registry rather than scraped out of `docker push` output, which is also
     why it answers for an image that was already there and so was never pushed.
 
-    `--output text` prints the string `None` for a query that matched nothing, so an absent tag
-    would otherwise be recorded as the literal digest "None".
+    Two failures, one refusal. An absent tag is an error exit -- the same return code
+    `ecr_has_image` reads -- and a query that matches nothing prints the string `None`, which
+    `--output text` would otherwise hand back as a literal digest. Neither is worth a traceback,
+    so the return code is read rather than raised on, and stderr is left on the terminal (see
+    `core.capture`) so the CLI's own diagnosis still reaches the operator.
     """
     name = repository_name(repository)
-    digest = core.capture(
+    result = core.capture(
         "aws",
         "ecr",
         "describe-images",
@@ -218,8 +221,10 @@ def ecr_image_digest(repository, tag):
         "imageDetails[0].imageDigest",
         "--output",
         "text",
-    ).stdout.strip()
-    if not digest or digest == "None":
+        check=False,
+    )
+    digest = result.stdout.strip()
+    if result.returncode or not digest or digest == "None":
         core.die(f"ECR has no image digest for {name}:{tag}; push it with `demo.py publish`")
     return digest
 
