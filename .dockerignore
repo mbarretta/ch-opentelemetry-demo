@@ -23,5 +23,7 @@ compose*.yaml
 frontend
 tests
 scripts
+deploy
+launcher
 pyproject.toml
 requirements*

@@ -1,7 +1,7 @@
 [project]
-name = "astronomy-concierge-demo"
+name = "ch-opentelemetry-demo"
 version = "0.1.0"
-description = "OpenTelemetry Astronomy Shop with correlated ClickStack and Langfuse telemetry"
+description = "OpenTelemetry Astronomy Shop with correlated ClickStack and Langfuse telemetry, deployable to Docker Compose or EKS"
 requires-python = ">=3.14"
 
 [tool.pytest.ini_options]

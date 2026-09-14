@@ -8,3 +8,14 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 *.pyc
+
+# Absorbed from deploy/eks/.gitignore when ch-otel-demo-eks was imported as a subtree.
+deploy/eks/envvars.clickhouse
+deploy/eks/envvars.aws
+deploy/eks/opentelemetry-demo/
+deploy/eks/.run/
+deploy/eks/tofu/.terraform/
+deploy/eks/tofu/*.tfstate
+deploy/eks/tofu/*.tfstate.*
+deploy/eks/tofu/terraform.tfvars
+.DS_Store

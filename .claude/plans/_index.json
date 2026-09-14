@@ -1,6 +1,23 @@
 {
   "plans": [
     {
+      "slug": "feat-otel-demo-eks",
+      "title": "Standing OpenTelemetry demo on AWS EKS shipping to ClickStack on ClickHouse Cloud",
+      "status": "complete",
+      "mode": "dev",
+      "parallelism": "auto",
+      "autonomy": "managed",
+      "tasks_total": 16,
+      "tasks_complete": 16,
+      "wave_state": "idle",
+      "current_wave": null,
+      "wave_tasks_in_flight": [],
+      "paused_reason": "",
+      "deferred_open": 1,
+      "updated": "2026-09-14T12:51:43-04:00",
+      "path": ".claude/plans/feat-otel-demo-eks.json"
+    },
+    {
       "slug": "feat-merge-ch-otel-demo",
       "title": "Merge ch-otel-demo-eks into this repo as ch-opentelemetry-demo",
       "status": "planned",
@@ -15,7 +32,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-14T12:50:59-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-merge-ch-otel-demo.json"
+      "path": ".claude/plans/feat-merge-ch-otel-demo.json"
     },
     {
       "slug": "feat-native-assistant-ui",
@@ -32,7 +49,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-14T09:23:53-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-native-assistant-ui.json"
+      "path": ".claude/plans/feat-native-assistant-ui.json"
     }
   ],
   "charter": {
