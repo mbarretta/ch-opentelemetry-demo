@@ -7,6 +7,7 @@ component styles, the empty-state copy, the Cypress hooks, and the one-patch-per
 layout.
 """
 
+import json
 import re
 from pathlib import Path
 from typing import get_args
@@ -86,11 +87,53 @@ EXPECTED_PATCH_TARGETS = {
     # 130 px currency select, 40 px margin); these let the brand shrink and tighten the switcher.
     "0007-header-styled-brand-fit.patch": "src/frontend/components/Header/Header.styled.ts",
     "0008-currency-switcher-mobile-width.patch": "src/frontend/components/CurrencySwitcher/CurrencySwitcher.styled.ts",
+    # Session replay: the tracer branch that starts the ClickStack browser SDK, and the lockfile
+    # entry for it. Its package.json half rides in 0000, which predates this registry.
+    "0009-frontend-tracer-session-replay.patch": "src/frontend/utils/telemetry/FrontendTracer.ts",
+    "0010-package-lock-hyperdx.patch": "src/frontend/package-lock.json",
 }
 
 
 def patch_targets(patch: Path) -> list[str]:
     return re.findall(r"^\+\+\+ b/(.+)$", patch.read_text(), flags=re.MULTILINE)
+
+
+def patched_upstream(patch: Path) -> str:
+    """The pinned upstream file with `patch` applied, hunk by hunk.
+
+    Every patch is a complete diff against the pristine 3.0.0 export, so this is the file
+    `demo.py stage` produces -- without staging a tree or shelling out to `git apply`. The
+    context and removed lines are checked against upstream as they are consumed, so a patch that
+    no longer fits the pin fails here rather than asserting against a half-applied file.
+    """
+    (target,) = patch_targets(patch)
+    original = (UPSTREAM_FRONTEND / target.removeprefix("src/frontend/")).read_text().splitlines()
+    applied: list[str] = []
+    position = 0
+    in_hunk = False
+    for line in patch.read_text().splitlines():
+        header = re.match(r"^@@ -(\d+)", line)
+        if header:
+            start = int(header.group(1)) - 1
+            assert start >= position, f"{patch.name}: hunks are out of order"
+            applied.extend(original[position:start])
+            position = start
+            in_hunk = True
+        elif not in_hunk or line.startswith("\\"):
+            continue  # the diff preamble, or "\ No newline at end of file"
+        elif line.startswith("+"):
+            applied.append(line[1:])
+        else:
+            assert line == "" or line.startswith((" ", "-")), f"{patch.name}: stray {line!r}"
+            assert original[position] == line[1:], (
+                f"{patch.name} does not fit upstream at line {position + 1}"
+            )
+            if not line.startswith("-"):
+                applied.append(original[position])
+            position += 1
+    assert in_hunk, f"{patch.name} has no hunks"
+    applied.extend(original[position:])
+    return "\n".join(applied) + "\n"
 
 
 def test_contract_version_mirrors_the_agent_constant():
@@ -596,3 +639,116 @@ def test_no_second_browser_tracing_provider_or_fetch_instrumentation():
         added = "\n".join(line for line in patch.read_text().splitlines() if line.startswith("+") and not line.startswith("+++"))
         for marker in setup_markers:
             assert marker not in added, f"{patch.name} adds browser tracing setup ({marker})"
+
+
+# -- session replay --------------------------------------------------------------------------
+
+TRACER_PATCH = PATCHES / "0009-frontend-tracer-session-replay.patch"
+LOCK_PATCH = PATCHES / "0010-package-lock-hyperdx.patch"
+PACKAGE_PATCH = PATCHES / "0000-package-lint-and-hyperdx.patch"
+APP_PATCH = PATCHES / "0001-app-assistant-provider.patch"
+DOCUMENT_PATCH = PATCHES / "0006-document-assistant-env.patch"
+REPLAY_SDK = "@hyperdx/browser"
+REPLAY_SDK_VERSION = "0.25.1"
+REPLAY_FLAG = "NEXT_PUBLIC_HYPERDX_ENABLED"
+# What AssistantTracing.ts calls on the global @opentelemetry/api registrations: the tracer, the
+# active context, and the baggage propagator. Whichever provider FrontendTracer installs has to
+# leave all three working, or assistant.turn stops being the parent of the fetch it wraps.
+API_ENTRY_POINTS = (
+    r"trace\s*\.getTracer\(",
+    r"trace\.getSpan\(context\.active\(\)",
+    r"trace\.setSpan\(context\.active\(\)",
+    r"context\.with\(",
+    r"propagation\.getActiveBaggage\(",
+    r"propagation\.setBaggage\(",
+)
+
+
+def replay_branch(tracer: str) -> str:
+    """The body of the patched tracer's `if (NEXT_PUBLIC_HYPERDX_ENABLED === 'true')` block."""
+    branch = re.search(
+        rf"^  if \({REPLAY_FLAG} === 'true'\) \{{\n(.*?)\n  \}}\n",
+        tracer,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert branch, "the patched tracer has no session-replay branch"
+    return branch.group(1)
+
+
+def test_replay_branch_exports_same_origin_and_leaves_the_released_tracer_to_the_other_mode():
+    tracer = patched_upstream(TRACER_PATCH)
+    body = replay_branch(tracer)
+    assert f"await import('{REPLAY_SDK}')" in body
+    assert "HyperDX.init({" in body
+    # Same-origin export: the base URL is the page's own origin, which the proxy routes to the
+    # collector, so there is no CORS preflight and no collector credential in the bundle.
+    assert "url: NEXT_PUBLIC_HYPERDX_URL || `${window.location.origin}/otlp-http`" in body
+    # Propagation is not restricted to a cross-origin allow-list, so traceparent rides the
+    # storefront's own /api/assistant fetches -- the hop the assistant turn depends on.
+    assert "tracePropagationTargets: [/.*/]" in body
+    assert "service: NEXT_PUBLIC_OTEL_SERVICE_NAME" in body
+    assert "'demo.synthetic_request': IS_SYNTHETIC_REQUEST" in body
+    # The SessionIdProcessor does not run in this mode, so the storefront's id comes back as a
+    # global attribute under both the name the storefront uses and the one the processor set.
+    assert "HyperDX.setGlobalAttributes({ userId, 'session.id': userId })" in body
+    # The branch returns: the SDK registers its own provider globally, and building the demo's
+    # as well would double-instrument fetch and export every request twice.
+    assert body.rstrip().endswith("return;")
+
+
+def test_replay_patch_only_adds_to_the_released_tracer_and_keeps_the_api_entry_points():
+    removed = [
+        line
+        for line in TRACER_PATCH.read_text().splitlines()
+        if line.startswith("-") and not line.startswith("---")
+    ]
+    assert removed == [], "the replay patch must leave the released tracer path untouched"
+    tracer = patched_upstream(TRACER_PATCH)
+    # One provider each: the released one for the default mode, the SDK's inside the branch.
+    assert tracer.count("new WebTracerProvider(") == 1
+    assert tracer.count("registerInstrumentations(") == 1
+    # Neither mode tears down or replaces the global registrations AssistantTracing.ts reaches
+    # through @opentelemetry/api; both leave them to the SDK that owns the provider.
+    for hostile in (
+        "trace.disable(",
+        "context.disable(",
+        "propagation.disable(",
+        "trace.setGlobalTracerProvider(",
+        "context.setGlobalContextManager(",
+        "propagation.setGlobalPropagator(",
+    ):
+        assert hostile not in tracer, hostile
+    tracing = TRACING.read_text()
+    assert re.search(r"import \{[^}]*\bcontext\b[^}]*\} from '@opentelemetry/api'", tracing)
+    for entry_point in API_ENTRY_POINTS:
+        assert re.search(entry_point, tracing), entry_point
+
+
+def test_replay_flag_travels_from_the_service_environment_to_the_tracer():
+    app = patched_upstream(APP_PATCH)
+    for key in (REPLAY_FLAG, "NEXT_PUBLIC_HYPERDX_URL"):
+        assert f"{key}?: string;" in app, key
+    document = patched_upstream(DOCUMENT_PATCH)
+    # Read from the frontend service environment when the server starts, like the assistant
+    # switches beside them, and handed to the browser under the names the tracer reads.
+    assert "PUBLIC_HYPERDX_ENABLED = ''," in document
+    assert "PUBLIC_HYPERDX_URL = ''," in document
+    assert f"{REPLAY_FLAG}: '${{PUBLIC_HYPERDX_ENABLED}}'," in document
+    assert "NEXT_PUBLIC_HYPERDX_URL: '${PUBLIC_HYPERDX_URL}'," in document
+    assert REPLAY_FLAG in patched_upstream(TRACER_PATCH)
+
+
+def test_replay_sdk_is_a_resolved_dependency_of_the_staged_tree():
+    package = json.loads(patched_upstream(PACKAGE_PATCH))
+    assert package["dependencies"][REPLAY_SDK] == f"^{REPLAY_SDK_VERSION}"
+    assert package["scripts"]["lint"] == "eslint .", "0000 still carries the lint script"
+    lock = json.loads(patched_upstream(LOCK_PATCH))
+    assert lock["packages"][""]["dependencies"][REPLAY_SDK] == f"^{REPLAY_SDK_VERSION}"
+    sdk = lock["packages"][f"node_modules/{REPLAY_SDK}"]
+    assert sdk["version"] == REPLAY_SDK_VERSION
+    # npm resolved the whole subtree: every dependency the SDK names is locked at the version it
+    # asks for, with an integrity hash. A hand-merged lockfile fails `npm ci` here instead.
+    for dependency, version in sdk["dependencies"].items():
+        entry = lock["packages"][f"node_modules/{dependency}"]
+        assert entry["version"] == version, dependency
+        assert entry["integrity"].startswith("sha512-"), dependency

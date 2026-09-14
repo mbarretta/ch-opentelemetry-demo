@@ -3,8 +3,30 @@
 import base64
 import json
 import os
+import re
 
 from . import collector, core, images
+
+# SESSION_REPLAY gates the ClickStack browser SDK that is compiled into the frontend image:
+# `true` forces it on, `false` off, and `auto` (the default) turns it on whenever ClickStack is
+# configured, since the replay events leave through the collector's ClickStack exporter. The
+# accepted spellings are the ones the storefront's isDemoDetailsEnabled already takes.
+SESSION_REPLAY_DEFAULT = "auto"
+SESSION_REPLAY_ON = re.compile(r"^(1|true|on|yes)$", re.IGNORECASE)
+SESSION_REPLAY_OFF = re.compile(r"^(0|false|off|no)$", re.IGNORECASE)
+
+
+def session_replay(values):
+    """Whether the frontend should start the replay SDK, from SESSION_REPLAY in `values`."""
+    mode = (values.get("SESSION_REPLAY") or SESSION_REPLAY_DEFAULT).strip()
+    if SESSION_REPLAY_ON.match(mode):
+        return True
+    if SESSION_REPLAY_OFF.match(mode):
+        return False
+    if mode.lower() != SESSION_REPLAY_DEFAULT:
+        core.die(f"SESSION_REPLAY must be auto, true, or false; got {mode!r}.")
+    return bool(values.get("CLICKSTACK_OTLP_ENDPOINT"))
+
 
 # Keys only the EKS target consumes. They are dropped before the environment reaches
 # `docker compose`, which has no reader for them: CLICKHOUSE_PASSWORD and OTLP_AUTH_TOKEN
@@ -29,8 +51,9 @@ def eks_only(key):
 def environment():
     """The environment `docker compose` runs under: env files, then the process environment.
 
-    EKS-only keys are dropped on the way out (see eks_only); every remaining value is a
-    string, so it can be handed to Compose as-is.
+    EKS-only keys are dropped on the way out (see eks_only) and PUBLIC_HYPERDX_ENABLED is
+    derived from SESSION_REPLAY (see session_replay); every remaining value is a string, so it
+    can be handed to Compose as-is.
     """
     values = {
         **core.dotenv(core.UPSTREAM / ".env"),
@@ -47,6 +70,9 @@ def environment():
             "AGENT_PORT": "8010",
             "CHATBOT_PORT": "7860",
             "MCP_PORT": "8011",
+            # Read by the frontend server and handed to the browser as window.ENV; empty rather
+            # than "false" so the browser's strict `=== 'true'` test reads it as unset.
+            "PUBLIC_HYPERDX_ENABLED": "true" if session_replay(values) else "",
         }
     )
     built = (images.read_manifest() or {}).get("images", {})

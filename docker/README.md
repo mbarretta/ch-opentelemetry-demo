@@ -17,6 +17,12 @@ The agent and mcp images add `concierge/`, `prompts/`, and the corrected shop to
 only `envoy.tmpl.yaml`. Every other shop service keeps its released
 `ghcr.io/open-telemetry/demo:3.0.0-*` image; `demo.py config` lists them.
 
+The frontend image also carries the ClickStack browser SDK (`@hyperdx/browser`): patches `0000`
+and `0010` add it to the staged `package.json` and lockfile, so the released Dockerfile's
+`npm ci` installs it and `next build` bundles it (see `frontend/patches/README.md`, Session
+replay). Session replay is therefore a property of the single image on both targets, and
+`PUBLIC_HYPERDX_ENABLED` decides at container start whether the bundled SDK initializes.
+
 ## Base image digests
 
 `base-images.json` records the digest each `FROM` line pins and how it was resolved:
@@ -38,7 +44,7 @@ All four images share one tag: the first 12 hex digits of a SHA-256 over the bui
 | --- | --- |
 | upstream commit | the pinned 3.0.0 source |
 | `src/frontend/Dockerfile`, `src/frontend/package-lock.json` (at the pin) | the frontend build and its lockfile |
-| `frontend/overlay/**` (except its README), `frontend/patches/*.patch` | storefront changes |
+| `frontend/overlay/**` (except its README), `frontend/patches/*.patch` | storefront changes, the session-replay SDK among them |
 | `docker/**` (except this README) | Dockerfiles with their base digests, `base-images.json`, the Envoy template |
 | `concierge/**`, `prompts/**` (no bytecode) | the Python package and prompts |
 | corrected `tools.py` | derived from the pin and `TOOLS_PATCH` in `scripts/demo.py` |
@@ -80,8 +86,10 @@ so a container restart picks up Python edits. The chatbot has no image of its ow
 released chatbot image with the package mounted, kept behind the Compose `debug` profile.
 
 The frontend image bakes in no assistant settings. `compose.native.yaml` passes `AGENT_BASE_URL`,
-`ASSISTANT_TRANSPORT`, and `ASSISTANT_DEMO_DETAILS` from `.env` to the frontend container when
-it starts, so changing them needs `up`, not a rebuild. Demo details are off unless
+`ASSISTANT_TRANSPORT`, `ASSISTANT_DEMO_DETAILS`, and `PUBLIC_HYPERDX_ENABLED` from `.env` to the
+frontend container when it starts, so changing them needs `up`, not a rebuild.
+`PUBLIC_HYPERDX_ENABLED` is derived, not read: `SESSION_REPLAY` is `auto` (replay on whenever
+ClickStack is configured), `true`, or `false`, and off renders empty. Demo details are off unless
 `ASSISTANT_DEMO_DETAILS=true`; that opt-in shows the scenario, prompt, tool calls, and trace
 links, which name the Langfuse and ClickStack backends, under each answer, so use it for demo
 runs only. `tests/test_integration_config.py` checks the rendered default.

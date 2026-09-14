@@ -137,6 +137,48 @@ def test_demo_details_are_off_unless_the_operator_opts_in():
     assert frontend_environment({})["AGENT_BASE_URL"] == "http://agent:8010"
 
 
+def replay_flag(tmp_path, monkeypatch, **env_file):
+    """PUBLIC_HYPERDX_ENABLED as Compose renders it for the frontend, from a fixed .env.
+
+    The env file is the whole configuration: core.ROOT points at tmp_path and the two keys the
+    derivation reads are cleared from the process environment, so the run does not depend on the
+    developer's own .env. ROOT is restored before the Compose override is read, since that file
+    is looked up under it.
+    """
+    (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in env_file.items()))
+    with monkeypatch.context() as patched:
+        patched.setattr(core, "ROOT", tmp_path)
+        patched.setattr(core, "RUNTIME", tmp_path / "runtime")
+        for key in ("SESSION_REPLAY", "CLICKSTACK_OTLP_ENDPOINT"):
+            patched.delenv(key, raising=False)
+        variables = stack.environment()
+    return frontend_environment(variables)["PUBLIC_HYPERDX_ENABLED"]
+
+
+def test_session_replay_gates_the_browser_replay_sdk(tmp_path, monkeypatch):
+    """SESSION_REPLAY decides whether the SDK compiled into the frontend image initializes.
+
+    The browser tests `NEXT_PUBLIC_HYPERDX_ENABLED === 'true'`, so off has to render empty (or
+    anything but "true"); an empty value is what the Compose default renders for an unset key.
+    """
+    endpoint = {"CLICKSTACK_OTLP_ENDPOINT": "https://click.test"}
+    # auto is the default and follows ClickStack: the replay events leave through its exporter.
+    assert replay_flag(tmp_path, monkeypatch) == ""
+    assert replay_flag(tmp_path, monkeypatch, **endpoint) == "true"
+    assert replay_flag(tmp_path, monkeypatch, SESSION_REPLAY="auto") == ""
+    assert replay_flag(tmp_path, monkeypatch, SESSION_REPLAY="auto", **endpoint) == "true"
+    # false wins over a configured ClickStack; true turns it on without one (EKS sets the URL).
+    assert replay_flag(tmp_path, monkeypatch, SESSION_REPLAY="false", **endpoint) == ""
+    assert replay_flag(tmp_path, monkeypatch, SESSION_REPLAY="true") == "true"
+
+
+def test_unreadable_session_replay_mode_is_rejected_rather_than_guessed():
+    assert stack.session_replay({"SESSION_REPLAY": "YES"}) is True
+    assert stack.session_replay({"SESSION_REPLAY": " off "}) is False
+    with pytest.raises(SystemExit, match="SESSION_REPLAY must be auto, true, or false"):
+        stack.session_replay({"SESSION_REPLAY": "maybe", **BOTH_BACKENDS})
+
+
 def test_env_example_documents_demo_details_as_opt_in():
     example = dotenv_values(core.ROOT / ".env.example")
     assert example["ASSISTANT_DEMO_DETAILS"] == "false"

@@ -18,6 +18,9 @@ services:
       # for demo runs only.
       - ASSISTANT_TRANSPORT=${ASSISTANT_TRANSPORT:-live}
       - ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-}
+      # Session replay: the launcher derives this from SESSION_REPLAY (auto/true/false) and
+      # renders it empty when replay is off, so the browser's `=== 'true'` test fails closed.
+      - PUBLIC_HYPERDX_ENABLED=${PUBLIC_HYPERDX_ENABLED:-}
 
   agent:
     image: ${CONCIERGE_AGENT_IMAGE}

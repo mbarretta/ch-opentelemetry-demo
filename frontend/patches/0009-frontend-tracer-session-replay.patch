@@ -1,0 +1,69 @@
+diff --git a/src/frontend/utils/telemetry/FrontendTracer.ts b/src/frontend/utils/telemetry/FrontendTracer.ts
+index f5f0baa..57ae0a9 100644
+--- a/src/frontend/utils/telemetry/FrontendTracer.ts
++++ b/src/frontend/utils/telemetry/FrontendTracer.ts
+@@ -11,14 +11,64 @@ import { browserDetector } from '@opentelemetry/opentelemetry-browser-detector';
+ import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
+ import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
+ import { SessionIdProcessor } from './SessionIdProcessor';
++import SessionGateway from '../../gateways/Session.gateway';
+ 
+ const {
+   NEXT_PUBLIC_OTEL_SERVICE_NAME = '',
+   NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = '',
++  NEXT_PUBLIC_HYPERDX_ENABLED = '',
++  NEXT_PUBLIC_HYPERDX_URL = '',
+   IS_SYNTHETIC_REQUEST = '',
+ } = typeof window !== 'undefined' ? window.ENV : {};
+ 
+ const FrontendTracer = async () => {
++  // ClickStack session replay. The HyperDX browser SDK stands up and globally registers a web
++  // tracer provider and context manager of its own, so it cannot run alongside the one built
++  // below: doing both double-instruments fetch/xhr and exports every request twice. It
++  // therefore replaces the demo's tracer when enabled rather than adding to it, at the cost of
++  // the SessionIdProcessor attributes (compensated for by setGlobalAttributes below).
++  //
++  // Either way the provider and context manager are the global ones behind
++  // @opentelemetry/api, which is all the assistant's AssistantTracing.ts uses
++  // (trace.getTracer, trace.setSpan, context.with), so the assistant.turn -> fetch -> proxy ->
++  // agent chain is stitched the same in both modes.
++  //
++  // Toggled at runtime by PUBLIC_HYPERDX_ENABLED on the frontend service -- derived from
++  // SESSION_REPLAY by the launcher on Compose, set on the deployment on EKS -- so one image
++  // serves both modes.
++  if (NEXT_PUBLIC_HYPERDX_ENABLED === 'true') {
++    const HyperDX = (await import('@hyperdx/browser')).default;
++    const { userId } = SessionGateway.getSession();
++
++    HyperDX.init({
++      // The SDK appends /v1/traces and /v1/logs to this base. Pointing it at our own origin
++      // sends both through the proxy's /otlp-http/ route (docker/envoy.tmpl.yaml) and on to the
++      // demo's gateway collector: same origin, so no CORS preflight, and no collector
++      // credential in browser-visible JS -- the collector already holds it.
++      url: NEXT_PUBLIC_HYPERDX_URL || `${window.location.origin}/otlp-http`,
++      // Required by the SDK's types. Managed ClickStack authenticates at the collector hop, not
++      // here; a non-empty placeholder only suppresses the SDK's empty-apiKey warning.
++      apiKey: 'managed-clickstack',
++      service: NEXT_PUBLIC_OTEL_SERVICE_NAME,
++      // The same reach as the propagateTraceHeaderCorsUrls: /.*/ used below, so browser spans
++      // still carry traceparent onto the backend -- including the same-origin
++      // /api/assistant/* fetches the assistant turn wraps.
++      tracePropagationTargets: [/.*/],
++      consoleCapture: true,
++      advancedNetworkCapture: true,
++      otelResourceAttributes: {
++        'demo.synthetic_request': IS_SYNTHETIC_REQUEST,
++      },
++    });
++
++    // Replay sessions are correlated to traces by the SDK's own session id, which it publishes
++    // as the rum.sessionId resource attribute. The demo's localStorage id is a different value
++    // and nothing stamps it on spans in this mode, so publish it as a searchable attribute
++    // under both the name the storefront uses and the one the SessionIdProcessor used.
++    HyperDX.setGlobalAttributes({ userId, 'session.id': userId });
++    return;
++  }
++
+   const { ZoneContextManager } = await import('@opentelemetry/context-zone');
+ 
+   let resource = resourceFromAttributes({
