@@ -1,5 +1,5 @@
 diff --git a/src/frontend/pages/_app.tsx b/src/frontend/pages/_app.tsx
-index 67ee8b1..6e1d4d2 100755
+index 67ee8b1..607dff8 100755
 --- a/src/frontend/pages/_app.tsx
 +++ b/src/frontend/pages/_app.tsx
 @@ -6,6 +6,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
@@ -10,16 +10,19 @@ index 67ee8b1..6e1d4d2 100755
  import { ThemeProvider } from 'styled-components';
  import Theme from '../styles/Theme';
  import FrontendTracer from '../utils/telemetry/FrontendTracer';
-@@ -20,6 +21,8 @@ declare global {
+@@ -19,7 +20,11 @@ declare global {
+       NEXT_PUBLIC_PLATFORM?: string;
        NEXT_PUBLIC_OTEL_SERVICE_NAME?: string;
        NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT?: string;
++      NEXT_PUBLIC_HYPERDX_ENABLED?: string;
++      NEXT_PUBLIC_HYPERDX_URL?: string;
        IS_SYNTHETIC_REQUEST?: string;
 +      ASSISTANT_TRANSPORT?: string;
 +      ASSISTANT_DEMO_DETAILS?: string;
      };
    }
  }
-@@ -65,7 +68,9 @@ function MyApp({ Component, pageProps }: AppProps) {
+@@ -65,7 +70,9 @@ function MyApp({ Component, pageProps }: AppProps) {
          <QueryClientProvider client={queryClient}>
            <CurrencyProvider>
              <CartProvider>
