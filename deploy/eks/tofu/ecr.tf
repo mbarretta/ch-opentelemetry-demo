@@ -1,10 +1,22 @@
-# Registry for the session-replay frontend image built by scripts/build-frontend.sh.
-# Tags are MUTABLE so a rebuilt image with the same deterministic tag can be
+# Registries for the four images `demo.py publish` pushes: the patched frontend,
+# the front proxy, and the assistant's agent and MCP services. One repository
+# per service under a shared `ch-opentelemetry-demo/` prefix, created with
+# for_each so the set below is the only place a service is named.
+#
+# Tags are MUTABLE so a rebuilt image with the same content-derived tag can be
 # re-pushed; force_delete lets `tofu destroy` remove a non-empty repository.
 # Basic (Amazon ECR native) scanning runs on every push at no charge; it is
 # per-repository and does not enable the account-wide, billable enhanced scanning.
-resource "aws_ecr_repository" "frontend" {
-  name                 = "otel-demo-frontend"
+locals {
+  # Keep in step with IMAGES in launcher/core.py: `demo.py publish` pushes one
+  # image per key and `demo.py eks status` looks for the current tag in each.
+  ecr_services = toset(["frontend", "frontend-proxy", "agent", "mcp"])
+}
+
+resource "aws_ecr_repository" "demo" {
+  for_each = local.ecr_services
+
+  name                 = "ch-opentelemetry-demo/${each.key}"
   image_tag_mutability = "MUTABLE"
   force_delete         = true
 
@@ -13,8 +25,10 @@ resource "aws_ecr_repository" "frontend" {
   }
 }
 
-resource "aws_ecr_lifecycle_policy" "frontend" {
-  repository = aws_ecr_repository.frontend.name
+resource "aws_ecr_lifecycle_policy" "demo" {
+  for_each = aws_ecr_repository.demo
+
+  repository = each.value.name
 
   policy = jsonencode({
     rules = [

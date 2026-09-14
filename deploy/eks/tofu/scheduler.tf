@@ -1,6 +1,6 @@
 # Nightly scale-to-zero. EventBridge Scheduler calls eks:UpdateNodegroupConfig
 # directly through its universal target (no Lambda), so a forgotten demo costs
-# at most one day of nodes. `./demo.sh nightly on|off` flips the schedule state
+# at most one day of nodes. `demo.py eks nightly on|off` flips the schedule state
 # at run time; scale_down_hour / scale_down_timezone move it.
 
 data "aws_caller_identity" "current" {}

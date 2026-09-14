@@ -6,7 +6,7 @@
 # OpenTofu only reads and never modifies or deletes. To get a dedicated
 # 10.20.0.0/16 VPC instead (an account with VPC headroom), set
 # use_default_vpc = false BEFORE the first apply: a cluster cannot move between
-# VPCs, so changing it later means `./demo.sh destroy` and a fresh apply.
+# VPCs, so changing it later means `demo.py eks destroy` and a fresh apply.
 # eks_excluded_azs keeps the control plane out of AZs EKS does not support
 # (us-east-1e) or that have no default subnet.
 use_default_vpc  = true

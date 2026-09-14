@@ -6,9 +6,9 @@
 #
 # The five env vars (CLICKHOUSE_ENDPOINT, CLICKHOUSE_USER, CLICKHOUSE_PASSWORD,
 # HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE, OTLP_AUTH_TOKEN) come from the
-# Secret clickstack/clickstack-credentials, which scripts/deploy.sh creates from
-# the gitignored envvars.clickhouse at deploy time. This manifest is static and
-# holds no secret values, so it is applied as-is.
+# Secret clickstack/clickstack-credentials, which `demo.py eks deploy` builds from
+# the root .env and pipes to kubectl. This manifest is static and holds no secret
+# values, so it is applied as-is.
 apiVersion: v1
 kind: Namespace
 metadata:
