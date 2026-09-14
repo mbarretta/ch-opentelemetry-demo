@@ -28,6 +28,7 @@ from concierge.contract import (
     MAX_TURNS,
     AddToCartAction,
     AssistantResponse,
+    ConflictReason,
     ConversationStatus,
     DemoDetails,
     MessageRequest,
@@ -41,6 +42,16 @@ from concierge.scripted_model import ScriptedModel, price, tool_data
 from concierge.telemetry import conversation, encoded, trace_id, tracer
 
 logger = logging.getLogger(__name__)
+
+
+# Refusals shared by the legacy /prompt route (plain-string detail) and the storefront routes.
+REBIND_MESSAGE = "Start a new conversation to change scenario or budget."
+TURN_LIMIT_MESSAGE = f"This conversation reached {MAX_TURNS} turns. Start a new one."
+
+
+def conflict(reason: ConflictReason, message: str) -> HTTPException:
+    """A 409 on the storefront routes: the reason lets the client classify it (contract.py)."""
+    return HTTPException(409, {"message": message, "reason": reason})
 
 
 class ChatRequest(BaseModel):
@@ -136,7 +147,7 @@ class ConciergeAgent(Agent):
             key, request.scenario, request.budget_usd, shop_session_id=key
         )
         if state.scenario != request.scenario or state.budget != request.budget_usd:
-            raise HTTPException(409, "Start a new conversation to change scenario or budget.")
+            raise HTTPException(409, REBIND_MESSAGE)
         state.touched = time.monotonic()
         return state
 
@@ -151,8 +162,8 @@ class ConciergeAgent(Agent):
         """The live conversation with this id, only for the storefront session it is bound to."""
         state = self.conversation(conversation_id)
         if state.shop_session_id != str(shop_session_id):
-            raise HTTPException(
-                409,
+            raise conflict(
+                "foreign",
                 "This conversation belongs to a different storefront session. Start a new one.",
             )
         return state
@@ -163,11 +174,9 @@ class ConciergeAgent(Agent):
         if stored is not None:
             return stored
         if state.lock.locked():
-            raise HTTPException(409, "A turn is already in flight for this conversation.")
+            raise conflict("in_flight", "A turn is already in flight for this conversation.")
         if state.turns >= MAX_TURNS:
-            raise HTTPException(
-                409, f"This conversation reached {MAX_TURNS} turns. Start a new one."
-            )
+            raise conflict("turn_limit", TURN_LIMIT_MESSAGE)
         return None
 
     # -- tools -----------------------------------------------------------------------------
@@ -244,9 +253,7 @@ class ConciergeAgent(Agent):
         state = self.session(request)
         async with state.lock:
             if state.turns >= MAX_TURNS:
-                raise HTTPException(
-                    409, f"This conversation reached {MAX_TURNS} turns. Start a new one."
-                )
+                raise HTTPException(409, TURN_LIMIT_MESSAGE)
             key = str(request.session_id)
             result = await self.execute_turn(key, state, request.message)
             return {
@@ -284,7 +291,7 @@ class ConciergeAgent(Agent):
             if (request.scenario is not None and request.scenario != state.scenario) or (
                 request.budget is not None and request.budget != state.budget
             ):
-                raise HTTPException(409, "Start a new conversation to change scenario or budget.")
+                raise conflict("rebind", REBIND_MESSAGE)
         stored = self.stored_or_ready(state, request.request_id)
         if stored is not None:
             return stored

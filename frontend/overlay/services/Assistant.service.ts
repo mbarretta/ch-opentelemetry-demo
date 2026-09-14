@@ -10,6 +10,7 @@ import { context, Exception, trace } from '@opentelemetry/api';
 import {
   ASSISTANT_SCENARIOS,
   AssistantActionRequest,
+  AssistantConflictReason,
   AssistantErrorCode,
   AssistantErrorPayload,
   AssistantFeedbackRequest,
@@ -31,17 +32,21 @@ export class AssistantRouteError extends Error {
   readonly status: number;
   readonly code: AssistantErrorCode;
   readonly retryable: boolean;
+  readonly reason?: AssistantConflictReason;
 
-  constructor(status: number, code: AssistantErrorCode, message: string, retryable: boolean) {
+  constructor(status: number, code: AssistantErrorCode, message: string, retryable: boolean, reason?: AssistantConflictReason) {
     super(message);
     this.name = 'AssistantRouteError';
     this.status = status;
     this.code = code;
     this.retryable = retryable;
+    this.reason = reason;
   }
 
   toPayload(): AssistantErrorPayload {
-    return { error: { code: this.code, message: this.message, retryable: this.retryable } };
+    const error: AssistantErrorPayload['error'] = { code: this.code, message: this.message, retryable: this.retryable };
+    if (this.reason) error.reason = this.reason;
+    return { error };
   }
 }
 

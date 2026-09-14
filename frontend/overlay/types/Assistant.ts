@@ -8,8 +8,6 @@
 import { Money } from '../protos/demo';
 
 export const ASSISTANT_CONTRACT_VERSION = '1';
-// Mirrors MAX_TURNS in concierge/contract.py: a conversation with this many turns answers 409 to every further turn.
-export const ASSISTANT_MAX_TURNS = 20;
 
 // live: the same-origin /api/assistant routes (default). fixtures: canned answers, no agent call.
 export const ASSISTANT_TRANSPORTS = ['live', 'fixtures'] as const;
@@ -17,6 +15,12 @@ export type AssistantTransportName = (typeof ASSISTANT_TRANSPORTS)[number];
 
 export const ASSISTANT_SCENARIOS = ['shopping', 'backend-failure', 'budget-violation'] as const;
 export type AssistantScenario = (typeof ASSISTANT_SCENARIOS)[number];
+
+// Why the agent refused a turn with 409 (mirrors ConflictReason in concierge/contract.py):
+// the conversation belongs to another shop session, a turn is still in flight, the turn limit
+// is reached, or the turn asked for another scenario or budget. Only in_flight clears on its own.
+export const ASSISTANT_CONFLICT_REASONS = ['foreign', 'in_flight', 'turn_limit', 'rebind'] as const;
+export type AssistantConflictReason = (typeof ASSISTANT_CONFLICT_REASONS)[number];
 
 export interface AssistantProductContext {
   product_id: string;
@@ -100,7 +104,7 @@ export interface AssistantConversationStatus {
 export type AssistantErrorCode =
   | 'unavailable' // the agent could not be reached or answered with a server error
   | 'timeout' // the agent did not answer before the storefront's deadline
-  | 'conflict' // another turn is in flight or the conversation belongs to another session
+  | 'conflict' // the agent refused the turn for this conversation; reason says why
   | 'expired' // the conversation is unknown to the agent (idle timeout or agent restart)
   | 'invalid' // the storefront or the agent rejected the request itself
   | 'contract_mismatch';
@@ -111,6 +115,8 @@ export interface AssistantErrorPayload {
     code: AssistantErrorCode;
     message: string;
     retryable: boolean;
+    // Set on code 'conflict' when the agent named its reason.
+    reason?: AssistantConflictReason;
   };
 }
 
@@ -125,12 +131,14 @@ export const isAssistantErrorPayload = (value: unknown): value is AssistantError
 export class AssistantError extends Error {
   readonly code: AssistantErrorCode;
   readonly retryable: boolean;
+  readonly reason?: AssistantConflictReason;
 
-  constructor(code: AssistantErrorCode, message: string, retryable = true) {
+  constructor(code: AssistantErrorCode, message: string, retryable = true, reason?: AssistantConflictReason) {
     super(message);
     this.name = 'AssistantError';
     this.code = code;
     this.retryable = retryable;
+    this.reason = reason;
   }
 }
 

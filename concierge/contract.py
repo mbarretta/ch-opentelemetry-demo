@@ -17,15 +17,20 @@ Conversation lifetime
 Conversations live in the agent process memory only:
 
 - A conversation is bound to the storefront ``shop_session_id`` (the cart) when it is created
-  and can never be rebound (409). Every turn (message or cart action) names that session and
-  is refused (409) when it names another one, so a leaked ``conversation_id`` alone cannot
-  change the cart it is bound to.
+  and can never be rebound (409 ``foreign``). Every turn (message or cart action) names that
+  session and is refused when it names another one, so a leaked ``conversation_id`` alone
+  cannot change the cart it is bound to. Its scenario and budget are fixed at creation too; a
+  turn that asks for different ones is refused (409 ``rebind``).
 - It expires after one hour without a turn, or after 20 turns (an add-to-cart action counts as
-  a turn). Requests for an unknown or expired conversation return 404; the client then starts
-  a new conversation.
+  a turn; a further turn is refused with 409 ``turn_limit``). Requests for an unknown or
+  expired conversation return 404; the client then starts a new conversation.
 - ``request_id`` values are scoped per conversation and dropped with it. Repeating a request
   with the same ``request_id`` returns the stored response without running the agent or the
-  tools again; only one turn may be in flight per conversation (409 otherwise).
+  tools again; only one turn may be in flight per conversation (409 ``in_flight`` otherwise).
+- Every 409 on these routes carries ``{"detail": {"message", "reason"}}`` with the reason from
+  ``ConflictReason``, so the storefront classifies it without reading the status route: only
+  ``in_flight`` clears on its own and may be retried. The legacy ``POST /prompt`` route keeps
+  its plain-string ``detail``.
 - An agent restart loses every conversation and every stored request id. A mutation that was
   in flight during the restart has an uncertain outcome: the retry cannot be deduplicated, so
   the client must refresh the cart and show the outcome as uncertain instead of retrying
@@ -42,6 +47,8 @@ CONTRACT_VERSION = "1"
 IDLE_SECONDS = 3600
 MAX_TURNS = 20
 Scenario = Literal["shopping", "backend-failure", "budget-violation"]
+# Why a turn was refused with 409 (the frontend mirrors this as ASSISTANT_CONFLICT_REASONS).
+ConflictReason = Literal["foreign", "in_flight", "turn_limit", "rebind"]
 CurrencyCode = Field(default="USD", pattern=r"^[A-Z]{3}$")
 ProductId = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
 
