@@ -3,8 +3,11 @@
 Ported from `deploy/eks/scripts/lib/aws.sh`. Every call shells out through `core.run` /
 `core.capture`, so a test sees the argv rather than the cloud.
 
-These are the shapes the tunnel, infra, lifecycle, publish, ops and check modules are written
-against, which is why the argv is asserted here rather than at each of their call sites.
+These are the shapes the tunnel, infra, k8s, lifecycle, ops and flags modules -- and the
+top-level `images` -- are written against, which is why the argv is asserted here rather than
+at each of their call sites. What is *not* here: emptying the state bucket and flipping the
+nightly schedule's state live in `infra.py`, next to the destroy and nightly commands that own
+them -- call those rather than adding a second copy back here.
 """
 
 import json
@@ -19,17 +22,6 @@ from . import config
 # apply; a test empties it with `monkeypatch.setattr(aws, "_OUTPUTS", None)`, which it must,
 # because the cache outlives any redirection of `core.ROOT`.
 _OUTPUTS = None
-
-# EventBridge Scheduler's two states, under the words the CLI uses for them.
-SCHEDULER_STATES = {
-    "on": "ENABLED",
-    "off": "DISABLED",
-    "enabled": "ENABLED",
-    "disabled": "DISABLED",
-}
-
-# delete-objects takes at most this many keys per call.
-DELETE_BATCH = 1000
 
 
 def aws_login():
@@ -325,88 +317,3 @@ def scheduler_get():
         return json.loads(result.stdout)
     except ValueError:
         core.die(f"could not parse the schedule {name} returned by EventBridge Scheduler")
-
-
-def scheduler_set_state(state):
-    """Enable or disable the nightly schedule, preserving everything else about it.
-
-    `update-schedule` replaces the whole schedule, so every field read by `scheduler_get()` is
-    fed back and only `State` changes.
-    """
-    wanted = SCHEDULER_STATES.get(str(state).lower())
-    if wanted is None:
-        core.die(f"unknown schedule state {state!r}: use on or off")
-
-    name = tf_out("scheduler_name")
-    current = scheduler_get()
-    args = [
-        "aws",
-        "scheduler",
-        "update-schedule",
-        "--name",
-        name,
-        "--state",
-        wanted,
-        "--schedule-expression",
-        current["ScheduleExpression"],
-        "--schedule-expression-timezone",
-        current["ScheduleExpressionTimezone"],
-        "--flexible-time-window",
-        json.dumps(current["FlexibleTimeWindow"]),
-        "--target",
-        json.dumps(current["Target"]),
-    ]
-    # Optional in the API and unset on some schedules; passing an empty description would
-    # replace the real one with nothing.
-    if current.get("Description"):
-        args += ["--description", current["Description"]]
-    core.log(f"setting schedule {name} to {wanted}")
-    core.run(*args, stdout=core.DEVNULL)
-
-
-def purge_state_bucket(bucket):
-    """Delete every object version and delete marker, then the bucket itself.
-
-    Versioning is on, so a plain recursive delete leaves the old versions behind and
-    `delete-bucket` fails with BucketNotEmpty.
-    """
-    previous = None
-    while True:
-        listing = core.capture(
-            "aws", "s3api", "list-object-versions", "--bucket", bucket, "--output", "json"
-        ).stdout
-        try:
-            versions = json.loads(listing) if listing.strip() else {}
-        except ValueError:
-            core.die(f"could not parse the object listing for s3://{bucket}")
-        keys = [
-            {"Key": entry["Key"], "VersionId": entry["VersionId"]}
-            for entry in [
-                *(versions.get("Versions") or []),
-                *(versions.get("DeleteMarkers") or []),
-            ]
-        ]
-        if not keys:
-            break
-        batch = keys[:DELETE_BATCH]
-        # delete-objects exits 0 while reporting per-key failures in its response body, so a
-        # version nothing may delete (a bucket policy, Object Lock, a denied
-        # s3:DeleteObjectVersion) would otherwise keep coming back and this loop would spin for
-        # ever. One repeated batch is enough to know no progress is being made.
-        if batch == previous:
-            core.die(
-                f"cannot delete s3://{bucket}/{batch[0]['Key']} (version "
-                f"{batch[0]['VersionId']}); check the bucket policy and your permissions"
-            )
-        previous = batch
-        core.run(
-            "aws",
-            "s3api",
-            "delete-objects",
-            "--bucket",
-            bucket,
-            "--delete",
-            json.dumps({"Objects": batch, "Quiet": True}),
-            stdout=core.DEVNULL,
-        )
-    core.run("aws", "s3api", "delete-bucket", "--bucket", bucket)

@@ -298,39 +298,6 @@ def test_ng_scale_waits_out_an_update_in_flight_before_asking_for_another(output
 # --- the nightly schedule -----------------------------------------------------------------
 
 
-def test_scheduler_set_state_feeds_every_field_back_because_update_replaces_the_schedule(outputs):
-    outputs.reply("aws scheduler get-schedule", stdout=json.dumps(SCHEDULE))
-
-    aws.scheduler_set_state("off")
-
-    update = [call for call in outputs.calls if "update-schedule" in call.line][0]
-    # Everything after `aws scheduler update-schedule` is flag/value pairs.
-    pairs = dict(zip(update.argv[3::2], update.argv[4::2]))
-    assert update.argv[:4] == [
-        "aws",
-        "scheduler",
-        "update-schedule",
-        "--name",
-    ]
-    assert pairs["--state"] == "DISABLED", "`off` is the CLI's word; DISABLED is the API's"
-    assert pairs["--schedule-expression"] == SCHEDULE["ScheduleExpression"]
-    assert pairs["--schedule-expression-timezone"] == SCHEDULE["ScheduleExpressionTimezone"]
-    assert json.loads(pairs["--flexible-time-window"]) == SCHEDULE["FlexibleTimeWindow"]
-    assert json.loads(pairs["--target"]) == SCHEDULE["Target"]
-    assert pairs["--description"] == SCHEDULE["Description"]
-
-
-def test_scheduler_set_state_takes_on_off_or_the_api_words_and_refuses_anything_else(outputs):
-    outputs.reply("aws scheduler get-schedule", stdout=json.dumps(SCHEDULE))
-
-    aws.scheduler_set_state("ENABLED")
-    update = [call for call in outputs.calls if "update-schedule" in call.line][0]
-    assert "ENABLED" in update.argv
-
-    with pytest.raises(SystemExit):
-        aws.scheduler_set_state("maybe")
-
-
 def test_scheduler_get_returns_the_schedule_as_the_api_describes_it(outputs):
     outputs.reply("aws scheduler get-schedule", stdout=json.dumps(SCHEDULE))
 
@@ -344,51 +311,3 @@ def test_scheduler_get_returns_the_schedule_as_the_api_describes_it(outputs):
         "--output",
         "json",
     ]
-
-
-# --- the state bucket ---------------------------------------------------------------------
-
-
-def test_purge_state_bucket_deletes_versions_in_batches_and_the_bucket_last(fake_sh):
-    versions = [{"Key": f"k{index}", "VersionId": f"v{index}"} for index in range(1500)]
-    listings = iter(
-        [
-            json.dumps({"Versions": versions[:1000], "DeleteMarkers": versions[1000:]}),
-            json.dumps({"Versions": [], "DeleteMarkers": []}),
-        ]
-    )
-
-    def answer(call):
-        if "list-object-versions" in call.line:
-            return next(listings), "", 0
-        return "", "", 0
-
-    fake_sh.answer = answer
-
-    aws.purge_state_bucket("otel-demo-eks-tfstate-111122223333")
-
-    deletes = [call for call in fake_sh.calls if "delete-objects" in call.line]
-    assert len(deletes) == 1
-    payload = json.loads(deletes[0].argv[deletes[0].argv.index("--delete") + 1])
-    assert len(payload["Objects"]) == 1000, "delete-objects takes at most 1000 keys per call"
-    assert payload["Quiet"] is True
-    assert payload["Objects"][0] == {"Key": "k0", "VersionId": "v0"}
-    assert fake_sh.lines()[-1] == (
-        "aws s3api delete-bucket --bucket otel-demo-eks-tfstate-111122223333"
-    ), "the bucket goes last: delete-bucket fails with BucketNotEmpty while a version is left"
-
-
-def test_purge_state_bucket_stops_rather_than_spinning_when_a_version_will_not_delete(fake_sh):
-    """delete-objects exits 0 while reporting per-key failures, so no progress has to be fatal."""
-    fake_sh.reply(
-        "aws s3api list-object-versions",
-        stdout=json.dumps({"Versions": [{"Key": "locked", "VersionId": "v1"}]}),
-    )
-
-    with pytest.raises(SystemExit) as failure:
-        aws.purge_state_bucket("otel-demo-eks-tfstate-111122223333")
-
-    assert "locked" in str(failure.value)
-    assert not [line for line in fake_sh.lines() if "delete-bucket" in line], (
-        "the bucket is still not empty, so deleting it would fail with BucketNotEmpty"
-    )
