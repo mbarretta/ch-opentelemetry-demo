@@ -1,6 +1,6 @@
-# Read by scripts/lib/aws.sh via `tofu -chdir=tofu output -raw <name>`; every
-# value the scripts read must therefore be a string, number or bool. subnet_ids
-# is the one list: it is for humans and `tofu output -json`, not for tf_out.
+# Read by launcher/eks/aws.py, which shells out to `tofu output -json` once and
+# caches the parsed result, so an output may be any JSON type: ecr_repository_urls
+# is a map and subnet_ids a list.
 
 output "region" {
   description = "AWS region."
@@ -28,18 +28,18 @@ output "node_count" {
 }
 
 output "node_platform" {
-  description = "Docker platform for the frontend image build."
+  description = "Docker platform the nodes run; `demo.py publish` refuses a manifest built for anything else."
   value       = var.node_platform
 }
 
-output "ecr_repository_url" {
-  description = "ECR repository URL for the frontend image (<registry>/<repo>)."
-  value       = aws_ecr_repository.frontend.repository_url
+output "ecr_repository_urls" {
+  description = "Service name -> ECR repository URL (<registry>/ch-opentelemetry-demo/<service>), one entry per published image."
+  value       = { for service, repo in aws_ecr_repository.demo : service => repo.repository_url }
 }
 
 output "ecr_registry" {
-  description = "ECR registry host (for docker login)."
-  value       = split("/", aws_ecr_repository.frontend.repository_url)[0]
+  description = "ECR registry host (for docker login); every repository above shares it."
+  value       = split("/", values(aws_ecr_repository.demo)[0].repository_url)[0]
 }
 
 output "scheduler_name" {

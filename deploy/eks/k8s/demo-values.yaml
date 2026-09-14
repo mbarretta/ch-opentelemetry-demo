@@ -1,23 +1,40 @@
-# Helm values for open-telemetry/opentelemetry-demo (chart 0.41.0).
+# Static Helm values for open-telemetry/opentelemetry-demo (chart 0.41.0).
 #
-# Static and committed as-is: nothing in here is account-specific. The two
-# values that are -- the ECR repository holding the patched frontend image and
-# its tag -- arrive as `--set components.frontend.imageOverride.{repository,tag}`
-# from scripts/deploy.sh, and the OTLP auth token is read from a Secret at run
-# time (see extraEnvsFrom below). No placeholders, no sed step.
+# Committed as-is: nothing in here is account-specific or secret. The half of the
+# configuration that is arrives at deploy time from two other places, so this
+# file needs no placeholders and no sed step:
+#   * `.runtime/eks/values.generated.yaml`, written by `demo.py eks deploy` from
+#     the root `.env` and the build manifest: the four ECR image repositories and
+#     tags, the agent's model and Langfuse settings, and the collector's Langfuse
+#     pipeline. `helm upgrade` gets both files, this one first.
+#   * Kubernetes Secrets, read at run time: `clickstack-otlp-token` for the
+#     collector, `langfuse-credentials` and `llm-credentials` for the agent.
 #
 # Changes vs. the upstream chart:
 #   1. The bundled backends (Jaeger / Prometheus / Grafana / OpenSearch) are
 #      switched off: ClickStack replaces them, and dropping them frees ~4 GB.
 #   2. The demo's gateway collector gains an `otlphttp/clickstack` exporter and
-#      every signal pipeline is pointed at it.
-#   3. The frontend runs our own image with the ClickStack browser SDK compiled
-#      in (session replay), built by scripts/build-frontend.sh.
+#      the traces, metrics and logs pipelines are pointed at it. (The profiles
+#      pipeline is left alone: the chart ships it disabled at both ends.)
+#   3. Four services run this repository's own images instead of the released
+#      ones: the frontend (assistant panel plus the ClickStack browser SDK
+#      compiled in for session replay), the front proxy (adds the
+#      `/api/assistant` route), and the agent and MCP services.
+#   4. The chatbot is off. This demo's assistant is in the storefront, and the
+#      front-proxy image drops the chatbot route and cluster, so the Gradio
+#      client would be unreachable as well as unused.
+#   5. The traces pipeline runs the span transforms it should (see the collector
+#      section at the bottom).
 #
 # Not set here, deliberately: no `service.type` for frontend-proxy -- the
-# storefront is reached only through `kubectl port-forward` (./demo.sh tunnel),
-# and the chart's default PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+# storefront is reached only through `kubectl port-forward` (`demo.py eks
+# tunnel`), and the chart's default PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
 # (http://localhost:8080/otlp-http/v1/traces) is already right for that path.
+#
+# Every component list below is an `envOverrides`, which the chart merges into
+# the component's own `env` by name (`otel-demo.envOverriden` in
+# templates/_helpers.tpl): an entry whose name already exists replaces that
+# value, a new name is appended, and everything else the chart sets is kept.
 
 jaeger:
   enabled: false
@@ -43,49 +60,118 @@ components:
       limits:
         memory: 128Mi
 
+  # The demo's Gradio chat client: a second, separate assistant with no session,
+  # no Langfuse prompt and no storefront context. Replaced by the Assistant
+  # panel in our frontend image, and unreachable through our front proxy.
+  chatbot:
+    enabled: false
+
   frontend:
-    # repository and tag are supplied by deploy.sh (`--set`), because the ECR
-    # URL contains the account id. The tag is deterministic (demo commit plus a
-    # hash of the session-replay patch), so it can be reused across builds
-    # that produce the same content; Always makes sure a rebuilt image under the
-    # same tag is actually pulled.
+    # repository and tag come from values.generated.yaml, because the ECR URL
+    # contains the account id and the tag is derived from the built content.
+    # IfNotPresent is safe precisely because the tag is content-derived: a tag
+    # never changes meaning, so a node that already has it has the right bytes.
     imageOverride:
-      pullPolicy: Always
-    # The workshop layered this as a second values file rendered at build time;
-    # here it is folded into the one static file. Helm replaces lists rather
-    # than merging them, so this list is the complete override set: the
-    # chart's own frontend env (including the trace endpoint) is untouched.
-    #
+      pullPolicy: IfNotPresent
     # PUBLIC_HYPERDX_ENABLED only *activates* SDK code that must already be in
     # the bundle -- hence the custom image. PUBLIC_HYPERDX_URL is intentionally
     # absent: the SDK falls back to window.location.origin + /otlp-http, which
-    # is the same-origin path through the port-forward.
+    # is the same-origin path through the port-forward to the gateway collector.
+    # AGENT_BASE_URL is server-side only (the Next.js /api/assistant routes call
+    # the agent with it); no agent or model address reaches the browser bundle.
+    # ASSISTANT_DEMO_DETAILS is optional prose and comes from .env via
+    # values.generated.yaml.
     envOverrides:
       - name: PUBLIC_HYPERDX_ENABLED
         value: "true"
+      - name: AGENT_BASE_URL
+        value: http://agent:8010
+      - name: ASSISTANT_TRANSPORT
+        value: live
 
-  # Optional trims, off by default for parity with the workshop. Uncommenting
-  # these four drops ~1.6 GiB of requests and four pods (the GenAI side of the
-  # demo), which is worth it on a two-node cluster if you never show them.
-  # chatbot:
-  #   enabled: false
-  # agent:
-  #   enabled: false
-  # mcp:
-  #   enabled: false
-  # telemetry-docs:
-  #   enabled: false
+  frontend-proxy:
+    imageOverride:
+      pullPolicy: IfNotPresent
+
+  agent:
+    imageOverride:
+      pullPolicy: IfNotPresent
+    # 500Mi upstream; the concierge graph plus the Langfuse and OpenLLMetry
+    # instrumentation needs more headroom than the VCR-replay agent it replaces.
+    resources:
+      limits:
+        memory: 750Mi
+    # This is our concierge agent, not the upstream fixture-replay one, so it
+    # already binds 0.0.0.0 (ENV in docker/agent.Dockerfile) and forces USE_VCR
+    # off (concierge/run_agent.py). Both are restated here only so the rendered
+    # Deployment stops advertising the upstream USE_VCR=True. The model, MCP and
+    # Langfuse settings that vary by deployment come from values.generated.yaml.
+    # OTEL_EXPORTER_OTLP_ENDPOINT, though, is load-bearing: upstream sets only
+    # TRACELOOP_BASE_URL, so the concierge's own spans would have nowhere to go.
+    #
+    # The three secretKeyRefs are `optional: true` on purpose: `demo.py eks
+    # deploy` creates langfuse-credentials and llm-credentials only when `.env`
+    # has those keys, and deletes them when it does not. Without `optional` the
+    # pod would fail to start on a Langfuse-less or fixture-only deployment.
+    envOverrides:
+      - name: USE_VCR
+        value: "False"
+      - name: AGENT_BIND
+        value: 0.0.0.0
+      - name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://$(OTEL_COLLECTOR_NAME):4318
+      - name: API_KEY
+        valueFrom:
+          secretKeyRef:
+            name: llm-credentials
+            key: API_KEY
+            optional: true
+      - name: LANGFUSE_BASE_URL
+        valueFrom:
+          secretKeyRef:
+            name: langfuse-credentials
+            key: LANGFUSE_BASE_URL
+            optional: true
+      - name: LANGFUSE_PUBLIC_KEY
+        valueFrom:
+          secretKeyRef:
+            name: langfuse-credentials
+            key: LANGFUSE_PUBLIC_KEY
+            optional: true
+      - name: LANGFUSE_SECRET_KEY
+        valueFrom:
+          secretKeyRef:
+            name: langfuse-credentials
+            key: LANGFUSE_SECRET_KEY
+            optional: true
+
+  mcp:
+    imageOverride:
+      pullPolicy: IfNotPresent
+    envOverrides:
+      - name: OTEL_EXPORTER_OTLP_ENDPOINT
+        value: http://$(OTEL_COLLECTOR_NAME):4318
+
+  # telemetry-docs is the only component left that the demo walkthrough never
+  # opens; `telemetry-docs: {enabled: false}` saves a pod on a smaller node
+  # type. agent and mcp are the assistant and cannot be trimmed.
 
 opentelemetry-collector:
   # The demo's gateway collector (a DaemonSet). It forwards every signal to the
   # ClickStack collector in the clickstack namespace, which requires the shared
   # OTLP_AUTH_TOKEN on each request. The token lives in the Secret
-  # otel-demo/clickstack-otlp-token created by deploy.sh; it is injected as an
-  # environment variable and expanded by the collector itself at start-up via
-  # ${env:...}, so the token is never written into this file or the ConfigMap.
+  # otel-demo/clickstack-otlp-token created by `demo.py eks deploy`; it is
+  # injected as an environment variable and expanded by the collector itself at
+  # start-up via ${env:...}, so the token is never written into this file or the
+  # ConfigMap. langfuse-credentials is optional for the same reason it is on the
+  # agent: the generated values only add the Langfuse exporter that reads it
+  # when `.env` carries the keys.
   extraEnvsFrom:
     - secretRef:
         name: clickstack-otlp-token
+    - secretRef:
+        name: langfuse-credentials
+        optional: true
   config:
     exporters:
       otlphttp/clickstack:
@@ -98,11 +184,32 @@ opentelemetry-collector:
         sending_queue:
           enabled: true
           batch: {}
+    processors:
+      # Gives the storefront's /api/assistant/* server spans an http.route, so
+      # transform/sanitize_spans does not collapse them into a bare "POST".
+      # Declared empty here so this file alone renders a config whose pipelines
+      # reference nothing undefined; values.generated.yaml replaces
+      # trace_statements with the real ones from launcher/collector.py
+      # (assistant_route_statements), which is the single source of truth shared
+      # with the laptop collector. An empty trace_statements list is valid and
+      # makes the processor a no-op, so a render without the generated values --
+      # what `demo.py eks check` and `helm template` do -- still starts.
+      transform/assistant_routes:
+        error_mode: ignore
+        trace_statements: []
     service:
       pipelines:
         # The chart's own exporters (otlp_grpc/jaeger, otlp_http/prometheus,
         # opensearch) stay defined but unreferenced; the collector allows that.
+        #
+        # The upstream traces pipeline runs transform/sanitize_logs, which only
+        # has log_statements and is therefore a no-op on spans, while
+        # transform/sanitize_spans -- the one that backfills http.route and
+        # normalizes span names -- is defined but never run. Swapped here, with
+        # our route transform ahead of it so the assistant routes are set before
+        # the names are sanitized.
         traces:
+          processors: [memory_limiter, resourcedetection, resource, transform/assistant_routes, transform/sanitize_spans, gen_ai_normalizer]
           exporters: [otlphttp/clickstack, debug, span_metrics]
         metrics:
           exporters: [otlphttp/clickstack, debug]
