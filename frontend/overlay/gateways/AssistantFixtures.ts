@@ -11,6 +11,7 @@
 //   "fail" or "error"       a recoverable error (transcript and composer are kept)
 //   "busy"                  the agent's turn-in-flight conflict (Retry is offered)
 //   "limit"                 the agent's turn-limit conflict (the message returns to the composer)
+//   "unscored"              a text-only reply whose score has nowhere to go (feedback_enabled false)
 //   "slow"                  a long pending state
 //   anything else           a text-only reply
 
@@ -96,13 +97,18 @@ const wait = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms
 const priceText = ({ price }: AssistantProductRef) =>
   `${price.currencyCode} ${(price.units + price.nanos / 1e9).toFixed(2)}`;
 
+// Marks the trace id of an answer issued with feedback_enabled false, so a score sent for it is
+// refused, as the live agent refuses a score it has nowhere to store. It lives in the id rather
+// than in module memory because the transcript is restored across page loads.
+const UNSCORED_TRACE_PREFIX = 'fixture-unscored-';
+
 const respond = (
   request: AssistantMessageRequest | AssistantActionRequest,
   conversationId: string,
   reply: string,
   productRefs: AssistantProductRef[],
   tools: string[],
-  cartChanged = false
+  { cartChanged = false, feedbackEnabled = true } = {}
 ): AssistantResponse => ({
   contract_version: ASSISTANT_CONTRACT_VERSION,
   conversation_id: conversationId,
@@ -110,8 +116,8 @@ const respond = (
   reply,
   product_refs: productRefs,
   cart_changed: cartChanged,
-  trace_id: `fixture-${request.request_id.replace(/-/g, '').slice(0, 32)}`,
-  feedback_enabled: true,
+  trace_id: `${feedbackEnabled ? 'fixture-' : UNSCORED_TRACE_PREFIX}${request.request_id.replace(/-/g, '').slice(0, 32)}`,
+  feedback_enabled: feedbackEnabled,
   demo: { ...FIXTURE_DEMO, tools: toolCalls(tools) },
 });
 
@@ -172,6 +178,16 @@ const FixtureTransport: AssistantTransport = {
       throw new AssistantError('conflict', 'This conversation reached 20 turns. Start a new one.', false, 'turn_limit');
     }
     const conversationId = request.conversation_id ?? newConversationId();
+    if (text.includes('unscored')) {
+      return respond(
+        request,
+        conversationId,
+        'This answer cannot be scored: the fixture agent has no score store, so the panel says so before you click.',
+        [],
+        [],
+        { feedbackEnabled: false }
+      );
+    }
     if (text.includes('explain') || text.includes('tell me about')) {
       return explain(request, conversationId);
     }
@@ -199,12 +215,15 @@ const FixtureTransport: AssistantTransport = {
       `Added ${request.quantity} × ${product.name} to your cart.`,
       [product],
       ['add_to_cart'],
-      true
+      { cartChanged: true }
     );
   },
 
-  async submitFeedback() {
+  async submitFeedback(request) {
     await wait(300);
+    if (request.trace_id.startsWith(UNSCORED_TRACE_PREFIX)) {
+      return { saved: false, message: 'The fixture agent has no score store.' };
+    }
     return { saved: true };
   },
 
