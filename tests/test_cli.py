@@ -163,13 +163,27 @@ def test_tunnel_routes_each_action_to_its_own_function(monkeypatch):
     assert failure.value.code == 1, "a tunnel that is down is what a script tests for"
 
 
-def test_every_eks_subcommand_dispatches_to_a_stub():
-    """The stubs are this task's deliverable: a reachable command, not an AttributeError."""
+# Subcommands whose bodies have landed, each with the test file that now owns its behaviour.
+# Their handlers are deliberately not called below: an implemented handler talks to AWS and the
+# cluster for real, which is not something a parser test may do.
+IMPLEMENTED = {
+    "init": "tests/test_eks_infra.py",
+    "apply": "tests/test_eks_infra.py",
+    "destroy": "tests/test_eks_infra.py",
+    "nightly": "tests/test_eks_infra.py",
+}
+
+
+def test_every_eks_subcommand_dispatches_to_its_module():
+    """A reachable command in every case: a stub that says so, or a body with its own tests."""
     parser = cli.build_parser()
     assert set(EKS_INVOCATIONS) == set(subcommands(subcommands(parser)["eks"]))
 
     for name, line in EKS_INVOCATIONS.items():
         args = parser.parse_args(line.split())
+        assert callable(args.handler), name
+        if name in IMPLEMENTED:
+            continue
         with pytest.raises(SystemExit) as failure:
             args.handler(args)
         assert str(failure.value) == "not implemented yet", name
