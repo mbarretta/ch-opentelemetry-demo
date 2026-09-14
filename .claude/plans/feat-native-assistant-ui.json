@@ -868,6 +868,413 @@
         "ratio": 0.1,
         "recorded_at": "2026-09-11T20:50:02-04:00"
       }
+    },
+    {
+      "id": "def-d5",
+      "title": "Structured 409 reasons from the agent, classified client-side without a status round trip",
+      "status": "complete",
+      "kind": "improve",
+      "origin": "remediation",
+      "depends_on": [],
+      "files": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "frontend/overlay/gateways/http/Agent.gateway.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
+      ],
+      "why": "Deferred item d5 (quality-finding q3, from task 6): four agent 409 reasons are free text; the storefront gateway flattens them to one retryable conflict and the provider re-derives the kind with a second GET plus a mirrored MAX_TURNS; the rebind 409 falls into busy and offers a Retry that cannot succeed.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "Every 409 the agent raises on the /assistant routes carries a structured detail {message, reason} with reason in {foreign, in_flight, turn_limit, rebind}; a tests/test_contract.py assertion covers each reason. The legacy POST /prompt response and request semantics are unchanged."
+        },
+        {
+          "id": "ac2",
+          "text": "frontend/overlay/gateways/http/Agent.gateway.ts passes the reason through as an optional error.reason on AssistantErrorPayload (types/Assistant.ts mirrors the enum) with retryable=false for turn_limit, rebind and foreign and retryable=true for in_flight; Assistant.provider.tsx branches on failure.reason and the conflictKind helper, its extra getConversation call, and the ASSISTANT_MAX_TURNS mirror constant (and its pin in tests/test_frontend_overlay.py) are removed. Existing pins that referenced them are replaced one-for-one by pins on the new branch, never dropped."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes — the change is behavior-preserving for the owner, in-flight, turn-limit and foreign flows (same UI notes and Retry availability as before, except that rebind no longer offers Retry)."
+        }
+      ],
+      "notes": "Match the structured-detail shape the 502 path already uses so agentDetail can read both. The foreign reason is what def-d1 (next wave) reuses for the status route; do not gate the status route in this task.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: Retry-availability preservation verified by reading the deterministic gateway mapping (retryable = reason === in_flight) and provider branch plus the new static pins in tests/test_frontend_overlay.py, not by a browser probe (no Playwright tools in the evaluator sandbox).",
+            "ac2: nit — a 409 with a missing or unrecognized reason now defaults to non-retryable (message returned to composer) where it was previously retryable; the AC does not specify this case and the choice is defensible, but it is a behavior change worth a line in the contract docstring.",
+            "quality: nit — the dropped conflictKind 409-then-404 expired branch was only reachable if the conversation expired between two back-to-back calls; removal is fine."
+          ],
+          "notes": "Verification green in the worktree (ruff, 104 pytest, tsc+eslint). All four 409 reasons are structured on the /assistant routes and each asserted with exact shape and reason in tests/test_contract.py; legacy /prompt keeps plain-string detail (new test) and an unchanged response dict. Frontend passes the reason through the route envelope to the browser, retryability is decided from the reason alone, and conflictKind, the extra getConversation call, and the ASSISTANT_MAX_TURNS mirror are gone with pins replaced rather than dropped. All five constraints checked by grep/diff; status route untouched; no reserved sibling files in the diff. Test surface only strengthened.",
+          "timestamp": "2026-09-14T08:40:49-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 2,
+        "recorded_at": "2026-09-14T08:40:49-04:00"
+      },
+      "drift": {
+        "predicted": 8,
+        "touched": 10,
+        "unpredicted": 2,
+        "ratio": 0.2,
+        "recorded_at": "2026-09-14T08:40:49-04:00"
+      }
+    },
+    {
+      "id": "def-d1",
+      "title": "Gate the conversation status route on the caller's storefront session",
+      "status": "complete",
+      "kind": "fix",
+      "origin": "remediation",
+      "depends_on": [
+        "def-d5"
+      ],
+      "files": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/gateways/http/Agent.gateway.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
+      ],
+      "why": "Deferred item d1 (security-finding sec2, from task 6): GET /assistant/conversations/{id} returns the bound shop_session_id to any caller who knows a conversation id, converting knowledge of one identifier into the storefront cart key; ownership is decided client-side by comparing the returned id.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The storefront status route passes the caller's session as a validated ?shop_session_id= query parameter (uuid() helper in Assistant.service.ts); the agent's assistant_conversation compares it to state.shop_session_id and answers the structured 409 with reason foreign on mismatch; ConversationStatus no longer includes shop_session_id (frontend types and fixtures mirror the removal). Resolved at concierge/agent.py:380-384."
+        },
+        {
+          "id": "ac2",
+          "text": "Assistant.provider.tsx resume and resolveStored paths treat the 409 foreign reason as a foreign conversation (same user-visible note as today) instead of comparing ids; tests/test_contract.py gains a foreign-session 409 case for the status route and an owner-success case; the field-set mirror test in tests/test_frontend_overlay.py still passes."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes — the change is behavior-preserving for the owning session (resume after reload still works, expired still maps to 404/expired)."
+        }
+      ],
+      "notes": "Builds on def-d5's structured reasons. Keep the 404 expired path untouched.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit — the new contract test comment says asking does not keep the conversation alive but only asserts state.turns == 1; state.touched is not checked. Non-blocking.",
+            "ac2: no runtime UI probe was run (stack not running in the evaluator sandbox); the provider foreign/expired note mapping is verified by the source-assertion test and tsc.",
+            "observation, not a contract failure: a non-owner holding a live conversation id now receives 409 rather than 404, so liveness (but not the cart key) is still distinguishable from unknown/expired. Matches the AC as written."
+          ],
+          "notes": "Verification passed in full (ruff, 108 pytest, tsc, eslint). ac1 and ac2 implemented as specified and pinned by a new contract test (owner 200 without shop_session_id, foreign 409 reason foreign with the owner id absent from the body, 422 on missing/invalid param) plus updated overlay source assertions; ac3 holds since owner and expired paths in the existing status test are unchanged and green. All five constraints checked. Test surface: one test added, two assertions replaced by stricter ones asserting the new contract, one expected-dict field dropped because the AC removes it; no deletions, skips, or relaxed comparisons.",
+          "timestamp": "2026-09-14T08:53:39-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-14T08:53:39-04:00"
+      },
+      "drift": {
+        "predicted": 11,
+        "touched": 12,
+        "unpredicted": 1,
+        "ratio": 0.08,
+        "recorded_at": "2026-09-14T08:53:39-04:00"
+      }
+    },
+    {
+      "id": "def-d2",
+      "title": "Demo details off by default",
+      "status": "complete",
+      "kind": "fix",
+      "origin": "remediation",
+      "depends_on": [],
+      "files": [
+        "compose.native.yaml",
+        ".env.example",
+        "tests/test_integration_config.py",
+        "README.md",
+        "docker/README.md"
+      ],
+      "why": "Deferred item d2 (security-finding sec3, from task 4): ASSISTANT_DEMO_DETAILS defaults to true in compose.native.yaml and .env.example although task 5 ac7 specifies hidden by default; demo.links puts the Langfuse base URL/project id and ClickStack trace URL in front of anonymous shoppers.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "compose.native.yaml defaults ASSISTANT_DEMO_DETAILS to off (${ASSISTANT_DEMO_DETAILS:-}) and .env.example sets ASSISTANT_DEMO_DETAILS=false with a comment describing it as an opt-in for demo runs; the existing gating code in the overlay is unchanged. Resolved at compose.native.yaml:18."
+        },
+        {
+          "id": "ac2",
+          "text": "A test in tests/test_integration_config.py asserts that the rendered frontend service environment (demo.py config or an equivalent compose render) has demo details off when the variable is unset and on when ASSISTANT_DEMO_DETAILS=true; README.md and docker/README.md mention the opt-in where the demo details panel is described."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes."
+        }
+      ],
+      "notes": "Config and docs only. Do not start, stop, rebuild or otherwise touch the running Docker stack on port 8080 — a sibling task shares this wave and the stack; verify with demo.py config rendering and pytest.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1: informational — the AC says resolved at compose.native.yaml:18; the expanded comment pushed the line to :21. Same key, correct value.",
+            "ac2: nit — the test renders the override with a hand-written Compose interpolation (tests/compose_yaml.py) rather than docker compose config, because demo.py config prints only images. The evaluator real compose render agrees for unset/empty/true/false; it would drift silently if Compose interpolation semantics changed.",
+            "evaluator side effect: demo.py config / demo.compose runs regenerated gitignored .runtime collector config and isolation.yaml in the worktree; Docker stack untouched.",
+            "tdd: single commit with tests, config, and docs together (informational)."
+          ],
+          "notes": "Verification green in the worktree (ruff clean, 104 passed, check-frontend ok). ac1 confirmed by reading compose.native.yaml and .env.example and by the absence of any frontend/ path in the diff; ac2 confirmed by a live read-only docker compose config render showing the frontend gets an empty ASSISTANT_DEMO_DETAILS when unset and true when opted in, by the two new tests passing, and by the README wording; ac3 is the green verification. All five constraints checked. Test surface +91/-27 with the deletions a pure helper relocation into tests/compose_yaml.py, no cases removed or disabled.",
+          "timestamp": "2026-09-14T08:41:25-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-14T08:41:25-04:00"
+      },
+      "drift": {
+        "predicted": 5,
+        "touched": 7,
+        "unpredicted": 2,
+        "ratio": 0.29,
+        "recorded_at": "2026-09-14T08:41:25-04:00"
+      }
+    },
+    {
+      "id": "def-d3",
+      "title": "Pin the storefront wire-limit constants to the Pydantic contract",
+      "status": "complete",
+      "kind": "improve",
+      "origin": "remediation",
+      "depends_on": [],
+      "files": [
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/services/Assistant.service.ts",
+        "tests/test_frontend_overlay.py"
+      ],
+      "why": "Deferred item d3 (quality-finding q1, from task 5): the storefront pre-validation limits (message 4000, budget 100000, quantity 10, currency/product/trace patterns) are hand-copied from concierge/contract.py; mirror tests pin only field names and MAX_TURNS, so a change on either side goes unnoticed.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The wire limits live in frontend/overlay/types/Assistant.ts as exported ASSISTANT_* constants (ASSISTANT_MESSAGE_MAX_LENGTH, ASSISTANT_BUDGET_MAX, ASSISTANT_QUANTITY_MAX, ASSISTANT_CURRENCY_CODE_PATTERN, ASSISTANT_PRODUCT_ID_PATTERN, ASSISTANT_TRACE_ID_PATTERN) imported by services/Assistant.service.ts, which redeclares none of them. Resolved at frontend/overlay/services/Assistant.service.ts:20-27."
+        },
+        {
+          "id": "ac2",
+          "text": "A test in tests/test_frontend_overlay.py beside the response-type mirror test parses those constants out of types/Assistant.ts and asserts them against contract.MessageRequest and contract.AddToCartAction model_fields metadata (max_length/le), the CurrencyCode and ProductId Field patterns, and the FeedbackRequest trace_id pattern, so that changing either side fails the test."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes — the change is behavior-preserving (same limits enforced)."
+        }
+      ],
+      "notes": "Leave Composer.tsx alone; def-d4 (next wave) renames its UI cap. Verify with pytest and scripts/check-frontend.sh; the Docker stack is not needed.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit — the service-uses-it check is service.count(name) >= 2, which an import plus a comment mention would also satisfy; a regex for a non-import-line usage would be tighter. Non-blocking.",
+            "ac2: nit — ts_regex_constant only matches flagless /.../; literals, so a future constant carrying a flag would need the helper extended. Non-blocking."
+          ],
+          "notes": "Verification green in the worktree (ruff, 109 pytest, tsc+eslint). ac1 confirmed by reading the diff and grepping frontend/overlay for stray redeclarations; ac2 confirmed by reading the new test, running it in isolation, and an in-memory drift probe showing frontend-side and backend-side changes each trip the assertions; ac3 holds since all six values are byte-identical to the removed locals. All five constraints checked. Test surface: one test added (30 to 31), two docstring lines rewritten, nothing deleted, skipped, or relaxed.",
+          "timestamp": "2026-09-14T09:05:32-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-14T09:05:32-04:00"
+      },
+      "drift": {
+        "predicted": 3,
+        "touched": 3,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-14T09:05:32-04:00"
+      }
+    },
+    {
+      "id": "def-d4",
+      "title": "Disambiguate the composer UI cap from the contract message limit",
+      "status": "complete",
+      "kind": "improve",
+      "origin": "remediation",
+      "depends_on": [
+        "def-d3"
+      ],
+      "files": [
+        "frontend/overlay/components/Assistant/Composer.tsx",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "tests/test_frontend_overlay.py"
+      ],
+      "why": "Deferred item d4 (quality-finding q2, from task 5): MESSAGE_MAX_LENGTH is declared twice in the overlay with different values (500 UI cap in Composer.tsx, 4000 wire limit in the service), so a grep cannot tell which governs and the exported 500 invites misuse.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "Composer.tsx's constant is renamed COMPOSER_MAX_LENGTH (not exported unless something imports it) with a one-line comment stating it is a UI cap below the contract's ASSISTANT_MESSAGE_MAX_LENGTH; no file in frontend/overlay declares an identifier named MESSAGE_MAX_LENGTH. Resolved at frontend/overlay/components/Assistant/Composer.tsx:7."
+        },
+        {
+          "id": "ac2",
+          "text": "A source assertion in tests/test_frontend_overlay.py pins that COMPOSER_MAX_LENGTH is less than or equal to the contract message max_length."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes — the composer still caps input at 500 characters."
+        }
+      ],
+      "notes": "Small task. Verify with pytest and scripts/check-frontend.sh; the Docker stack is not needed.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: no live browser probe was possible (Playwright tools unavailable; stack not running per task notes). Evidence is the green verification command, the unchanged literal 500 in the diff, and the new source assertion on the maxLength binding. Non-blocking.",
+            "ac2: nit — the new test pins only <= the contract limit, as the AC asks; it does not pin the literal 500, so a future bump would still pass. Consistent with the AC as written."
+          ],
+          "notes": "Verification command passed end to end in the worktree (ruff, 110 pytest, tsc, eslint). ac1 confirmed by reading Composer.tsx and grepping frontend/overlay for the bare identifier; the constant is un-exported and the only importer uses the default export. ac2 confirmed by reading the new test, which derives the limit from the Pydantic contract. Critical ac3 satisfied by the green verification plus the diff preserving the 500 literal and maxLength binding. All five constraints checked. Test surface +1 nontrivial test, nothing deleted, skipped, or relaxed.",
+          "timestamp": "2026-09-14T09:12:47-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-14T09:12:47-04:00"
+      },
+      "drift": {
+        "predicted": 4,
+        "touched": 2,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-14T09:12:47-04:00"
+      }
+    },
+    {
+      "id": "def-d6",
+      "title": "Consume feedback_enabled in the assistant panel",
+      "status": "complete",
+      "kind": "improve",
+      "origin": "remediation",
+      "depends_on": [],
+      "files": [
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "tests/test_frontend_overlay.py",
+        "tests/test_contract.py"
+      ],
+      "why": "Deferred item d6 (quality-finding q4, from task 5): the agent produces feedback_enabled and the types mirror it, but no overlay code reads it; shoppers can click Helpful on a stack that will never store the score and only learn afterwards.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "Each assistant transcript entry carries the response's feedback_enabled; Transcript.tsx passes it into Feedback.tsx, which, when false, renders the existing 'Feedback not saved' hint up front while keeping both buttons (so the click-to-not-saved path, Cypress hooks, and task 5 ac5 still hold). Resolved at frontend/overlay/components/Assistant/Transcript.tsx:90."
+        },
+        {
+          "id": "ac2",
+          "text": "tests/test_frontend_overlay.py replaces the assertion forbidding feedback_enabled gating with one asserting the prop is passed and the up-front hint is rendered on false; tests/test_contract.py:129 still asserts the field is produced; fixtures include at least one response with feedback_enabled false."
+        },
+        {
+          "id": "ac3",
+          "critical": true,
+          "text": "plan.verification still PASSes — feedback submission behavior is unchanged when feedback_enabled is true."
+        }
+      ],
+      "notes": "Verify with pytest and scripts/check-frontend.sh; a live check against the stack is optional and this task is alone in its wave.",
+      "worktree": "",
+      "branch": "",
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1: the rendered up-front hint is verified by the static source-regex test plus tsc, not by an actual browser render (no Playwright tools in the evaluator sandbox), consistent with how the rest of the overlay is tested.",
+            "ac2: nit — the AC cites tests/test_contract.py:129; the assertion now lives at line 141. Present and untouched by this diff.",
+            "quality: nit — assert not re.search(if (!enabled)) only guards one way of hiding the buttons; the submitFeedback count assertions are the real guard."
+          ],
+          "notes": "Verification green (ruff, 111 pytest, tsc + eslint). ac1 holds because the assistant TranscriptEntry already carries the full AssistantResponse including feedback_enabled, so Transcript.tsx passing response.feedback_enabled into Feedback.tsx is sufficient without touching provider or types; the false branch renders the existing Feedback not saved line up front while keeping both buttons, the Cypress hook, and the post-click not_saved state. ac2 replacement of the forbidding assertion is the one removed test line and explicitly authorized; fixtures gain an unscored feedback_enabled=false response. Critical ac3 satisfied: enabled=true path and live gateway unchanged. All five constraints checked.",
+          "timestamp": "2026-09-14T09:23:49-04:00"
+        }
+      ],
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-14T09:23:50-04:00"
+      },
+      "drift": {
+        "predicted": 7,
+        "touched": 4,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-14T09:23:50-04:00"
+      }
     }
   ],
   "deferrals": [
@@ -880,11 +1287,11 @@
       "reason_code": "contract",
       "location": "concierge/agent.py:380-384",
       "note": "GET /assistant/conversations/{id} returns the bound shop_session_id to any caller knowing a conversation id; pass the caller session as a query param, compare server-side, answer 409 on mismatch, omit shop_session_id from ConversationStatus; treat 409 as foreign in Assistant.provider.tsx.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:36:25-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d1",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     },
     {
@@ -896,11 +1303,11 @@
       "reason_code": "contract",
       "location": "compose.native.yaml:18",
       "note": "ASSISTANT_DEMO_DETAILS defaults to true in compose.native.yaml and .env.example although task 5 ac7 says hidden by default; demo.links exposes Langfuse base URL/project id and ClickStack trace URL to anonymous shoppers. Flip the default off and document opt-in.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:36:25-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d2",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     },
     {
@@ -912,11 +1319,11 @@
       "reason_code": "contract",
       "location": "frontend/overlay/services/Assistant.service.ts:20-27 / concierge/contract.py:45-73",
       "note": "Storefront pre-validation limits (message 4000, budget 100000, quantity 10, currency/product/trace regexes) are hand-copied from the Pydantic contract; mirror tests pin only field names and MAX_TURNS. Add a bounds/pattern mirror test or centralize as ASSISTANT_* constants in types/Assistant.ts.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:58:04-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d3",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     },
     {
@@ -928,11 +1335,11 @@
       "reason_code": "contract",
       "location": "frontend/overlay/components/Assistant/Composer.tsx:7 / services/Assistant.service.ts:21",
       "note": "MESSAGE_MAX_LENGTH is declared twice with different values (500 UI cap in Composer.tsx, 4000 wire limit in the service). Rename the composer one to COMPOSER_MAX_LENGTH and import the wire limit from a shared constant.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:58:04-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d4",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     },
     {
@@ -944,11 +1351,11 @@
       "reason_code": "contract",
       "location": "concierge/agent.py 409 sites / gateways/http/Agent.gateway.ts:48-50 / Assistant.provider.tsx conflictKind",
       "note": "Four agent 409 reasons are free text; the gateway flattens them to one retryable conflict and the provider re-derives the kind via a second GET plus a mirrored MAX_TURNS; the rebind 409 falls into busy and offers a Retry that cannot succeed. Emit a structured reason in the 409 detail and branch on it client-side.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:58:04-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d5",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     },
     {
@@ -960,11 +1367,27 @@
       "reason_code": "contract",
       "location": "concierge/contract.py:113 / frontend/overlay/components/Assistant/Transcript.tsx:90",
       "note": "feedback_enabled is produced by the agent and mirrored in the types but never consumed by the overlay (Feedback renders unconditionally; a test forbids gating). Either surface the not-saved hint up front from the field or drop the field from the contract.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-11T20:58:04-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
+      "resolved_at": "2026-09-14T08:26:54-04:00",
+      "resolution_task_id": "def-d6",
+      "resolved_by_plan": "feat-native-assistant-ui",
+      "reason": ""
+    },
+    {
+      "id": "d7",
+      "task_id": "def-d3",
+      "source": "pre-existing",
+      "finding_id": "",
+      "severity": "",
+      "reason_code": "contract",
+      "location": "frontend/overlay/components/Assistant/Composer.tsx:7",
+      "note": "MESSAGE_MAX_LENGTH = 500 is the UI cap, not a wire limit; its rename is assigned to def-d4 in the next wave; touching it in def-d3 would pre-empt a plan decision already made.",
+      "status": "converted",
+      "deferred_at": "2026-09-14T09:05:32-04:00",
+      "resolved_at": "2026-09-14T09:05:32-04:00",
+      "resolution_task_id": "def-d4",
+      "resolved_by_plan": "feat-native-assistant-ui",
       "reason": ""
     }
   ],
@@ -1197,6 +1620,122 @@
     {
       "timestamp": "2026-09-11T20:58:05-04:00",
       "note": "Managed run complete: 8 waves (7 planned + 1 security remediation), 9 tasks passed, 0 retries, 0 blocked. main at cb245f5; no upstream, nothing pushed. Plan JSON changes are uncommitted in the working tree."
+    },
+    {
+      "timestamp": "2026-09-14T08:26:54-04:00",
+      "note": "Deferred review (explicit /harness deferred run, 2026-09-14): user chose Convert all. Added 6 tasks (def-d5, def-d1, def-d2, def-d3, def-d4, def-d6) from deferred review; recomputed parallel_plan → waves 9–13 (only wave 9 parallel: every def- task except def-d2 shares types/Assistant.ts and tests/test_frontend_overlay.py). plan.sweep stays false (tasks 1–8 are planned-origin). Ledger stays open."
+    },
+    {
+      "timestamp": "2026-09-14T08:27:28-04:00",
+      "note": "AUDIT: plan status hand-edited complete → in_progress. validate-plan-transition refuses this edge, but deferred-orchestration.md Step 6 specifies that an explicit /harness deferred run with conversions re-opens the plan for the def- remediation waves. managed_run.completed_at (2026-09-11) is left as the record of the first run; the def- waves are ledgered as auto-decisions under the same go-gate contract."
+    },
+    {
+      "timestamp": "2026-09-14T08:27:28-04:00",
+      "note": "Dispatched task def-d5 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d5"
+    },
+    {
+      "timestamp": "2026-09-14T08:27:28-04:00",
+      "note": "Dispatched task def-d2 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d2"
+    },
+    {
+      "timestamp": "2026-09-14T08:29:07-04:00",
+      "note": "Claimed task def-d5: Structured 409 reasons from the agent, classified client-side without a status round trip"
+    },
+    {
+      "timestamp": "2026-09-14T08:29:12-04:00",
+      "note": "Claimed task def-d2: Demo details off by default (implementer in worktree feat-native-assistant-ui-task-def-d2)."
+    },
+    {
+      "timestamp": "2026-09-14T08:35:43-04:00",
+      "note": "def-d2: compose.native.yaml now defaults ASSISTANT_DEMO_DETAILS to ${ASSISTANT_DEMO_DETAILS:-} (off) and .env.example sets false with an opt-in comment; README.md and docker/README.md describe the opt-in and what the trace links expose. Test renders the frontend environment by parsing compose.native.yaml and interpolating ${VAR:-default} in a new tests/compose_yaml.py (ComposeLoader/environment_of/compose_override moved there verbatim from tests/test_build.py, 0 assertions changed) rather than calling docker compose, to keep pytest hermetic; grep confirmed no existing interpolation helper and no cross-test-module imports in the repo, so the tests.compose_yaml import is a new convention. Real docker compose config render confirmed unset -> '' and true -> 'true'; the running stack was not touched. Code review: 1 finding applied (docstring), 0 deferred, 0 rejected."
+    },
+    {
+      "timestamp": "2026-09-14T08:36:24-04:00",
+      "note": "def-d5 implemented: contract.py gains ConflictReason = Literal[foreign, in_flight, turn_limit, rebind]; agent.py raises its four /assistant 409s through conflict(reason, message) as {detail: {message, reason}} while both legacy /prompt 409s keep a plain-string detail (pinned by test_legacy_prompt_conflicts_keep_their_plain_string_detail). Agent.gateway.ts validates the reason against ASSISTANT_CONFLICT_REASONS and sets retryable = (reason === 'in_flight'), so a 409 with no or an unknown reason is now non-retryable (message returns to the composer) rather than offering a Retry that cannot succeed; AssistantRouteError/AssistantErrorPayload/AssistantError carry an optional reason (key omitted when absent so other error envelopes are byte-identical). Assistant.provider fail() branches on failure.reason === 'foreign' and is synchronous again; conflictKind, its getConversation call and ASSISTANT_MAX_TURNS are gone; the unreachable 409-then-404 'expired' race branch was dropped because 404 already maps to code expired directly. Fixtures gained 'busy' and 'limit' keywords so both conflict states can be reviewed without an agent. Code review: 1 applied (hoisted the duplicated rebind/turn-limit strings into REBIND_MESSAGE/TURN_LIMIT_MESSAGE, pre-existing), 0 deferred, 2 rejected (reason-enum pin kept in the test whose MAX_TURNS pin it replaces one-for-one per ac2; 'limit' fixture keyword collision matches the existing one-word keyword scheme). Touched services/Assistant.service.ts and gateways/Assistant.gateway.ts beyond files[] because the reason has to ride the route envelope to reach the browser."
+    },
+    {
+      "timestamp": "2026-09-14T08:40:49-04:00",
+      "note": "def-d5 drift: 2 unpredicted files (services/Assistant.service.ts and gateways/Assistant.gateway.ts) so the 409 reason rides the route error envelope; neither reserved. Evaluator nit for docs: a 409 with a missing/unknown reason is now non-retryable."
+    },
+    {
+      "timestamp": "2026-09-14T08:41:25-04:00",
+      "note": "def-d2 drift: 2 unpredicted files (new tests/compose_yaml.py shared helper, relocated verbatim out of tests/test_build.py). Operator note: the running frontend container keeps demo details on until the next demo.py up (local .env has no ASSISTANT_DEMO_DETAILS line)."
+    },
+    {
+      "timestamp": "2026-09-14T08:41:25-04:00",
+      "note": "Wave 9 merged: def-d2, def-d5 → main (a33e920). No upstream; skipped push."
+    },
+    {
+      "timestamp": "2026-09-14T08:41:32-04:00",
+      "note": "Dispatched task def-d1 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d1"
+    },
+    {
+      "timestamp": "2026-09-14T08:44:51-04:00",
+      "note": "Claimed task def-d1: Gate the conversation status route on the caller's storefront session (baseline verification green: 106 passed, tsc and eslint ok)."
+    },
+    {
+      "timestamp": "2026-09-14T08:49:25-04:00",
+      "note": "def-d1: GET /assistant/conversations/{id} now requires ?shop_session_id= and reuses owned_conversation (404 still precedes the ownership check, so the expired path is unchanged; 409 reason foreign on mismatch); shop_session_id dropped from ConversationStatus on both sides. Storefront route validates both query values with the existing uuid() helper (parseConversationId folded into parseConversationQuery), gateways forward the session (browser side via the upstream request util's queryParams), and the provider's resolveStored reads a 409 foreign like fail() does instead of comparing ids; the stored.shopSessionId pre-check stays so a conversation another session left in this browser is not sent to the agent at all. Two overlay assertions were replaced because AC1/AC2 remove the behavior they pinned (single-argument getConversation, client-side shop_session_id !==). Code review: applied 1 (regex-anchored resolveStored assertion instead of a split slice), deferred 0, rejected 0. AssistantSession.gateway.ts header comment updated outside files[] because the diff made it stale."
+    },
+    {
+      "timestamp": "2026-09-14T08:53:39-04:00",
+      "note": "Wave 10 merged: def-d1 → main (0b3070e). No upstream; skipped push. Drift: 1 unpredicted (AssistantSession.gateway.ts header comment)."
+    },
+    {
+      "timestamp": "2026-09-14T08:53:42-04:00",
+      "note": "Dispatched task def-d3 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d3"
+    },
+    {
+      "timestamp": "2026-09-14T08:55:23-04:00",
+      "note": "Claimed task def-d3: Pin the storefront wire-limit constants to the Pydantic contract (worktree task-def-d3)."
+    },
+    {
+      "timestamp": "2026-09-14T09:01:09-04:00",
+      "note": "def-d3: moved the six wire limits into exported ASSISTANT_* constants in types/Assistant.ts (service imports them; only the UUID regex stays local since the contract types ids as UUID, not a pattern) and added test_frontend_wire_limits_mirror_the_agent_contract_fields, which reads each from the TS source and pins it to model_fields metadata (MaxLen/Le/pattern) and agent.FeedbackRequest.trace_id; ProductId is compared as pattern with its min/max_length folded into the quantifier, because the contract keeps the bound as separate Field args. Mutation-checked both directions. Code review: applied 2 (reworded an ambiguous UUID comment, dropped an over-broad numeric-constant assertion), deferred the Composer MESSAGE_MAX_LENGTH rename to def-d4 per task notes [contract]."
+    },
+    {
+      "timestamp": "2026-09-14T09:05:32-04:00",
+      "note": "def-d3 deferral d7 (Composer.tsx rename) transcribed and immediately marked converted → def-d4, which already exists in wave 12 for exactly this change."
+    },
+    {
+      "timestamp": "2026-09-14T09:05:32-04:00",
+      "note": "Wave 11 merged: def-d3 → main (3311efa). No upstream; skipped push. Zero drift."
+    },
+    {
+      "timestamp": "2026-09-14T09:05:36-04:00",
+      "note": "Dispatched task def-d4 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d4"
+    },
+    {
+      "timestamp": "2026-09-14T09:06:54-04:00",
+      "note": "Claimed task def-d4: Disambiguate the composer UI cap from the contract message limit (implementer in worktree)."
+    },
+    {
+      "timestamp": "2026-09-14T09:09:19-04:00",
+      "note": "def-d4: renamed Composer.tsx MESSAGE_MAX_LENGTH to module-private COMPOSER_MAX_LENGTH (grep found no importer, so the export was dropped) with a comment naming the contract constant it sits below; added test_composer_ui_cap_stays_within_the_agent_message_limit pinning it <= MessageRequest.message max_length and forbidding the bare MESSAGE_MAX_LENGTH name across all overlay ts/tsx. Code review: clean (0 findings). Verification green: 110 passed, check-frontend ok."
+    },
+    {
+      "timestamp": "2026-09-14T09:12:47-04:00",
+      "note": "Wave 12 merged: def-d4 → main (bcc7c41). No upstream; skipped push. Two predicted files (service, types) needed no change because def-d3 already covered that half."
+    },
+    {
+      "timestamp": "2026-09-14T09:12:50-04:00",
+      "note": "Dispatched task def-d6 to harness-task-runner in worktree /Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/worktrees/feat-native-assistant-ui-task-def-d6"
+    },
+    {
+      "timestamp": "2026-09-14T09:14:48-04:00",
+      "note": "Claimed task def-d6: Consume feedback_enabled in the assistant panel (implementer in worktree)."
+    },
+    {
+      "timestamp": "2026-09-14T09:20:09-04:00",
+      "note": "def-d6: Feedback.tsx takes a required enabled prop (Transcript passes response.feedback_enabled; the entry already carries it via response, so no provider/type change was needed) and, when false, shows 'Feedback not saved. Feedback storage is not configured for this assistant.' in place of 'Was this helpful?' while keeping both buttons and the AssistantFeedback hook; the post-click not_saved branch is unchanged. Fixtures: 'unscored' keyword answers with feedback_enabled false and a click on it returns saved:false, marked via a fixture-unscored- trace-id prefix rather than module memory because the transcript is restored across reloads (code-review finding, applied). test_every_assistant_answer_offers_feedback replaces the forbidding assertion with positive shape checks per ac2; new test_fixtures_include_an_answer_whose_score_is_not_stored. Verification green: 111 passed, check-frontend ok."
+    },
+    {
+      "timestamp": "2026-09-14T09:23:50-04:00",
+      "note": "Wave 13 merged: def-d6 → main (99e712e). No upstream; skipped push. All 6 def- tasks consolidated."
+    },
+    {
+      "timestamp": "2026-09-14T09:23:53-04:00",
+      "note": "def- remediation waves 9–13 consolidated. Per once-per-cycle rules, the security audit, quality review and deferred review do not re-run for def- tasks; no new deferrals were raised (d7 was converted into def-d4 within the cycle). Charter reconciliation skipped: no charter."
     }
   ],
   "plan_review_state": {
@@ -1401,7 +1940,7 @@
     }
   ],
   "parallel_plan": {
-    "computed_at": "2026-09-11T20:36:26-04:00",
+    "computed_at": "2026-09-14T08:26:54-04:00",
     "base_branch": "main",
     "waves": [
       {
@@ -1460,6 +1999,42 @@
           "sec-sec1"
         ],
         "notes": "Security remediation wave: single task, runs alone (touches concierge/agent.py, contract.py, Assistant.provider/service/types and tests; needs the stack if a live probe is wanted)."
+      },
+      {
+        "id": 9,
+        "tasks": [
+          "def-d5",
+          "def-d2"
+        ],
+        "notes": "Parallel: def-d5 is agent 409 reasons + provider/gateway/types; def-d2 is compose/.env.example/test_integration_config/README only and must not touch the Docker stack."
+      },
+      {
+        "id": 10,
+        "tasks": [
+          "def-d1"
+        ],
+        "notes": "Alone: depends on def-d5; shares agent.py, provider, types, test_contract, test_frontend_overlay with it."
+      },
+      {
+        "id": 11,
+        "tasks": [
+          "def-d3"
+        ],
+        "notes": "Alone: shares types/Assistant.ts and test_frontend_overlay.py with every other def- task (lexical)."
+      },
+      {
+        "id": 12,
+        "tasks": [
+          "def-d4"
+        ],
+        "notes": "Alone: depends on def-d3; same shared files."
+      },
+      {
+        "id": 13,
+        "tasks": [
+          "def-d6"
+        ],
+        "notes": "Alone: shares types/Assistant.ts, provider, fixtures, test_frontend_overlay.py (lexical)."
       }
     ],
     "predicted_files": {
@@ -1583,6 +2158,56 @@
         "frontend/overlay/pages/api/assistant/action.ts",
         "tests/test_contract.py",
         "tests/test_frontend_overlay.py"
+      ],
+      "def-d5": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "frontend/overlay/gateways/http/Agent.gateway.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
+      ],
+      "def-d1": [
+        "concierge/agent.py",
+        "concierge/contract.py",
+        "frontend/overlay/pages/api/assistant/conversation/[conversationId].ts",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/gateways/http/Agent.gateway.ts",
+        "frontend/overlay/gateways/Assistant.gateway.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "tests/test_contract.py",
+        "tests/test_frontend_overlay.py"
+      ],
+      "def-d2": [
+        "compose.native.yaml",
+        ".env.example",
+        "tests/test_integration_config.py",
+        "README.md",
+        "docker/README.md"
+      ],
+      "def-d3": [
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/services/Assistant.service.ts",
+        "tests/test_frontend_overlay.py"
+      ],
+      "def-d4": [
+        "frontend/overlay/components/Assistant/Composer.tsx",
+        "frontend/overlay/services/Assistant.service.ts",
+        "frontend/overlay/types/Assistant.ts",
+        "tests/test_frontend_overlay.py"
+      ],
+      "def-d6": [
+        "frontend/overlay/components/Assistant/Feedback.tsx",
+        "frontend/overlay/components/Assistant/Transcript.tsx",
+        "frontend/overlay/providers/Assistant.provider.tsx",
+        "frontend/overlay/types/Assistant.ts",
+        "frontend/overlay/gateways/AssistantFixtures.ts",
+        "tests/test_frontend_overlay.py",
+        "tests/test_contract.py"
       ]
     },
     "post_merge_build": [],
@@ -1594,7 +2219,7 @@
     "paused_at": null,
     "pause_reason": "",
     "resumes": [],
-    "completed_at": "2026-09-11T20:58:05-04:00",
+    "completed_at": "2026-09-14T09:23:53-04:00",
     "auto_decisions": [
       {
         "id": "ad1",
@@ -1707,6 +2332,55 @@
         "phase": "7.7",
         "decision": "charter reconciliation skipped: no charter exists",
         "reason": "7.7 conditions require a charter; none discovered (CHARTER.md, docs/CHARTER.md, Charter: line in CLAUDE.md)"
+      },
+      {
+        "id": "ad17",
+        "timestamp": "2026-09-14T08:27:28-04:00",
+        "phase": "7.65",
+        "decision": "explicit deferred review: 6 carried entries converted to def- tasks (def-d5, def-d1, def-d2, def-d3, def-d4, def-d6); plan re-opened; waves 9–13 run under the existing managed contract (runners, auto-merge, no push)",
+        "reason": "user chose Convert all to tasks and asked to run them through the harness; the go-gate merge authorization covers remediation waves"
+      },
+      {
+        "id": "ad18",
+        "timestamp": "2026-09-14T08:41:25-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 9: def-d2, def-d5 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate (remediation waves included); both PASS on first attempt; validate-taskreport OK with SHAs 95453b6 and 715e867 verified"
+      },
+      {
+        "id": "ad19",
+        "timestamp": "2026-09-14T08:53:39-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 10: def-d1 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt; validate-taskreport OK with SHA 0f618f7 verified"
+      },
+      {
+        "id": "ad20",
+        "timestamp": "2026-09-14T09:05:33-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 11: def-d3 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt; validate-taskreport OK with SHA 7a87fc2 verified"
+      },
+      {
+        "id": "ad21",
+        "timestamp": "2026-09-14T09:12:47-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 12: def-d4 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt; validate-taskreport OK with SHA 29e1216 verified"
+      },
+      {
+        "id": "ad22",
+        "timestamp": "2026-09-14T09:23:50-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 13: def-d6 → main; push skipped (no upstream)",
+        "reason": "pre-authorized at go gate; PASS on first attempt; validate-taskreport OK with SHA 5c898b4 verified"
+      },
+      {
+        "id": "ad23",
+        "timestamp": "2026-09-14T09:23:53-04:00",
+        "phase": "8",
+        "decision": "plan complete after def- waves; 7.5/7.6/7.65 not re-run (once per cycle); 7.7 skipped (no charter)",
+        "reason": "deferred-orchestration.md Step 4: when def- tasks consolidate, proceed to 7.7 without re-running any gate"
       }
     ]
   },

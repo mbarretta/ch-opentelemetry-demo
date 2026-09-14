@@ -7,14 +7,14 @@
       "mode": "dev",
       "parallelism": "auto",
       "autonomy": "managed",
-      "tasks_total": 9,
-      "tasks_complete": 9,
+      "tasks_total": 15,
+      "tasks_complete": 15,
       "wave_state": "idle",
       "current_wave": null,
       "wave_tasks_in_flight": [],
       "paused_reason": "",
-      "deferred_open": 6,
-      "updated": "2026-09-11T20:58:05-04:00",
+      "deferred_open": 0,
+      "updated": "2026-09-14T09:23:53-04:00",
       "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-native-assistant-ui.json"
     }
   ],
