@@ -5,7 +5,6 @@ Ported from `deploy/eks/scripts/lib/aws.sh`. Every call shells out through `core
 
 These are the shapes the tunnel, infra, lifecycle, publish, ops and check modules are written
 against, which is why the argv is asserted here rather than at each of their call sites.
-`ecr_image_digest` is the one body still to land: it belongs with `demo.py publish`.
 """
 
 import json
@@ -200,10 +199,29 @@ def ecr_has_image(repository, tag):
 def ecr_image_digest(repository, tag):
     """The registry manifest digest of a pushed image, for `manifest.published[service]`.
 
-    Still a stub on purpose: the only caller is `demo.py publish`, which records the digest it
-    reads, so this lands with the publish task alongside the writer of that manifest section.
+    Read back from the registry rather than scraped out of `docker push` output, which is also
+    why it answers for an image that was already there and so was never pushed.
+
+    `--output text` prints the string `None` for a query that matched nothing, so an absent tag
+    would otherwise be recorded as the literal digest "None".
     """
-    raise SystemExit("not implemented yet")
+    name = repository_name(repository)
+    digest = core.capture(
+        "aws",
+        "ecr",
+        "describe-images",
+        "--repository-name",
+        name,
+        "--image-ids",
+        f"imageTag={tag}",
+        "--query",
+        "imageDetails[0].imageDigest",
+        "--output",
+        "text",
+    ).stdout.strip()
+    if not digest or digest == "None":
+        core.die(f"ECR has no image digest for {name}:{tag}; push it with `demo.py publish`")
+    return digest
 
 
 def _ng_describe(query):
