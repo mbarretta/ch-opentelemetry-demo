@@ -265,6 +265,18 @@ def build(services, platform=None):
     print(f"Manifest: {manifest_path()}")
 
 
+def publish(services, force=False):
+    """Push locally built images to the account's ECR repositories and record them.
+
+    The counterpart of `build` for the EKS target: it reads the manifest rather than the build
+    inputs, refuses a platform the cluster's nodes cannot run, and writes
+    `manifest.published[service]` (see PUBLISHED_FIELDS) for the deploy to point Helm at.
+
+    The body lands with the publish task.
+    """
+    raise SystemExit("not implemented yet")
+
+
 def require_images():
     """The native stack runs only from images recorded by `build`."""
     manifest = read_manifest()
