@@ -4,7 +4,8 @@ Request and response models for the native storefront assistant endpoints on the
 
 - ``POST /assistant/message`` runs one conversation turn (``MessageRequest``).
 - ``POST /assistant/actions/add-to-cart`` performs one scoped cart mutation (``AddToCartAction``).
-- ``GET /assistant/conversations/{id}`` reports a live conversation (``ConversationStatus``).
+- ``GET /assistant/conversations/{id}?shop_session_id=`` reports a live conversation to the
+  storefront session it is bound to (``ConversationStatus``).
 
 Both POST routes answer with ``AssistantResponse``. ``product_refs`` and ``cart_changed`` are
 derived only from successful tool results of that turn; nothing is parsed from the reply
@@ -17,10 +18,11 @@ Conversation lifetime
 Conversations live in the agent process memory only:
 
 - A conversation is bound to the storefront ``shop_session_id`` (the cart) when it is created
-  and can never be rebound (409 ``foreign``). Every turn (message or cart action) names that
-  session and is refused when it names another one, so a leaked ``conversation_id`` alone
-  cannot change the cart it is bound to. Its scenario and budget are fixed at creation too; a
-  turn that asks for different ones is refused (409 ``rebind``).
+  and can never be rebound (409 ``foreign``). Every turn (message or cart action) and every
+  status request names that session and is refused when it names another one, and the status
+  never echoes the bound session, so a leaked ``conversation_id`` alone can neither change the
+  cart it is bound to nor reveal which cart that is. Its scenario and budget are fixed at
+  creation too; a turn that asks for different ones is refused (409 ``rebind``).
 - It expires after one hour without a turn, or after 20 turns (an add-to-cart action counts as
   a turn; a further turn is refused with 409 ``turn_limit``). Requests for an unknown or
   expired conversation return 404; the client then starts a new conversation.
@@ -123,7 +125,6 @@ class AssistantResponse(BaseModel):
 
 class ConversationStatus(BaseModel):
     conversation_id: str
-    shop_session_id: str
     turns: int
     currency_code: str
     expires_at: datetime

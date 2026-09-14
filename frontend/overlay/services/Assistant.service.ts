@@ -176,10 +176,12 @@ export const parseFeedbackRequest = (value: unknown): AssistantFeedbackRequest =
   };
 };
 
-export const parseConversationId = (value: string | string[] | undefined): string => {
-  if (typeof value !== 'string' || !UUID.test(value)) throw invalid('conversationId must be a UUID.');
-  return value;
-};
+// The status route's query: the conversation asked about and the caller's own shop session,
+// which the agent compares with the bound one. A repeated key arrives as an array and is rejected.
+export const parseConversationQuery = (query: NextApiRequest['query']): { conversationId: string; shopSessionId: string } => ({
+  conversationId: uuid(query, 'conversationId'),
+  shopSessionId: uuid(query, 'shop_session_id'),
+});
 
 // Builds the handler body for one route: one method, validated input, JSON out, and every
 // failure answered as an AssistantErrorPayload with a matching status. Routes wrap the result

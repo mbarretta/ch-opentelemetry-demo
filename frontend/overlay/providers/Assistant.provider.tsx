@@ -134,6 +134,8 @@ const freshTranscript = (notes: string[], unresolved: ActionTurn | null): Transc
 
 // What a stored conversation becomes on this page load. Only a conversation the agent confirms
 // as alive and bound to this shop session is restored; anything else starts fresh with a note.
+// The agent makes the ownership call from the session sent with the request (409 reason
+// 'foreign'); a stored conversation another session left in this browser is not even asked about.
 const resolveStored = async (
   stored: StoredConversation | null,
   shopSessionId: string
@@ -142,11 +144,12 @@ const resolveStored = async (
   if (stored.shopSessionId !== shopSessionId) return { restore: false, notes: [FOREIGN_NOTE] };
   if (stored.conversationId === null) return { restore: true, notes: [] };
   try {
-    const status = await getAssistantTransport().getConversation(stored.conversationId);
-    if (status.shop_session_id !== shopSessionId) return { restore: false, notes: [FOREIGN_NOTE] };
+    await getAssistantTransport().getConversation(stored.conversationId, shopSessionId);
     return { restore: true, notes: [] };
   } catch (caught) {
-    return { restore: false, notes: [toAssistantError(caught).code === 'expired' ? EXPIRED_NOTE : UNREACHABLE_NOTE] };
+    const failure = toAssistantError(caught);
+    const note = failure.reason === 'foreign' ? FOREIGN_NOTE : failure.code === 'expired' ? EXPIRED_NOTE : UNREACHABLE_NOTE;
+    return { restore: false, notes: [note] };
   }
 };
 

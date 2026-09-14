@@ -93,9 +93,10 @@ export interface AssistantResponse {
   demo: AssistantDemo;
 }
 
+// What the agent tells the owning shop session about a live conversation. The bound session is
+// deliberately absent: the agent answers 409 (reason 'foreign') instead of naming it.
 export interface AssistantConversationStatus {
   conversation_id: string;
-  shop_session_id: string;
   turns: number;
   currency_code: string;
   expires_at: string;
@@ -147,8 +148,9 @@ export interface AssistantTransport {
   sendMessage(request: AssistantMessageRequest): Promise<AssistantResponse>;
   addToCart(request: AssistantActionRequest): Promise<AssistantResponse>;
   submitFeedback(request: AssistantFeedbackRequest): Promise<AssistantFeedbackResult>;
-  // Is this conversation still alive on the agent, and which shop session does it belong to?
-  getConversation(conversationId: string): Promise<AssistantConversationStatus>;
+  // Is this conversation still alive on the agent and bound to this shop session? Rejects with
+  // code 'expired' when it is gone and code 'conflict', reason 'foreign', when it is another's.
+  getConversation(conversationId: string, shopSessionId: string): Promise<AssistantConversationStatus>;
 }
 
 export type FeedbackState = 'saved' | 'not_saved' | 'pending';

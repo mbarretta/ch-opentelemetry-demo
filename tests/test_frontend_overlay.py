@@ -349,18 +349,38 @@ def test_timed_out_cart_action_is_shown_as_uncertain_and_never_retried_automatic
 
 def test_conversation_is_resumed_only_after_the_status_route_confirms_it():
     types = (OVERLAY / "types/Assistant.ts").read_text()
-    assert "getConversation(conversationId: string): Promise<AssistantConversationStatus>" in types
+    assert "getConversation(conversationId: string, shopSessionId: string): Promise<AssistantConversationStatus>" in types
     gateway = BROWSER_GATEWAY.read_text()
     assert "conversation/${encodeURIComponent(conversationId)}" in gateway
     provider = PROVIDER.read_text()
     assert ".getConversation(" in provider
     assert "previous conversation expired" in provider
-    # A conversation bound to another shopper session is never resumed and a 409 for it starts fresh.
-    assert "shop_session_id !==" in provider
+    # Ownership is the agent's call: the caller's session travels with the request and a 409
+    # reason 'foreign' starts fresh; the status body no longer names a shop session to compare.
+    resolve_stored = re.search(r"^const resolveStored = .*?^\};", provider, flags=re.DOTALL | re.MULTILINE)
+    assert resolve_stored, "resolveStored not found in the provider"
+    assert "reason === 'foreign' ? FOREIGN_NOTE" in resolve_stored.group(0)
+    assert "shop_session_id" not in resolve_stored.group(0)
+    assert "shop_session_id" not in ts_interface_fields(types, "AssistantConversationStatus")
     # Persistence goes through one gateway, like the storefront's Session.gateway.
     assert SESSION_GATEWAY.is_file()
     assert "localStorage" in SESSION_GATEWAY.read_text()
     assert "localStorage" not in provider
+
+
+def test_status_route_passes_the_callers_validated_session_to_the_agent():
+    route = API_ROUTES["conversation"].read_text()
+    service = ASSISTANT_SERVICE.read_text()
+    gateway = AGENT_GATEWAY.read_text()
+    # Both query parameters go through the service's uuid() check before anything is called.
+    assert "parseConversationQuery(query)" in route
+    assert "uuid(query, 'conversationId')" in service
+    assert "uuid(query, 'shop_session_id')" in service
+    assert "shop_session_id: shopSessionId" in gateway
+    # The browser gateway sends the session the same way, as a query parameter of the same name.
+    browser = BROWSER_GATEWAY.read_text()
+    assert "method: 'GET', queryParams" in browser
+    assert "{ shop_session_id: shopSessionId }" in browser
 
 
 def test_conflicts_are_classified_from_the_agent_reason_without_a_status_round_trip():

@@ -123,8 +123,9 @@ const AgentGateway = () => ({
   submitFeedback({ conversation_id, trace_id, helpful }: AssistantFeedbackRequest) {
     return callAgent<{ saved: boolean }>('POST', '/feedback', { session_id: conversation_id, trace_id, value: helpful ? 1 : 0 });
   },
-  getConversation(conversationId: string) {
-    return callAgent<AssistantConversationStatus>('GET', `/assistant/conversations/${encodeURIComponent(conversationId)}`);
+  getConversation(conversationId: string, shopSessionId: string) {
+    const query = new URLSearchParams({ shop_session_id: shopSessionId });
+    return callAgent<AssistantConversationStatus>('GET', `/assistant/conversations/${encodeURIComponent(conversationId)}?${query}`);
   },
 });
 

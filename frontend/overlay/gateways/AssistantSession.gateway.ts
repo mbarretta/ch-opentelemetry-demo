@@ -1,7 +1,8 @@
 // The assistant conversation this browser keeps across page loads, stored beside the shop
 // session (Session.gateway.ts) in localStorage. What is stored is a candidate only:
-// providers/Assistant.provider.tsx resumes it after GET /api/assistant/conversation/{id}
-// confirms the agent still has the conversation and that it belongs to this shop session.
+// providers/Assistant.provider.tsx resumes it after GET /api/assistant/conversation/{id},
+// asked with this shop session, confirms the agent still has the conversation and that it is
+// bound to that session (a 409 reason 'foreign' otherwise).
 
 import { StoredConversation } from '../types/Assistant';
 

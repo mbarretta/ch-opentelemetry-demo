@@ -39,8 +39,8 @@ const unwrap = <T extends object>(payload: T | AssistantErrorPayload | undefined
 const post = async <T extends object>(path: string, body: object): Promise<T> =>
   unwrap(await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'POST', body }));
 
-const get = async <T extends object>(path: string): Promise<T> =>
-  unwrap(await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'GET' }));
+const get = async <T extends object>(path: string, queryParams: Record<string, string>): Promise<T> =>
+  unwrap(await request<T | AssistantErrorPayload | undefined>({ url: `${basePath}/${path}`, method: 'GET', queryParams }));
 
 const LiveTransport: AssistantTransport = {
   name: 'live',
@@ -62,8 +62,8 @@ const LiveTransport: AssistantTransport = {
       throw error;
     }
   },
-  getConversation(conversationId) {
-    return get<AssistantConversationStatus>(`conversation/${encodeURIComponent(conversationId)}`);
+  getConversation(conversationId, shopSessionId) {
+    return get<AssistantConversationStatus>(`conversation/${encodeURIComponent(conversationId)}`, { shop_session_id: shopSessionId });
   },
 };
 
