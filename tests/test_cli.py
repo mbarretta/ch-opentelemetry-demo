@@ -5,7 +5,8 @@ import argparse
 import pytest
 
 from launcher import cli, core, images, stack
-from launcher.eks import tunnel
+from launcher.eks import check, ops, tunnel
+from launcher.eks import flags as eks_flags
 
 # Every command line the CLI accepts. The EKS half is declared by the modules that implement it
 # (`launcher.eks.register`), so this list is also the check that each register() ran.
@@ -145,7 +146,14 @@ def test_the_tunnel_loop_is_hidden_but_reachable():
     assert (parsed.loop, parsed.port, parsed.namespace) == (True, 9090, "otel-demo")
 
 
-def test_tunnel_routes_each_action_to_its_own_function(monkeypatch):
+def test_tunnel_routes_each_action_to_its_own_function(monkeypatch, fake_sh):
+    """Each action word reaches its own tunnel function, and the routing reaches nothing else.
+
+    The four functions are stubbed because `tunnel` is implemented: `loop` alone is a
+    `while True` around `kubectl port-forward`, so a routing test that called it would not
+    return. `fake_sh` is the net behind the stubs, for the reason the dispatch test below
+    gives, and it holds the day one of these routes grows a step of its own before the call.
+    """
     routed = []
     for name in ("stop", "status", "restart", "loop"):
         monkeypatch.setattr(tunnel, name, lambda *args, name=name, **kwargs: routed.append(name))
@@ -161,6 +169,7 @@ def test_tunnel_routes_each_action_to_its_own_function(monkeypatch):
 
     assert routed == ["restart", "stop", "loop", "status"]
     assert failure.value.code == 1, "a tunnel that is down is what a script tests for"
+    assert fake_sh.lines() == [], "a routing test reaches no kubectl call"
 
 
 # Subcommands whose bodies have landed, each with the test file that now owns its behaviour.
@@ -172,6 +181,10 @@ IMPLEMENTED = {
     "destroy": "tests/test_eks_infra.py",
     "nightly": "tests/test_eks_infra.py",
     "tunnel": "tests/test_eks_tunnel.py",
+    "flag": "tests/test_eks_flags.py",
+    "verify": "tests/test_eks_ops.py",
+    "status": "tests/test_eks_ops.py",
+    "check": "tests/test_eks_check.py",
 }
 
 
@@ -210,18 +223,28 @@ def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch
     # only the default it sets can be asserted.
     assert cli.build_parser().parse_args(["bootstrap"]).needs_bootstrap is False
 
-    # `fake_sh` for the same reason as the dispatch test above: every line below reaches
-    # `cli.main`, so the day one of these stops being a stub it must be recorded, not run.
+    # The gate is the subject, so what is asserted is that each line arrives at its body --
+    # all three have landed, and `publish` is a top-level command rather than an `eks`
+    # subcommand, so `IMPLEMENTED` does not speak for it. The bodies are stubbed because they
+    # push to ECR and read the cluster for real; `fake_sh` is the net behind the stubs, for the
+    # same reason the dispatch test above gives.
+    reached = []
+    monkeypatch.setattr(
+        images, "publish", lambda services, force=False: reached.append("publish")
+    )
+    monkeypatch.setattr(ops, "status", lambda: reached.append("eks status"))
+    monkeypatch.setattr(check, "check", lambda: reached.append("eks check"))
+
     for line in ("publish", "eks status", "eks check"):
-        with pytest.raises(SystemExit) as failure:
-            cli.main(line.split())
-        assert str(failure.value) == "not implemented yet", line
+        cli.main(line.split())
+
+    assert reached == ["publish", "eks status", "eks check"], "the gate let all three through"
 
     for line in ("up", "stage"):
         with pytest.raises(SystemExit, match="bootstrap first"):
             cli.main(line.split())
 
-    assert fake_sh.lines() == [], "a stub and a refusal both reach no process"
+    assert fake_sh.lines() == [], "a routed body and a refusal both reach no process"
 
 
 def test_logs_reaches_compose_with_the_debug_profile(bootstrapped, fake_sh):
@@ -245,15 +268,28 @@ def test_up_passes_its_flags_through_to_compose(bootstrapped, fake_sh, monkeypat
     assert "http://localhost:8080" in out and "Chat (debug)" in out
 
 
-def test_scenario_targets_the_laptop_by_default_and_the_cluster_on_request(monkeypatch):
+def test_scenario_targets_the_laptop_by_default_and_the_cluster_on_request(monkeypatch, fake_sh):
+    """`--target` decides which flagd file a scenario is written to, and nothing else does.
+
+    Both transforms are stubbed, the cluster one because it is implemented now: called here it
+    runs `aws configure list-profiles`, checks the SSO session, reads the OpenTofu outputs,
+    rewrites the caller's kubeconfig and then `kubectl exec`s into whichever cluster that
+    named -- from a parser test. The bodies have their own tests (tests/test_eks_flags.py);
+    what belongs here is the route, with `fake_sh` as the net behind both stubs.
+    """
     applied = []
-    monkeypatch.setattr(stack, "scenario", applied.append)
+    monkeypatch.setattr(stack, "scenario", lambda name: applied.append(("local", name)))
+    monkeypatch.setattr(
+        eks_flags, "scenario_write_eks", lambda name: applied.append(("eks", name))
+    )
+    parse = cli.build_parser().parse_args
 
-    cli.run_scenario(cli.build_parser().parse_args(["scenario", "backend-failure"]))
-    assert applied == ["backend-failure"]
+    cli.run_scenario(parse(["scenario", "backend-failure"]))
+    cli.run_scenario(parse(["scenario", "shopping", "--target", "local"]))
+    cli.run_scenario(parse(["scenario", "shopping", "--target", "eks"]))
 
-    with pytest.raises(SystemExit, match="not implemented yet"):
-        cli.run_scenario(cli.build_parser().parse_args(["scenario", "shopping", "--target", "eks"]))
+    assert applied == [("local", "backend-failure"), ("local", "shopping"), ("eks", "shopping")]
+    assert fake_sh.lines() == [], "a target test reaches no aws, kubectl or tofu call"
 
 
 def test_an_unknown_scenario_is_refused(capsys):
