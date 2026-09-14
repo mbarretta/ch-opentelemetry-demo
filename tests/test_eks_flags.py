@@ -17,7 +17,7 @@ import json
 
 import pytest
 
-from launcher import core, stack
+from launcher import cli, core, stack
 from launcher.eks import aws, config, flags, k8s
 
 READ_FLAGD = (
@@ -286,6 +286,34 @@ def test_the_flag_command_needs_a_cluster_before_it_reads_anything(cluster, monk
 
     assert set(required) == {"aws", "tofu", "kubectl"}
     assert order == ["login", "kubeconfig", "login", "kubeconfig"]
+
+
+def test_both_entry_points_route_here_without_reaching_a_process(monkeypatch, fake_sh):
+    """`eks flag` and `scenario --target eks` reach these bodies, and a route test reaches no more.
+
+    The route rather than the body: both bodies talk to AWS and the cluster for real, so what is
+    asserted is the call each command line arrives at. Stubbing both of them is what keeps this
+    test offline -- once `scenario_write_eks` stopped being a stub, calling through to it would
+    run `aws configure list-profiles` and then `kubectl exec` against whatever cluster the
+    caller's kubeconfig happened to name. The closing `fake_sh` assertion is defence in depth
+    behind that, for the day one of these routes grows a step of its own before the call.
+    """
+    routed = []
+    monkeypatch.setattr(flags, "flag", lambda *args, **kwargs: routed.append(("flag", args, kwargs)))
+    monkeypatch.setattr(
+        flags, "scenario_write_eks", lambda name: routed.append(("scenario_write_eks", name))
+    )
+    parser = cli.build_parser()
+
+    for line in ("eks flag paymentUnreachable on", "scenario backend-failure --target eks"):
+        args = parser.parse_args(line.split())
+        args.handler(args)
+
+    assert routed == [
+        ("flag", ("paymentUnreachable", "on"), {"reset": False}),
+        ("scenario_write_eks", "backend-failure"),
+    ]
+    assert fake_sh.lines() == [], "a route test reaches no aws or kubectl call"
 
 
 def test_every_flag_argument_is_optional():

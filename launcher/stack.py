@@ -1,5 +1,6 @@
 """The Compose stack: its environment, the generated configuration, and the demo scenarios."""
 
+import base64
 import copy
 import json
 import os
@@ -81,15 +82,10 @@ def environment():
             built[service]["image"] if service in built else images.image_name(service, "unbuilt")
         )
     if values.get("LANGFUSE_PUBLIC_KEY") and values.get("LANGFUSE_SECRET_KEY"):
-        # Imported here rather than at module level: `launcher.eks` pulls in the whole EKS
-        # target, and the laptop path has no business loading it to encode one header. The
-        # header itself is defined once, in eks.config, because a trace that authenticates on
-        # one target and not the other lands in one place and is a bug nobody sees for a day.
-        from .eks import config as eks_config
-
-        values["LANGFUSE_AUTH_HEADER"] = eks_config.langfuse_auth_header(
-            values["LANGFUSE_PUBLIC_KEY"], values["LANGFUSE_SECRET_KEY"]
-        )
+        encoded = base64.b64encode(
+            f"{values['LANGFUSE_PUBLIC_KEY']}:{values['LANGFUSE_SECRET_KEY']}".encode()
+        ).decode()
+        values["LANGFUSE_AUTH_HEADER"] = "Basic " + encoded
     return {
         key: str(value)
         for key, value in values.items()
@@ -153,6 +149,9 @@ def compose(env, args, dev=False, debug_chatbot=False, **kwargs):
 # the transform below instead of the generic `eks flag` setter.
 FAULT_FLAG = "productCatalogFailure"
 FAULT_SCENARIO = "backend-failure"
+# flagd evaluates a flag's targeting rule only while the flag is enabled, so a scenario written
+# against a disabled flag lands in the file and serves nothing.
+FLAG_ENABLED = "ENABLED"
 
 
 def fault_enabled(name):
@@ -167,13 +166,26 @@ def _fault_branch(document):
     could have reshaped, and a scenario that silently did nothing is the worst thing that can
     happen halfway through a walkthrough. Returned as the live list, so the caller writing to
     it writes into `document`.
+
+    `state` is checked here and not repaired. The retired writer set it to `ENABLED` on every
+    scenario, which hid the one case worth hearing about: a flag somebody disabled by hand stays
+    disabled, so the rule below is never evaluated and the fault never fires however the branch
+    reads. Refusing says that; writing it back says nothing and quietly re-enables a flag the
+    caller may have turned off deliberately.
     """
+    flags = document.get("flags") if isinstance(document, dict) else None
+    entry = (flags or {}).get(FAULT_FLAG) if isinstance(flags, dict) else None
     try:
-        branch = document["flags"][FAULT_FLAG]["targeting"]["if"]
+        branch = entry["targeting"]["if"]
     except (KeyError, TypeError):
         core.die(f"the flagd configuration has no {FAULT_FLAG} targeting rule")
     if not isinstance(branch, list) or len(branch) != 3:
         core.die(f"{FAULT_FLAG}'s targeting.if is not an if/then/else: {branch!r}")
+    if entry.get("state") != FLAG_ENABLED:
+        core.die(
+            f"{FAULT_FLAG} is {entry.get('state')!r}, not {FLAG_ENABLED!r}: flagd would ignore "
+            "its targeting rule, so the scenario would appear to apply and change nothing"
+        )
     return branch
 
 

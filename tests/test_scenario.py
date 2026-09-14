@@ -112,6 +112,24 @@ def test_a_flagd_document_without_the_rule_is_refused(broken):
         stack.scenario_flags(broken, "backend-failure")
 
 
+def test_a_disabled_flag_is_refused_rather_than_re_enabled(document):
+    """flagd evaluates no targeting rule on a disabled flag, so the write would serve nothing.
+
+    The retired writer set `state` to `ENABLED` on every scenario, which meant a flag somebody
+    had turned off came back on unasked and the one case worth hearing about was never said out
+    loud. Refusing is the whole reason the transform validates instead of repairing.
+    """
+    document["flags"][stack.FAULT_FLAG]["state"] = "DISABLED"
+
+    with pytest.raises(SystemExit, match="would appear to apply and change nothing") as refusal:
+        stack.scenario_flags(document, "backend-failure")
+
+    assert "DISABLED" in str(refusal.value)
+    # The read-back path too, which is what the EKS writer confirms a write with.
+    with pytest.raises(SystemExit, match=stack.FAULT_FLAG):
+        stack.fault_variant(document)
+
+
 # --- the laptop writer ----------------------------------------------------------------------
 
 
