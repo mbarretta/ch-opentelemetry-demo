@@ -1,8 +1,10 @@
 import json
 
 import pytest
+from dotenv import dotenv_values
 
 from scripts import demo
+from tests.compose_yaml import rendered_environment
 
 BOTH_BACKENDS = {
     "CLICKSTACK_OTLP_ENDPOINT": "https://click.test",
@@ -115,3 +117,27 @@ def test_fault_targets_only_selected_product(tmp_path, monkeypatch):
     assert fault["targeting"]["if"][2] == "off"
     demo.scenario("shopping")
     assert json.loads(path.read_text()) == original
+
+
+def frontend_environment(variables):
+    return rendered_environment("compose.native.yaml", "frontend", variables)
+
+
+def test_demo_details_are_off_unless_the_operator_opts_in():
+    # pages/_document.tsx hands the value to the browser as window.ENV; the overlay's
+    # isDemoDetailsEnabled treats anything but 1/true/on/yes as off, so the default renders empty.
+    assert frontend_environment({})["ASSISTANT_DEMO_DETAILS"] == ""
+    assert frontend_environment({"ASSISTANT_DEMO_DETAILS": ""})["ASSISTANT_DEMO_DETAILS"] == ""
+    on = frontend_environment({"ASSISTANT_DEMO_DETAILS": "true"})
+    assert on["ASSISTANT_DEMO_DETAILS"] == "true"
+    off = frontend_environment({"ASSISTANT_DEMO_DETAILS": "false"})
+    assert off["ASSISTANT_DEMO_DETAILS"] == "false"
+    # The other assistant settings keep their defaults regardless.
+    assert frontend_environment({})["ASSISTANT_TRANSPORT"] == "live"
+    assert frontend_environment({})["AGENT_BASE_URL"] == "http://agent:8010"
+
+
+def test_env_example_documents_demo_details_as_opt_in():
+    example = dotenv_values(demo.ROOT / ".env.example")
+    assert example["ASSISTANT_DEMO_DETAILS"] == "false"
+    assert example["ASSISTANT_TRANSPORT"] == "live"

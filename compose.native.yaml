@@ -13,9 +13,11 @@ services:
       # Read by pages/_document.tsx when the frontend server starts and handed to the browser as
       # window.ENV (a change needs `demo.py up` to recreate the container, not a rebuild).
       # live: same-origin /api/assistant routes. fixtures: canned answers, no agent call.
-      # Demo details show the scenario, prompt, tools, and trace links under each answer.
+      # Demo details are off unless ASSISTANT_DEMO_DETAILS=true: they show the scenario, prompt,
+      # tools, and trace links (Langfuse and ClickStack addresses) under each answer, so opt in
+      # for demo runs only.
       - ASSISTANT_TRANSPORT=${ASSISTANT_TRANSPORT:-live}
-      - ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-true}
+      - ASSISTANT_DEMO_DETAILS=${ASSISTANT_DEMO_DETAILS:-}
 
   agent:
     image: ${CONCIERGE_AGENT_IMAGE}

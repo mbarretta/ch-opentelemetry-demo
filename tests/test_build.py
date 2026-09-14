@@ -7,6 +7,7 @@ import pytest
 import yaml
 
 from scripts import demo
+from tests.compose_yaml import compose_override, environment_of
 
 DOCKERFILES = {
     "agent": demo.DOCKER / "agent.Dockerfile",
@@ -232,32 +233,6 @@ def test_environment_points_compose_at_the_built_images(inputs, monkeypatch):
         env["CONCIERGE_FRONTEND_PROXY_IMAGE"] == "astronomy-concierge-frontend-proxy:abc123def456"
     )
     assert env["DEMO_VERSION"] == "3.0.0", "the shop images stay on the released tag"
-
-
-class ComposeLoader(yaml.SafeLoader):
-    """Accepts Compose's override tags: `!reset` reads as None, `!override` as its plain value."""
-
-
-ComposeLoader.add_constructor("!reset", lambda loader, node: None)
-ComposeLoader.add_constructor(
-    "!override",
-    lambda loader, node: (
-        loader.construct_sequence(node)
-        if isinstance(node, yaml.SequenceNode)
-        else loader.construct_mapping(node)
-        if isinstance(node, yaml.MappingNode)
-        else loader.construct_scalar(node)
-    ),
-)
-
-
-def environment_of(service):
-    """Compose list-form environment (KEY=VALUE) as a mapping."""
-    return dict(entry.split("=", 1) for entry in service["environment"])
-
-
-def compose_override(name):
-    return yaml.load((demo.ROOT / name).read_text(), Loader=ComposeLoader)["services"]
 
 
 def test_native_override_selects_the_four_images_and_drops_the_chatbot_dependency():
