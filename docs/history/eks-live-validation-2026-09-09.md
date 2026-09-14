@@ -1,5 +1,14 @@
 # Live validation record
 
+> **Pre-merge record, kept verbatim.** This run executed on 2026-09-09 in the
+> `ch-otel-demo-eks` repository, from its shell scripts and at its own upstream
+> pin `d6fd782e` — all superseded by the merge into `ch-opentelemetry-demo`,
+> which pins 3.0.0 (`1755859a`) and drives the cluster from `demo.py eks`. It is
+> evidence of a real bring-up, so nothing below is edited and no command, path,
+> image tag or section reference in it should be read as current. What the run
+> established about the cluster's shape, costs and timings carries over and is
+> summarised in `deploy/eks/README.md`.
+
 A full bring-up of this repository on a real AWS account and a real ClickHouse
 Cloud service, run on 2026-09-09 from an Apple Silicon Mac. It is the evidence
 that the scripts do what the README says they do; the README `## Timings`

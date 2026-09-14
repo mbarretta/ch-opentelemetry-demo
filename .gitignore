@@ -9,11 +9,8 @@ __pycache__/
 .ruff_cache/
 *.pyc
 
-# Absorbed from deploy/eks/.gitignore when ch-otel-demo-eks was imported as a subtree.
-deploy/eks/envvars.clickhouse
-deploy/eks/envvars.aws
-deploy/eks/opentelemetry-demo/
-deploy/eks/.run/
+# OpenTofu's own working files: provider plugins, any local state, and the account-specific
+# variables. Everything else the EKS target writes goes to .runtime/eks, covered above.
 deploy/eks/tofu/.terraform/
 deploy/eks/tofu/*.tfstate
 deploy/eks/tofu/*.tfstate.*

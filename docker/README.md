@@ -1,8 +1,10 @@
 # Native images
 
-`scripts/demo.py build` produces the four images the native stack runs from. Nothing is
-published; the images exist only in the local Docker engine and are recorded in
+`scripts/demo.py build` produces the four images both targets run from and records them in
 `.runtime/images/manifest.json`, which `demo.py up` requires.
+The build itself publishes nothing: the images exist only in the local Docker engine until
+`demo.py publish` pushes them to the EKS target's ECR repositories, which records what it pushed
+in the same manifest.
 
 | Service | Dockerfile | Context | Base image | Entry point |
 | --- | --- | --- | --- | --- |
@@ -47,7 +49,7 @@ All four images share one tag: the first 12 hex digits of a SHA-256 over the bui
 | `frontend/overlay/**` (except its README), `frontend/patches/*.patch` | storefront changes, the session-replay SDK among them |
 | `docker/**` (except this README) | Dockerfiles with their base digests, `base-images.json`, the Envoy template |
 | `concierge/**`, `prompts/**` (no bytecode) | the Python package and prompts |
-| corrected `tools.py` | derived from the pin and `TOOLS_PATCH` in `scripts/demo.py` |
+| corrected `tools.py` | derived from the pin and `TOOLS_PATCH` in `launcher/upstream.py` |
 
 Editing any of them, for example `prompts/concierge-v1.txt`, changes the tag, and `demo.py up`
 warns when the manifest's tag no longer matches the working tree.
@@ -63,6 +65,10 @@ encode the platform: a second platform's images replace the local images under t
 and the manifest's `platform` records whichever was built last. Build one platform at a time,
 and build the host platform again before `up`.
 
+The platform matters to the EKS target too: its node group is Graviton, so `demo.py publish`
+refuses to push a manifest whose `platform` does not match the cluster's and names the
+`build --platform` that would fix it. A wrong build cannot reach the cluster silently.
+
 | Platform | Status on September 11, 2026 |
 | --- | --- |
 | `linux/arm64` | Built and tested (Docker Desktop on Apple silicon): Cypress, and `scripts/smoke.py` over HTTP and MCP transports. |
@@ -74,13 +80,17 @@ and build the host platform again before `up`.
 .venv/bin/python scripts/demo.py build                       # all four, host platform
 .venv/bin/python scripts/demo.py build --service agent --service mcp
 .venv/bin/python scripts/demo.py build --platform linux/amd64
+.venv/bin/python scripts/demo.py publish                     # the same four into ECR, for EKS
+.venv/bin/python scripts/demo.py publish --service agent --force
 .venv/bin/python scripts/demo.py up                          # native stack from the manifest
 .venv/bin/python scripts/demo.py up --dev                    # plus compose.dev.yaml source mounts
 .venv/bin/python scripts/demo.py up --debug-chatbot          # plus the Gradio client on CHAT_PORT
 ```
 
 `up` refuses to start before every image in the manifest exists locally and names the missing
-ones. The native stack has no application-code bind mounts on `agent`, `mcp`, or `frontend`;
+ones; `publish` skips a tag the registry already holds unless `--force` says otherwise, and
+`demo.py eks deploy` refuses until all four are published at the current tag, so a partial
+`--service` push never becomes a partial release. The native stack has no application-code bind mounts on `agent`, `mcp`, or `frontend`;
 `--dev` mounts `concierge/`, `prompts/`, and `.runtime/tools.py` over the agent and mcp images
 so a container restart picks up Python edits. The chatbot has no image of its own: it is the
 released chatbot image with the package mounted, kept behind the Compose `debug` profile.
@@ -103,7 +113,7 @@ runs only. `tests/test_integration_config.py` checks the rendered default.
   `frontend` cluster under a second name: with `spawn_upstream_span`, Envoy emits a
   `router <cluster> egress` span per request that carries the cluster name and no URL, and the
   name is what lets the collector's Langfuse filter keep the assistant route's egress span
-  (`langfuse_span_filter` in `scripts/demo.py`) while dropping the rest of the storefront's;
+  (`langfuse_span_filter` in `launcher/collector.py`) while dropping the rest of the storefront's;
 - the `/chatbot` routes and the `chatbot` cluster removed, so the proxy starts without the
   Gradio service.
 
