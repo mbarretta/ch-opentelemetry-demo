@@ -8,7 +8,13 @@
 import type { NextApiHandler, NextApiRequest, NextApiResponse } from 'next';
 import { context, Exception, trace } from '@opentelemetry/api';
 import {
+  ASSISTANT_BUDGET_MAX,
+  ASSISTANT_CURRENCY_CODE_PATTERN,
+  ASSISTANT_MESSAGE_MAX_LENGTH,
+  ASSISTANT_PRODUCT_ID_PATTERN,
+  ASSISTANT_QUANTITY_MAX,
   ASSISTANT_SCENARIOS,
+  ASSISTANT_TRACE_ID_PATTERN,
   AssistantActionRequest,
   AssistantConflictReason,
   AssistantErrorCode,
@@ -18,14 +24,9 @@ import {
   AssistantScenario,
 } from '../types/Assistant';
 
-// Same limits as the Pydantic models in concierge/contract.py.
-const MESSAGE_MAX_LENGTH = 4000;
-const BUDGET_MAX = 100000;
-const QUANTITY_MAX = 10;
+// The size and shape limits come from types/Assistant.ts, where they are pinned to the Pydantic
+// contract. The id fields are UUIDs in that contract; the routes accept the canonical hyphenated form.
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const CURRENCY_CODE = /^[A-Z]{3}$/;
-const PRODUCT_ID = /^[A-Za-z0-9_-]{1,64}$/;
-const TRACE_ID = /^[a-f0-9]{32}$/;
 
 // A failure the route reports to the browser: the HTTP status it answers with plus the typed error.
 export class AssistantRouteError extends Error {
@@ -90,9 +91,9 @@ const pattern = (body: Fields, key: string, expected: RegExp, description: strin
 };
 
 const currencyCode = (body: Fields): string =>
-  body.currency_code === undefined ? 'USD' : pattern(body, 'currency_code', CURRENCY_CODE, 'a three-letter currency code');
+  body.currency_code === undefined ? 'USD' : pattern(body, 'currency_code', ASSISTANT_CURRENCY_CODE_PATTERN, 'a three-letter currency code');
 
-const productId = (body: Fields): string => pattern(body, 'product_id', PRODUCT_ID, 'a catalog product id');
+const productId = (body: Fields): string => pattern(body, 'product_id', ASSISTANT_PRODUCT_ID_PATTERN, 'a catalog product id');
 
 const wholeNumber = (body: Fields, key: string, min: number, max: number): number => {
   const value = body[key];
@@ -137,7 +138,7 @@ export const parseMessageRequest = (value: unknown): AssistantMessageRequest => 
     conversation_id: uuidOrNull(body, 'conversation_id'),
     shop_session_id: uuid(body, 'shop_session_id'),
     request_id: uuid(body, 'request_id'),
-    message: text(body, 'message', MESSAGE_MAX_LENGTH),
+    message: text(body, 'message', ASSISTANT_MESSAGE_MAX_LENGTH),
     currency_code: currencyCode(body),
   };
   const chosenContext = productContext(body);
@@ -145,7 +146,7 @@ export const parseMessageRequest = (value: unknown): AssistantMessageRequest => 
   const chosenScenario = scenario(body);
   if (chosenScenario) request.scenario = chosenScenario;
   if (body.budget !== undefined && body.budget !== null) {
-    request.budget = positiveAmount(body, 'budget', BUDGET_MAX);
+    request.budget = positiveAmount(body, 'budget', ASSISTANT_BUDGET_MAX);
   }
   return request;
 };
@@ -161,7 +162,7 @@ export const parseActionRequest = (value: unknown): AssistantActionRequest => {
     shop_session_id: uuid(body, 'shop_session_id'),
     request_id: uuid(body, 'request_id'),
     product_id: productId(body),
-    quantity: body.quantity === undefined ? 1 : wholeNumber(body, 'quantity', 1, QUANTITY_MAX),
+    quantity: body.quantity === undefined ? 1 : wholeNumber(body, 'quantity', 1, ASSISTANT_QUANTITY_MAX),
     currency_code: currencyCode(body),
   };
 };
@@ -171,7 +172,7 @@ export const parseFeedbackRequest = (value: unknown): AssistantFeedbackRequest =
   if (typeof body.helpful !== 'boolean') throw invalid('helpful must be true or false.');
   return {
     conversation_id: uuid(body, 'conversation_id'),
-    trace_id: pattern(body, 'trace_id', TRACE_ID, 'a 32-character hex trace id'),
+    trace_id: pattern(body, 'trace_id', ASSISTANT_TRACE_ID_PATTERN, 'a 32-character hex trace id'),
     helpful: body.helpful,
   };
 };
