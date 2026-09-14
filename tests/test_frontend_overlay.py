@@ -380,9 +380,29 @@ def test_demo_details_render_scenario_prompt_tools_and_links():
 
 
 def test_every_assistant_answer_offers_feedback():
+    """Every answer renders Feedback with the response's feedback_enabled. When the agent said
+    scores are not stored, Feedback.tsx says so up front, with the same 'Feedback not saved' line
+    a rejected click shows, and keeps both buttons, so a click still reports the agent's answer
+    and the Cypress hook stays in place."""
     transcript = (OVERLAY / "components/Assistant/Transcript.tsx").read_text()
     assert re.search(r"entry\.kind === 'assistant' \? <Feedback", transcript)
-    assert "feedback_enabled ? <Feedback" not in transcript
+    assert "enabled={response.feedback_enabled}" in transcript
+    feedback = (OVERLAY / "components/Assistant/Feedback.tsx").read_text()
+    assert "enabled: boolean;" in feedback
+    assert re.search(r"enabled \? 'Was this helpful\?' : `\$\{NOT_SAVED\} ", feedback)
+    assert feedback.count("data-state=\"not_saved\"") == 1, "the up-front hint must not claim the post-click not_saved state"
+    assert not re.search(r"if \(!enabled\)", feedback), "a disabled score store must not hide the buttons"
+    assert feedback.count("submitFeedback(entryId, true)") == 1
+    assert feedback.count("submitFeedback(entryId, false)") == 1
+
+
+def test_fixtures_include_an_answer_whose_score_is_not_stored():
+    """The fixture transport shows the up-front hint on a real page: one keyword answers with
+    feedback_enabled false, and a click on that answer comes back not saved, as the live agent would."""
+    fixtures = (OVERLAY / "gateways/AssistantFixtures.ts").read_text()
+    assert "feedback_enabled: feedbackEnabled," in fixtures
+    assert "feedbackEnabled: false" in fixtures
+    assert re.search(r"return \{ saved: false, message: ", fixtures)
 
 
 # -- shared shopping state (task 6) ----------------------------------------------------------
