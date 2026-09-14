@@ -9,6 +9,18 @@ import { Money } from '../protos/demo';
 
 export const ASSISTANT_CONTRACT_VERSION = '1';
 
+// Wire limits the agent enforces, copied here so the storefront routes reject what the agent
+// would 422 and forward what it would accept. tests/test_frontend_overlay.py pins each to its
+// Pydantic field: MessageRequest.message max_length, MessageRequest.budget le,
+// AddToCartAction.quantity le, the CurrencyCode and ProductId Field patterns (ProductId's
+// min/max length folded into the quantifier), and FeedbackRequest.trace_id in concierge/agent.py.
+export const ASSISTANT_MESSAGE_MAX_LENGTH = 4000;
+export const ASSISTANT_BUDGET_MAX = 100000;
+export const ASSISTANT_QUANTITY_MAX = 10;
+export const ASSISTANT_CURRENCY_CODE_PATTERN = /^[A-Z]{3}$/;
+export const ASSISTANT_PRODUCT_ID_PATTERN = /^[A-Za-z0-9_-]{1,64}$/;
+export const ASSISTANT_TRACE_ID_PATTERN = /^[a-f0-9]{32}$/;
+
 // live: the same-origin /api/assistant routes (default). fixtures: canned answers, no agent call.
 export const ASSISTANT_TRANSPORTS = ['live', 'fixtures'] as const;
 export type AssistantTransportName = (typeof ASSISTANT_TRANSPORTS)[number];

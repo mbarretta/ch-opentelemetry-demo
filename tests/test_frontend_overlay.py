@@ -2,8 +2,9 @@
 
 The storefront has no unit-test runner of its own (adding one would add npm dependencies), so
 the parts of the assistant shell that can be checked without a browser are asserted here:
-the contract version the frontend mirrors, the theme-token rule for new component styles,
-the empty-state copy, the Cypress hooks, and the one-patch-per-upstream-file layout.
+the contract version and wire limits the frontend mirrors, the theme-token rule for new
+component styles, the empty-state copy, the Cypress hooks, and the one-patch-per-upstream-file
+layout.
 """
 
 import re
@@ -13,6 +14,7 @@ from typing import get_args
 import pytest
 
 from concierge import contract
+from concierge.agent import FeedbackRequest
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "frontend/overlay"
@@ -220,6 +222,28 @@ def ts_interface_fields(source: str, name: str) -> set[str]:
     return set(re.findall(r"^\s{2}(\w+)\??:", match.group(1), flags=re.MULTILINE))
 
 
+def ts_number_constant(source: str, name: str) -> int:
+    """The value of `export const <name> = <integer>;` in a TypeScript source."""
+    match = re.search(rf"^export const {name} = (\d+);$", source, flags=re.MULTILINE)
+    assert match, f"constant {name} not found"
+    return int(match.group(1))
+
+
+def ts_regex_constant(source: str, name: str) -> str:
+    """The pattern of `export const <name> = /<pattern>/;` (no flags) in a TypeScript source."""
+    match = re.search(rf"^export const {name} = /(.+)/;$", source, flags=re.MULTILINE)
+    assert match, f"regex constant {name} not found"
+    return match.group(1)
+
+
+def field_constraint(model, name: str, attribute: str):
+    """One constraint (max_length, le, pattern, ...) of a Pydantic field, from its metadata."""
+    for item in model.model_fields[name].metadata:
+        if hasattr(item, attribute):
+            return getattr(item, attribute)
+    raise AssertionError(f"{model.__name__}.{name} has no {attribute} constraint")
+
+
 @pytest.mark.parametrize("name", sorted(API_ROUTES))
 def test_each_api_route_exists_and_is_wrapped_in_the_instrumentation_middleware(name):
     route = API_ROUTES[name]
@@ -289,6 +313,48 @@ def test_frontend_response_types_mirror_the_agent_contract_models():
     assert ts_interface_fields(types, "AssistantActionRequest") == set(contract.AddToCartAction.model_fields)
     scenarios = re.search(r"ASSISTANT_SCENARIOS = \[([^\]]+)\]", types)
     assert scenarios and set(re.findall(r"'([^']+)'", scenarios.group(1))) == set(get_args(contract.Scenario))
+
+
+def test_frontend_wire_limits_mirror_the_agent_contract_fields():
+    """The storefront pre-validates with the agent's own limits, so a body it forwards is never
+    422'd for size or shape and a body it rejects would have been rejected upstream too. Each
+    constant is pinned to the Pydantic field it copies; the service imports them, so the values
+    live in one place on the frontend side."""
+    types = (OVERLAY / "types/Assistant.ts").read_text()
+    assert ts_number_constant(types, "ASSISTANT_MESSAGE_MAX_LENGTH") == field_constraint(
+        contract.MessageRequest, "message", "max_length"
+    )
+    assert ts_number_constant(types, "ASSISTANT_BUDGET_MAX") == field_constraint(contract.MessageRequest, "budget", "le")
+    assert ts_number_constant(types, "ASSISTANT_QUANTITY_MAX") == field_constraint(contract.AddToCartAction, "quantity", "le")
+    assert ts_regex_constant(types, "ASSISTANT_CURRENCY_CODE_PATTERN") == field_constraint(
+        contract.MessageRequest, "currency_code", "pattern"
+    )
+    assert field_constraint(contract.AddToCartAction, "currency_code", "pattern") == field_constraint(
+        contract.MessageRequest, "currency_code", "pattern"
+    )
+    # ProductId keeps its length bounds as min_length/max_length beside an unbounded pattern; the
+    # storefront folds the three into one quantifier.
+    product_pattern = field_constraint(contract.AddToCartAction, "product_id", "pattern")
+    assert product_pattern.endswith("+$"), product_pattern
+    bounds = "{%d,%d}" % (
+        field_constraint(contract.AddToCartAction, "product_id", "min_length"),
+        field_constraint(contract.AddToCartAction, "product_id", "max_length"),
+    )
+    assert ts_regex_constant(types, "ASSISTANT_PRODUCT_ID_PATTERN") == product_pattern[:-2] + bounds + "$"
+    assert ts_regex_constant(types, "ASSISTANT_TRACE_ID_PATTERN") == field_constraint(FeedbackRequest, "trace_id", "pattern")
+    # The service enforces these and declares none of its own.
+    service = ASSISTANT_SERVICE.read_text()
+    for name in (
+        "ASSISTANT_MESSAGE_MAX_LENGTH",
+        "ASSISTANT_BUDGET_MAX",
+        "ASSISTANT_QUANTITY_MAX",
+        "ASSISTANT_CURRENCY_CODE_PATTERN",
+        "ASSISTANT_PRODUCT_ID_PATTERN",
+        "ASSISTANT_TRACE_ID_PATTERN",
+    ):
+        assert re.search(rf"^\s+{name},$", service, flags=re.MULTILINE), f"service does not import {name}"
+        assert service.count(name) >= 2, f"service imports {name} but never uses it"
+    assert not re.search(r"^const (MESSAGE_MAX_LENGTH|BUDGET_MAX|QUANTITY_MAX|CURRENCY_CODE|PRODUCT_ID|TRACE_ID) =", service, flags=re.MULTILINE)
 
 
 def test_demo_details_render_scenario_prompt_tools_and_links():
