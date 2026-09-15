@@ -1,8 +1,8 @@
 diff --git a/src/frontend/utils/telemetry/FrontendTracer.ts b/src/frontend/utils/telemetry/FrontendTracer.ts
-index f5f0baa..57ae0a9 100644
+index f5f0baa..00a7aa8 100644
 --- a/src/frontend/utils/telemetry/FrontendTracer.ts
 +++ b/src/frontend/utils/telemetry/FrontendTracer.ts
-@@ -11,14 +11,64 @@ import { browserDetector } from '@opentelemetry/opentelemetry-browser-detector';
+@@ -11,14 +11,71 @@ import { browserDetector } from '@opentelemetry/opentelemetry-browser-detector';
  import { ATTR_SERVICE_NAME } from '@opentelemetry/semantic-conventions';
  import { OTLPTraceExporter } from '@opentelemetry/exporter-trace-otlp-http';
  import { SessionIdProcessor } from './SessionIdProcessor';
@@ -29,8 +29,7 @@ index f5f0baa..57ae0a9 100644
 +  // agent chain is stitched the same in both modes.
 +  //
 +  // Toggled at runtime by PUBLIC_HYPERDX_ENABLED on the frontend service -- derived from
-+  // SESSION_REPLAY by the launcher on Compose, set on the deployment on EKS -- so one image
-+  // serves both modes.
++  // SESSION_REPLAY by the launcher on both Compose and EKS -- so one image serves both modes.
 +  if (NEXT_PUBLIC_HYPERDX_ENABLED === 'true') {
 +    const HyperDX = (await import('@hyperdx/browser')).default;
 +    const { userId } = SessionGateway.getSession();
@@ -51,6 +50,14 @@ index f5f0baa..57ae0a9 100644
 +      tracePropagationTargets: [/.*/],
 +      consoleCapture: true,
 +      advancedNetworkCapture: true,
++      // Pinned rather than inherited. @hyperdx/browser 0.25.1's init() defaults this to true --
++      // its own README (lines 40-43) documents false, contradicting the code it ships -- so
++      // input masking is the behaviour we have today only by way of an undocumented default
++      // that an SDK bump could flip silently, sending the storefront's checkout keystrokes to
++      // the replay. Stating it keeps typed input masked whatever the default becomes.
++      // (maskAllText genuinely defaults to false, so rendered page text is recorded either way;
++      // that is part of the capture posture above, not of this line.)
++      maskAllInputs: true,
 +      otelResourceAttributes: {
 +        'demo.synthetic_request': IS_SYNTHETIC_REQUEST,
 +      },

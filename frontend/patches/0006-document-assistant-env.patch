@@ -1,8 +1,8 @@
 diff --git a/src/frontend/pages/_document.tsx b/src/frontend/pages/_document.tsx
-index 8a68bc0..a988d4d 100644
+index 8a68bc0..779ac18 100644
 --- a/src/frontend/pages/_document.tsx
 +++ b/src/frontend/pages/_document.tsx
-@@ -5,7 +5,20 @@ import Document, { DocumentContext, Html, Head, Main, NextScript } from 'next/do
+@@ -5,7 +5,31 @@ import Document, { DocumentContext, Html, Head, Main, NextScript } from 'next/do
  import { ServerStyleSheet } from 'styled-components';
  import {context, propagation} from "@opentelemetry/api";
  
@@ -17,21 +17,40 @@ index 8a68bc0..a988d4d 100644
 +  ASSISTANT_TRANSPORT = '',
 +  ASSISTANT_DEMO_DETAILS = '',
 +  // Session replay, same mechanism: PUBLIC_HYPERDX_ENABLED is derived from SESSION_REPLAY by
-+  // the launcher (Compose) or set on the deployment (EKS), so one image serves both modes.
++  // the launcher on both Compose and EKS, so one image serves both modes.
 +  PUBLIC_HYPERDX_ENABLED = '',
 +  PUBLIC_HYPERDX_URL = '',
 +} = process.env;
++
++// window.ENV is written into an inline <script> through dangerouslySetInnerHTML below, so every
++// value here is part of a JavaScript program. Each is interpolated as a JSON literal rather than
++// wrapped in single quotes, the way upstream did it: every one of these is an operator-set string
++// from .env, and an apostrophe in any of them -- a typo in WEB_OTEL_SERVICE_NAME, a free-text key
++// added later -- would otherwise close the string literal and leave the browser parsing the rest
++// of the value as code. JSON.stringify quotes and escapes the value, and '<' is escaped as well so
++// a value containing '</script>' cannot end the script element early. String() first, because
++// that is what template interpolation did: an unset variable still arrives as the same string it
++// always did rather than changing shape.
++const jsonScriptValue = (value: unknown) => JSON.stringify(String(value)).replace(/</g, '\\u003c');
  
  export default class MyDocument extends Document<{ envString: string }> {
    static async getInitialProps(ctx: DocumentContext) {
-@@ -32,6 +45,10 @@ export default class MyDocument extends Document<{ envString: string }> {
-           NEXT_PUBLIC_OTEL_SERVICE_NAME: '${WEB_OTEL_SERVICE_NAME}',
-           NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '${otlpTracesEndpoint}',
-           IS_SYNTHETIC_REQUEST: '${isSyntheticRequest}',
-+          ASSISTANT_TRANSPORT: '${ASSISTANT_TRANSPORT}',
-+          ASSISTANT_DEMO_DETAILS: '${ASSISTANT_DEMO_DETAILS}',
-+          NEXT_PUBLIC_HYPERDX_ENABLED: '${PUBLIC_HYPERDX_ENABLED}',
-+          NEXT_PUBLIC_HYPERDX_URL: '${PUBLIC_HYPERDX_URL}',
+@@ -28,10 +52,14 @@ export default class MyDocument extends Document<{ envString: string }> {
+ 
+       const envString = `
+         window.ENV = {
+-          NEXT_PUBLIC_PLATFORM: '${ENV_PLATFORM}',
+-          NEXT_PUBLIC_OTEL_SERVICE_NAME: '${WEB_OTEL_SERVICE_NAME}',
+-          NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: '${otlpTracesEndpoint}',
+-          IS_SYNTHETIC_REQUEST: '${isSyntheticRequest}',
++          NEXT_PUBLIC_PLATFORM: ${jsonScriptValue(ENV_PLATFORM)},
++          NEXT_PUBLIC_OTEL_SERVICE_NAME: ${jsonScriptValue(WEB_OTEL_SERVICE_NAME)},
++          NEXT_PUBLIC_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${jsonScriptValue(otlpTracesEndpoint)},
++          IS_SYNTHETIC_REQUEST: ${jsonScriptValue(isSyntheticRequest)},
++          ASSISTANT_TRANSPORT: ${jsonScriptValue(ASSISTANT_TRANSPORT)},
++          ASSISTANT_DEMO_DETAILS: ${jsonScriptValue(ASSISTANT_DEMO_DETAILS)},
++          NEXT_PUBLIC_HYPERDX_ENABLED: ${jsonScriptValue(PUBLIC_HYPERDX_ENABLED)},
++          NEXT_PUBLIC_HYPERDX_URL: ${jsonScriptValue(PUBLIC_HYPERDX_URL)},
          };`;
        return {
          ...initialProps,

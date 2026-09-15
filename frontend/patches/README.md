@@ -39,6 +39,12 @@ image and is switched on at container start rather than built in:
 | `0009-frontend-tracer-session-replay.patch` | `utils/telemetry/FrontendTracer.ts` | starts the SDK when `NEXT_PUBLIC_HYPERDX_ENABLED` is `true`, instead of the released tracer |
 | `0010-package-lock-hyperdx.patch` | `package-lock.json` | the resolved lockfile entries for the SDK |
 
+`0009` states `maskAllInputs: true` rather than inheriting it. `@hyperdx/browser` 0.25.1's
+`init()` defaults it to `true`, while the package's own README documents `false` -- so the input
+masking the storefront relies on rests on an undocumented default that an SDK bump could flip
+silently. Keep the line through any regeneration. `maskAllText` genuinely defaults to `false`, so
+rendered page text is recorded either way; that is part of the capture posture, not of this line.
+
 The dependency pair is npm's output, not a hand-written diff: the released `Dockerfile` runs
 `npm ci`, which fails on a lockfile that does not resolve. Regenerate both together.
 
