@@ -1376,12 +1376,12 @@
       "reason_code": "contract",
       "location": "scripts/init.sh:15, scripts/status.sh:15, scripts/up.sh:15",
       "note": "The three no-argument lifecycle scripts still reject arguments with an inline if [[ $# -gt 0 ]] block and define no usage(), so they are now the last scripts off the apply.sh/nightly.sh shape; five-line edit per file, but def-d10's critical ac2 restricts its diff to build-frontend.sh, deploy.sh and verify.sh.",
-      "status": "carried",
+      "status": "dropped",
       "deferred_at": "2026-09-09T23:00:00-04:00",
-      "resolved_at": null,
+      "resolved_at": "2026-09-15T14:09:21-04:00",
       "resolution_task_id": "",
       "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "reason": "MOOT, not deferred: the three no-argument lifecycle scripts this entry names - scripts/init.sh, scripts/status.sh and scripts/up.sh - no longer exist in the checkout. They were removed when scripts/demo.py became the launcher, so there is nothing left to bring onto the apply.sh/nightly.sh shape. Dropped while auditing the deferral ledgers during improve-conditional-guards-sweep planning."
     }
   ],
   "gap_notes": [],

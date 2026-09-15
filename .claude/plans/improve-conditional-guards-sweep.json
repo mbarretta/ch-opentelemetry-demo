@@ -1,0 +1,766 @@
+{
+  "slug": "improve-conditional-guards-sweep",
+  "title": "Harden the guards the prior sweep left conditional",
+  "kind": "improvement",
+  "mode": "dev",
+  "status": "planned",
+  "created": "2026-09-15T13:10:00-04:00",
+  "autonomy": "managed",
+  "sweep": true,
+  "parallelism": "auto",
+  "signing_disabled": true,
+  "plan_review": "auto",
+  "security_audit": "auto",
+  "quality_review": "auto",
+  "deferred_review": "auto",
+  "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests launcher && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
+  "context": "Second mechanical sweep, following improve-merge-cycle-cleanup (complete on main at 629f6cb, 488 passing tests). That cycle closed its ledger with EIGHT findings at risk-accepted -- security sec1 and sec2, quality q1 through q6 -- because none cleared the auto-remediate bar. The user reopened them on 2026-09-15 asking for a sweep. Severity understates them, which is why they are here: five are one line to one small test, and FOUR MAKE WORK THAT SHIPPED LAST CYCLE ACTUALLY DURABLE rather than adding anything new. Every task is origin remediation, so this is a SWEEP plan: plan.sweep is true and the deferral ledger is CLOSED by design, so this cleanup cannot emit a ledger that becomes a third sweep's intake. Items that cannot be applied get one end-of-cycle decision instead. SCOPE: all eight risk-accepted findings (sec1, sec2, q1-q6) plus ONE latent bug the prior quality reviewer raised outside its findings and which therefore has no finding id -- config.STATIC_MANIFESTS is documented as every manifest eks deploy applies unchanged, but the deploy path applies the two individually, so a third entry would be checked and never applied (task 7). EVERY SITE IN THIS PLAN WAS RE-VERIFIED AGAINST 629f6cb BEFORE THE PLAN WAS WRITTEN, because the findings' line numbers predate the last merges: all nine still hold, scripts/ has zero SystemExit sites of either kind (so task 4's widening is free), and both render recordings carry the 0.41.0 chart label (so task 3's pin is directly implementable). ONE FINDING'S REMEDIATION IS WRONG AND TASK 1 SAYS SO: sec2 suggests relocating the -O child's root via sys.path, which cannot work because core.ROOT derives from __file__. THE PRIOR CYCLE'S USER DECISIONS STILL BIND AND MUST NOT BE REOPENED: the session-replay capture posture stays as-is (constraint 5); the EKS API server stays publicly reachable in the shipped tfvars example, so do not cite 'the cluster is private' as a reason to weaken task 5; and the single Tofu edit authorised on 2026-09-15 IS SPENT -- task 5 reads eks.tf and must not modify it (constraint 2). CODEX ROUND 2 (f3) CAUGHT THAT MY OUT-OF-SCOPE LIST WAS INCOMPLETE, and chasing it found a larger bookkeeping defect: the prior cycle closed its ledger WITHOUT flipping the deferrals it had actually resolved, so feat-merge-ch-otel-demo.json still showed 19 entries as carried when 15 were done. All 15 were verified against the code and flipped to converted as part of authoring this plan (see the log), and feat-otel-demo-eks d13 was dropped as moot -- the three lifecycle scripts it names no longer exist. FOUR items genuinely remain carried and are all deliberately out of scope here: d3 (the collector's CREATE DATABASE grant, which needs live ClickHouse Cloud validation rather than a static edit), d2 (the profiles pipeline exporting to a disabled firepit, a deployment-design choice), d16 (the orchestrator-authorised constraint-4 exception for the archived validation transcript, which wants a user acknowledgement rather than a code change) and info-level d21 (tunnel stop() decides what to signal from the pidfile integer alone; not an attacker path, and binding the pid to the tunnel this CLI started is more than mechanical). Full evidence for every item is in .claude/plans/improve-merge-cycle-cleanup.json -- its security_findings[] and quality_findings[] carry the exact locations and remediations. READ THE NAMED FINDING BEFORE IMPLEMENTING A TASK.",
+  "constraints": [
+    "subprocess is imported and called only in launcher/core.py; every other module under launcher/, scripts/ and tests/ goes through core.run(), core.capture() or core.popen(). Task 3 restores this claim -- it is not to be weakened to match the one violation",
+    "NO edit to deploy/eks/tofu/ this cycle. The single eks.tf authorisation the user granted on 2026-09-15 was spent by the prior cycle; task 5 READS eks.tf to assert its content and must not modify it. Tofu identifiers var.name = \"otel-demo-eks\", the state bucket and the state key are unchanged -- moving any of them replaces the live EKS cluster",
+    "No secret value reaches argv or disk: Kubernetes Secrets are assembled in Python and piped to `kubectl apply -f -` on stdin; ClickHouse and Langfuse auth travel in request headers or function kwargs, never a command line",
+    "The upstream pin stays 3.0.0 / commit 1755859a everywhere, and internal identifiers are unchanged: astronomy-concierge image prefix, concierge/ package name, Compose project name, Langfuse prompt and trace names",
+    "The session-replay capture posture is settled: advancedNetworkCapture, consoleCapture and maskAllInputs in frontend/patches/0009 stay exactly as they are. The user reviewed and decided this on 2026-09-15; no task here touches that file",
+    "This is a hardening sweep, not a refactor. No observable behavior change to any command: the only production-file edits authorised are wording -- core.die's docstring (task 4), the restrict_agent_ingress log line (task 5) and the STATIC_MANIFESTS description (task 7). No control flow moves, no process call is added or removed, and launcher/eks/lifecycle.py's two manifest applies keep their order and separate post-processing",
+    "config.CHART_VERSION stays 0.41.0, and config.STATIC_MANIFESTS, COLLECTOR_MANIFEST and NETWORK_POLICY_MANIFEST keep their names -- tasks 5 and 7 read each other's symbols across file boundaries this wave",
+    "Every guard this sweep adds must be a COMMITTED assertion that a normal green pytest run exercises, AND must itself be pinned by a committed negative test proving it bites. Handoff-only evidence -- 'run the mutation and report the output' -- NEVER satisfies an acceptance criterion: it does not survive into the graded diff, so the evaluator cannot check it and a later reader cannot rely on it. No mutation of a real repo file is ever committed. No skips, no xfail, no relaxed existing assertion, no lint suppression, and no test deleted or weakened to make room."
+  ],
+  "model_overrides": null,
+  "charter": null,
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Stop the -O child tests from inheriting the operator's real credentials and .env",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "A plain pytest run is one refactor of main()'s first two lines away from a paid model turn and a live ClickHouse Cloud query against the operator's own cluster.",
+      "files": [
+        "tests/test_smoke_queries.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From security finding sec2 of improve-merge-cycle-cleanup. READ IT FIRST. Neither -O test requests the `redirected` fixture, so the child gets the developer's full environment and a live core.ROOT, and one of them calls smoke.main(['--target','eks']). CORRECTION TO THE FINDING'S REMEDIATION, verified this cycle: its second half suggests pointing the child at a redirected root 'by inserting a tmp_path on its sys.path instead of the live core.ROOT'. That CANNOT work -- core.ROOT is derived from __file__ (launcher/core.py:12), so the child recomputes the live checkout no matter what sys.path holds, and the child must keep the real root on sys.path to import scripts.smoke at all. Override core.ROOT inside the child's own program text instead, the way the `redirected` fixture does in-process at tests/conftest.py:303-304. require_assertions() is main()'s second line (scripts/smoke.py:537, after parse_args), so it still fires before any .env read -- the root override is defense in depth for the case where that ordering regresses, not a replacement for it.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "optimised() hands the child an environment with every conftest.REDIRECT_KEYS entry removed -- the 21-key union that holds API_KEY, the five CLICKHOUSE_*/OTLP keys and the six LANGFUSE_* keys -- while keeping whatever the interpreter needs to start (PATH, HOME, and PYTHONPATH if set). Passed via core.run(..., env=...), which forwards **kwargs to subprocess.run.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The child cannot read the operator's real root .env: its program overrides core.ROOT (and core.RUNTIME) to a throwaway directory before importing anything that calls config.load_env(). Implemented in the child's program text, not via sys.path -- see the task notes.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Both existing -O tests still assert what they asserted before, including the control assert that proves the child really was optimised (tests/test_smoke_queries.py:280,286). The scrub must not make either test vacuous: if the refusal under test can no longer be reached because the environment is empty rather than because the guard fired, the test has stopped testing the guard.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The scrubbed key set is derived from conftest.REDIRECT_KEYS by reference, not re-listed in this file, so a key added to the union is covered here without a second edit.",
+          "critical": false
+        },
+        {
+          "id": "ac6",
+          "text": "A COMMITTED regression test sets a sentinel API_KEY in the parent environment, invokes optimised() with a child program that reports os.environ, core.ROOT and core.RUNTIME, and asserts the sentinel is absent, core.ROOT is not the repository root, and core.RUNTIME is under the redirected root. The test must fail if either the env scrub or the root/runtime override is removed.",
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "2",
+      "title": "Replace the unsound AWS env isolation in use_profile with the save/restore shape",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "use_profile uses the exact mechanism task 8 of the prior cycle proved unsound and replaced, and its docstring makes a restoration claim that is false on the machine the test parametrizes for.",
+      "files": [
+        "tests/test_cli.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q1 of improve-merge-cycle-cleanup -- the sharpest finding of that cycle. READ IT FIRST. monkeypatch.delenv records no undo entry for an already-absent key, so on a machine with AWS_REGION unset (bare CI -- the case the profile-unset parameter exists to cover) the AWS_REGION that aws.aws_login() writes directly at launcher/eks/aws.py:38 outlives the test. Nothing reddens today ONLY because the prior cycle's REDIRECT_KEYS union happens to include AWS_REGION -- a sibling task's scrub containing this task's leak. Two routes are acceptable (finding's own remediation): the save/restore shape from tests/conftest.py:305-313, or converting the two guard tests to request the shared `redirected` fixture with AWS_PROFILE supplied through a redirect_env override. If you take the second route, mind the teardown-ordering trap that tests/test_conftest.py:70-78 documents: the setter must be set up BEFORE redirected.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "use_profile no longer relies on monkeypatch.delenv for AWS_PROFILE or AWS_REGION. Whatever the caller's shell held before the test is what os.environ holds after it, in both the profile-set and profile-unset parametrizations, including the AWS_REGION that aws_login() exports mid-test.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "A COMMITTED test pins the restoration itself: with AWS_REGION absent from the environment, running the guard test leaves AWS_REGION absent afterwards. The prior cycle's equivalent lives at tests/test_conftest.py -- put this beside it or in the same file, but it must be an assertion in the committed suite, not something demonstrated during the session.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The use_profile docstring's restoration claim matches what the code now does. It currently says 'Both keys are handed to monkeypatch even when they are being cleared, so the original values are restored afterwards', which is the false half.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "Both existing parametrizations of test_the_dispatch_guard_names_the_subcommand_that_reaches_a_process still exercise the per-invocation no-process guard and still fail if that guard is removed.",
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "3",
+      "title": "Route the node child through core.run so the single-subprocess-importer claim is true again",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "launcher/core.py:3 states it is the only module that imports subprocess; a sibling task in the prior cycle made that literally false repo-wide.",
+      "files": [
+        "tests/test_frontend_overlay.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q2 of improve-merge-cycle-cleanup. READ IT FIRST. Two tasks in the prior cycle each needed to spawn a child from a test and chose different spellings: wave-1 task 4 set the in-cycle precedent by routing its python -O child through core.run with core.PIPE (tests/test_smoke_queries.py:275), and wave-2 task 6 imported subprocess directly in a separate worktree (tests/test_frontend_overlay.py:13, used at :324). The finding offers two routes -- converge on core.run, or amend the core.py docstring to say 'the only module in launcher/'. TAKE THE FIRST: the constraint is load-bearing for how this repo's process surface is faked in one place, and weakening the claim to match the one divergence is the wrong direction for a public reference implementation. Note the test does not use fake_sh, so core.run is unpatched there and the call goes through unchanged.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "tests/test_frontend_overlay.py no longer imports subprocess, and its node child goes through core.run(NODE, '-e', program, stdout=core.PIPE, stderr=core.PIPE, text=True, check=True) or the equivalent, matching the spelling at tests/test_smoke_queries.py:275.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The claim at launcher/core.py:3 holds repo-wide again: `import subprocess` and `from subprocess import ...` appear in launcher/core.py and nowhere else under launcher/, scripts/, tests/ or concierge/. This is a condition on the merged tree, verifiable by the evaluator's own scan -- task 4 is the one that lands the committed guard pinning it (task 4 ac3), which is why task 4 depends on this task.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "emitted_env_script(values) at tests/test_frontend_overlay.py:300 returns the same (script, env) 2-tuple it returned before -- that is the function holding the node child at :324, NOT env_script_source() at :276, which is pure regex extraction over the patch text, returns a 3-tuple and spawns nothing. The assertions in test_every_window_env_value_is_a_json_literal_not_a_quoted_interpolation and its two siblings are unchanged in meaning, and check=True still surfaces a node failure as a failure rather than a confusing KeyError on stdout.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "launcher/core.py is NOT edited by this task. The claim is restored by fixing the violation, not by narrowing the claim.",
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "4",
+      "title": "Widen the refusal-convention guard to scripts/, the other operator-facing entry point",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The machine guard for the core.die convention scans only launcher/, while the prior cycle extended core.die into scripts/ -- so the one place the next stray refusal is most likely to be written is unguarded.",
+      "files": [
+        "tests/test_core.py",
+        "launcher/core.py"
+      ],
+      "depends_on": [
+        "3"
+      ],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q5 of improve-merge-cycle-cleanup. READ IT FIRST. The AST scan at tests/test_core.py:49 iterates core.ROOT/'launcher' only. VERIFIED THIS CYCLE: scripts/ currently holds ZERO raise SystemExit sites of either kind (message or bare code), so widening the scan costs nothing today and the existing exact-equality assertions (messages == ['launcher/core.py'], codes == ['launcher/eks/tunnel.py'] * 2) hold unchanged. The finding's claim that scripts/ has 'zero bare message SystemExit sites' is right and in fact understates it.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The scan root at tests/test_core.py:49 covers both core.ROOT/'launcher' and core.ROOT/'scripts'. The two exact-equality assertions are unchanged in form -- widening the scan must not be paid for by loosening what it asserts.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The widened scan is itself guarded by a COMMITTED negative test. Factor the AST walk out of the test body into a module-level helper in tests/test_core.py (e.g. refusal_sites(root) -> (messages, codes)), then commit a test that runs it over a tmp_path tree holding a synthetic scripts/-shaped module with a `raise SystemExit(\"...\")` and asserts that site is reported as a message. A guard whose reach is only demonstrated during the session is exactly the defect this sweep exists to fix.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "core.die's docstring at launcher/core.py:48 states the scope that is now guarded, rather than a launcher-only scope.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The keyed-by-file rather than by-line comment at tests/test_core.py:44-45 still describes the assertion, and the deliberate allowance for `raise SystemExit(<int>)` is untouched -- that form is how `eks tunnel status` answers the shell.",
+          "critical": false
+        },
+        {
+          "id": "ac6",
+          "text": "The only edit to launcher/core.py is core.die's docstring. core.ROOT, core.RUNTIME, run(), capture(), popen() and the module docstring are untouched -- 15 launcher modules plus scripts/smoke.py call core.die and five test modules read core.ROOT, and task 3 depends on the module docstring's claim being restored by fixing the violation rather than by editing this file.",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "A committed guard pins constraint 1 -- the claim at launcher/core.py:3 that core.py is the only module importing subprocess. Factor the AST scan into a module-level helper, then assert over launcher/, scripts/, tests/ and concierge/ that `import subprocess` and `from subprocess import ...` appear in launcher/core.py alone, with a failure message naming every offending file. Commit a negative test over a tmp_path tree containing one synthetic file with `import subprocess` and another with `from subprocess import run`, and assert that both files are reported. This task depends on task 3 because the real-tree assertion can only become green after that task removes the existing violation.",
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "5",
+      "title": "Pin the two conditions the NetworkPolicy protection silently depends on",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The cycle's headline security fix is enforced by one unasserted line and validated against recordings whose freshness rests on a manual step this repo has already missed once; either can regress with the whole suite green.",
+      "files": [
+        "tests/test_eks_check.py",
+        "launcher/eks/lifecycle.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From security finding sec1 AND quality finding q3 of improve-merge-cycle-cleanup -- one task because both are conditions under the same protection and both guards land in tests/test_eks_check.py. READ BOTH FIRST. sec1: enableNetworkPolicy appears in five places repo-wide (README.md:148, launcher/eks/lifecycle.py:150, deploy/eks/k8s/network-policy.yaml:23, deploy/eks/README.md:78 and :130) and in exactly one code site, deploy/eks/tofu/eks.tf:67 -- asserted zero times. tofu validate does not check add-on configuration_values payloads. q3: the selector guard reads the agent and frontend pod labels out of the committed recordings, and both recordings carry helm.sh/chart: opentelemetry-demo-0.41.0 (langfuse-configured.yaml:449,583; langfuse-not-configured.yaml:444,578,685), matching config.CHART_VERSION at launcher/eks/config.py:19. SCOPE BOUNDARY: this task READS deploy/eks/tofu/eks.tf and must not modify it -- see constraint 2. The prior cycle's single Tofu authorisation is spent. On sec1's optional second half: do NOT add the `aws eks describe-addon` call. It puts a live AWS round-trip in a deploy path for a claim the docstring already documents; fix the log's unconditional wording instead (ac4).",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "A committed test reads deploy/eks/tofu/eks.tf and asserts the vpc-cni add-on's configuration_values payload carries enableNetworkPolicy = \"true\". A regex over the file text is sufficient; no HCL parser. The failure message names deploy/eks/k8s/network-policy.yaml as the thing this setting makes real, so an editor who drops it learns what they switched off.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "A committed assertion pins both recordings to the chart pin: for each of langfuse-configured.yaml and langfuse-not-configured.yaml, f'opentelemetry-demo-{config.CHART_VERSION}' appears as a helm.sh/chart label. The failure message tells the editor to re-run the regeneration command in the fixture header, so a CHART_VERSION bump cannot leave the selector guard passing against a stale label set.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "launcher/eks/lifecycle.py:154 no longer reports a restriction unconditionally. Its log line names the add-on dependency (or is otherwise phrased so an operator on a cluster applied before enableNetworkPolicy went in is not told ingress was restricted when nothing is filtering). No new process call, no behavior change to what gets applied.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "Both new guards are themselves guarded by COMMITTED negative tests. Factor each assertion's decision into a helper taking text rather than reading the file inline -- one over the eks.tf text, one over a recording's chart labels -- and commit a test for each that feeds it the failing input (eks.tf text with the enableNetworkPolicy line absent; a recording whose helm.sh/chart label names a version other than config.CHART_VERSION) and asserts the guard reports the problem and names it. No mutation of a real repo file is committed, and the real files stay as they are.",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "deploy/eks/tofu/ is unmodified. Confirm with git diff --stat that no file under that directory appears in this task's diff.",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "The existing test_the_agent_network_policy_selects_the_pods_the_chart_actually_renders keeps its current assertions; the new guards sit beside it rather than replacing any part of it.",
+          "critical": false
+        }
+      ]
+    },
+    {
+      "id": "6",
+      "title": "Finish the argparse consolidation and index the mechanical guards",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The prior cycle's consolidation moved half the argparse internals and told readers they live in one place, and the cycle's four pinned inventories fail tests in files the editor is not touching with nothing to discover them from.",
+      "files": [
+        "tests/conftest.py",
+        "tests/test_docs.py"
+      ],
+      "depends_on": [
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "7"
+      ],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality findings q4 and q6 of improve-merge-cycle-cleanup. READ BOTH FIRST. q4: task 8 absorbed the _SubParsersAction lookup into conftest.subparsers_action (tests/conftest.py:316), but names_rather_than_runs at tests/test_docs.py:161 still walks parser._actions and reads option_strings/nargs itself -- so the consolidation's own justification ('an upgrade that moves them breaks one line rather than one per test module', conftest.py:319-320) is only partly delivered. q6 is severity info and its own remediation says it is not worth a code change on its own; it is here because this task is already the one editing conftest.py. RUNS AFTER TASKS 4 AND 5 BY DESIGN: task 4 widens the refusal guard's scope to scripts/ and task 5 adds a chart-pin guard, so an index written against the current tree would be stale at merge. Read what those tasks actually landed before writing the list -- this is the whole reason for the dependency. CODEX ROUND 1 (f2) CAUGHT A MISSED EDGE: task 7 also lands a mechanical inventory -- a committed equality guard between config.STATIC_MANIFESTS and the manifests the deploy path actually applies -- so an index written without it would have its critical ac4 false after consolidation. The dependency list is now every other task in the plan rather than the three I reasoned about individually, because the failure mode here is a MISSED edge and enumerating is cheaper than re-deriving: this task runs last, reads the merged tree, and indexes what is actually there.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Both argparse internals are reached from tests/conftest.py: a sibling helper beside subparsers_action wraps the parser._actions walk that names_rather_than_runs currently does inline, and tests/test_docs.py:194-196 calls it. After this, no test module outside conftest.py touches parser._actions, argparse._SubParsersAction, action.option_strings or action.nargs.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "names_rather_than_runs classifies exactly the same argument lists as prose-vs-runnable as it did before -- the three documented cases (--help, a bare command group, a trailing option that takes a value) are unchanged in behavior. The README parser gates in tests/test_docs.py still pass unmodified.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "A comment block at the top of tests/conftest.py lists each mechanical inventory in the suite and the edit that obliges it, so the obligation is discoverable before the failure. It must describe the tree AS MERGED, including the refusal guard's widened scope from task 4 and the chart pin from task 5 -- verify against the actual files rather than against the q6 finding's four-item list, which predates both.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The conftest.py docstring at :319 claims a scope that matches what the file now holds.",
+          "critical": false
+        },
+        {
+          "id": "ac6",
+          "text": "No fixture behavior changes. REDIRECT_KEYS, redirected, redirect_env, write_env, Recorder and subparsers_action keep their current names and semantics -- task 1 reads REDIRECT_KEYS by reference and every test module imports from here.",
+          "critical": true
+        }
+      ]
+    },
+    {
+      "id": "7",
+      "title": "Make the STATIC_MANIFESTS contract true, or stop claiming it",
+      "kind": "fix",
+      "mode": "dev",
+      "status": "pending",
+      "why": "config.STATIC_MANIFESTS is documented as every manifest applied unchanged and eks check iterates it, but the deploy path applies the two individually -- so a third entry would be parsed by the check and never applied to the cluster.",
+      "files": [
+        "tests/test_eks_deploy.py",
+        "launcher/eks/config.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "NOT a debt item -- this is a latent bug the prior cycle's quality reviewer surfaced OUTSIDE its findings, so it carries no finding id. VERIFIED THIS CYCLE: launcher/eks/config.py:84-86 documents STATIC_MANIFESTS as 'Every manifest under k8s_dir() that is applied unchanged'; launcher/eks/check.py:129 iterates the tuple; but the deploy path applies each one individually in two different functions -- restrict_agent_ingress at launcher/eks/lifecycle.py:154 and deploy_collector at :167. Add a third entry and eks check validates it while eks deploy never applies it. DO NOT collapse the two applies into a loop: they are deliberately ordered and separately post-processed (the policy goes in before the release exists, the collector is applied then waited on then tailed), and lifecycle.py is task 5's file this wave -- see constraint 6. The fix is a guard that the tuple and the applied set cannot silently disagree, plus honest wording. tests/test_eks_deploy.py already records the deploy's process sequence via fake_sh and the Recorder/Steps shape, which is where the applied set can be read.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "A committed test asserts that every config.STATIC_MANIFESTS entry is actually applied by a full eks deploy run, read from the recorded kubectl apply calls rather than from a hand-kept list. Adding a third entry to the tuple must fail this test until the deploy path applies it.",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The guard is itself guarded by a COMMITTED negative test: with config.STATIC_MANIFESTS monkeypatched to carry a third manifest name that the deploy path does not apply, the collection logic reports that third name as unapplied. Assert on the reported name, so the test fails if the guard goes silent rather than merely if it changes shape. No edit to the real tuple is committed.",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "launcher/eks/config.py:84-86's description of STATIC_MANIFESTS states the relationship that now actually holds between the tuple, eks check and the deploy path.",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "launcher/eks/lifecycle.py is NOT edited, and the two applies keep their current order and their separate post-processing. The deploy's observable behavior is unchanged: same processes, same sequence.",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "config.STATIC_MANIFESTS, config.COLLECTOR_MANIFEST and config.NETWORK_POLICY_MANIFEST keep their names and values -- tests/test_eks_check.py:485,505-508 read them and that file belongs to task 5 this wave.",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "The only edit to launcher/eks/config.py is the STATIC_MANIFESTS description at :84-86. CHART_VERSION at :19 is untouched -- task 5 pins the render recordings to its value this wave, and launcher/eks/check.py, k8s.py, lifecycle.py and three other test modules read it.",
+          "critical": true
+        }
+      ]
+    }
+  ],
+  "verdicts": [],
+  "deferrals": [],
+  "gap_notes": [],
+  "security_findings": [],
+  "quality_findings": [],
+  "plan_review_findings": [
+    {
+      "id": "pr1",
+      "reviewer_ref": "f1",
+      "status": "applied",
+      "disposition_reason": "APPLIED. Verified independently before accepting: the node child at tests/test_frontend_overlay.py:324 sits in emitted_env_script(values) at :300, which returns a (script, env) 2-tuple; env_script_source() at :276 is pure regex extraction over the patch text, returns a 3-tuple and spawns nothing. My ac4 named the wrong function AND the wrong return shape, so an implementer following it literally would have preserved a contract the task does not touch. ac4 rewritten to name emitted_env_script and its 2-tuple, and to say explicitly which function is NOT the one being changed.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:37-04:00",
+      "severity": "high",
+      "confidence": 1,
+      "category": "other",
+      "target": "tasks[2].acceptance_criteria[3]",
+      "title": "AC4 names the wrong function and return shape",
+      "description": "The node execution being changed is inside emitted_env_script(values), not env_script_source(). The named function returns a three-item source-extraction tuple, so an implementer or evaluator following AC4 literally will preserve or grade the wrong contract.",
+      "evidence": "Opened tests/test_frontend_overlay.py:276-297 and :300-326. env_script_source() returns (helper.group(1), template.group(1), bound), while emitted_env_script(values) invokes node and returns (payload[\"script\"], payload[\"env\"]).",
+      "recommendation": "Replace env_script_source() with emitted_env_script(values) in AC4 and describe the actual two-item return contract.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[2].acceptance_criteria[3]",
+        "proposed": "emitted_env_script(values) returns the same (script, env) pair it returned before -- the test's assertions about window.ENV JSON literals are unchanged in meaning, and check=True still surfaces a node failure as a failure rather than a confusing KeyError on stdout."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr2",
+      "reviewer_ref": "f2",
+      "status": "applied",
+      "disposition_reason": "APPLIED. The miss is mine and it is the same shape as the edge that cost a task last cycle: I reasoned individually about tasks 4 and 5 changing what the guards pin, and did not carry the reasoning to task 7, which lands a mechanical inventory of its own (the committed equality guard between config.STATIC_MANIFESTS and what the deploy path applies). Task 6's critical ac4 would have been false after consolidation. depends_on is now every other task in the plan rather than a hand-derived subset -- when the failure mode is a MISSED edge, enumerating is cheaper and safer than re-deriving.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:37-04:00",
+      "severity": "high",
+      "confidence": 0.96,
+      "category": "hidden-dependency",
+      "target": "tasks[5].depends_on",
+      "title": "The mechanical-inventory index depends on task 7 too",
+      "description": "Task 6 must document every mechanical inventory in the merged suite. Task 7 adds exactly such an inventory: a committed equality guard between STATIC_MANIFESTS and the manifests observed during deploy. Without a dependency, task 6 can be implemented and evaluated against a tree where that inventory does not exist, leaving its critical AC4 false after consolidation.",
+      "evidence": "Opened .claude/plans/improve-conditional-guards-sweep.json:274-277, :299-300, :326 and :337-340. Task 6 depends only on 4 and 5 and requires an index of each merged inventory; task 7 has no dependency and adds a committed STATIC_MANIFESTS inventory. tests/test_eks_deploy.py:300-357 is the recorded full-deploy sequence task 7 will inventory.",
+      "recommendation": "Make task 6 depend on task 7 so it indexes the final guard set.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[5].depends_on",
+        "proposed": "[\"4\", \"5\", \"7\"]"
+      },
+      "round": 1
+    },
+    {
+      "id": "pr3",
+      "reviewer_ref": "f3",
+      "status": "applied",
+      "disposition_reason": "APPLIED. ac3 required the implementer to 'state the command you ran and its output in the handoff', which is not observable in the diff or the verification result. The underlying condition IS gradeable from the merged tree, so ac3 now states the condition and drops the handoff clause, and the committed guard that pins it permanently moved to task 4 ac7 -- the task that already owns the repo's AST convention scans in tests/test_core.py. This is a net gain over what I planned: plan constraint 1 had zero machine enforcement before this round.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:37-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[2].acceptance_criteria[2]",
+      "title": "The evaluator cannot verify command output reported only in the handoff",
+      "description": "The repository-wide import condition is checkable, but the additional critical requirement to state a command and its output in an ephemeral handoff is not observable in the git diff or verification result.",
+      "evidence": "rg found the handoff requirement only at .claude/plans/improve-conditional-guards-sweep.json:145. The verification scripts contain no corresponding AST/import check; scripts/dev-setup.sh:74 ends by bootstrapping, and scripts/check-frontend.sh:26-30 only runs tsc and npm lint.",
+      "recommendation": "Keep the repository condition as the AC and move the handoff-reporting instruction to task notes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[2].acceptance_criteria[2]",
+        "proposed": "Repository-wide AST inspection confirms that `import subprocess` and `from subprocess import ...` appear in launcher/core.py and nowhere else under launcher/, scripts/, tests/ or concierge/, restoring the claim at launcher/core.py:3."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr4",
+      "reviewer_ref": "f4",
+      "status": "applied",
+      "disposition_reason": "APPLIED, and converted rather than demoted. Rather than drop the probe to non-critical, ac3 now requires the scan be factored into a module-level helper and pinned by a COMMITTED negative test over a synthetic tmp_path tree. A guard whose reach is only demonstrated in a session is precisely the defect class this sweep exists to close, so accepting a handoff-only demonstration here would have been self-refuting.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:37-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[3].acceptance_criteria[2]",
+      "title": "The refusal mutation probe leaves no gradeable artifact",
+      "description": "This critical AC explicitly forbids committing the probe and requires its result only in the handoff. Neither the normal green suite nor the resulting diff demonstrates the requested mutated failure.",
+      "evidence": "rg found the mutation/handoff requirement only at .claude/plans/improve-conditional-guards-sweep.json:189 and no probe under scripts/, tests/, or launcher/. The current committed scan is tests/test_core.py:36-70; verification runs it only against the unmutated tree.",
+      "recommendation": "Express the observable test structure as the AC and retain the temporary mutation instruction in notes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[3].acceptance_criteria[2]",
+        "proposed": "The committed AST scan records repository-relative paths for string-valued SystemExit raises under scripts/, and its exact-equality failure exposes the offending scripts/ filename while directing the editor to core.die."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr5",
+      "reviewer_ref": "f5",
+      "status": "applied",
+      "disposition_reason": "APPLIED, converted the same way as f4. Both of task 5's new guards -- the eks.tf add-on assertion and the chart-version pin -- must now factor their decision into a helper over text and commit a negative test feeding each the failing input. No mutation of a real repo file is committed and the real files stay as they are, so this closes the gap without touching the Tofu tree that constraint 2 protects.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:38-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[4].acceptance_criteria[4]",
+      "title": "Neither NetworkPolicy mutation is part of verification",
+      "description": "AC5 requires exact observed failures from two temporary mutations, but both mutations must be reverted and their results exist only in the handoff. The evaluator cannot decide this critical AC from the final diff and green verification.",
+      "evidence": "rg found this requirement only at .claude/plans/improve-conditional-guards-sweep.json:248. scripts/dev-setup.sh and scripts/check-frontend.sh contain no enableNetworkPolicy or CHART_VERSION mutation step. The immutable inputs are currently deploy/eks/tofu/eks.tf:55-68 and launcher/eks/config.py:19.",
+      "recommendation": "Remove AC5 as a grading criterion; AC2 and AC3 already require committed guards and explicit failure messages. Preserve the mutation procedure in task notes.",
+      "suggested_change": {
+        "op": "remove",
+        "target": "tasks[4].acceptance_criteria[4]",
+        "proposed": ""
+      },
+      "round": 1
+    },
+    {
+      "id": "pr6",
+      "reviewer_ref": "f6",
+      "status": "applied",
+      "disposition_reason": "APPLIED, converted the same way as f4 and f5. Task 7's ac3 now requires a committed negative test that monkeypatches config.STATIC_MANIFESTS to carry an unapplied third name and asserts the guard reports THAT NAME -- so the test fails if the guard goes silent, not merely if it changes shape.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T13:58:38-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[6].acceptance_criteria[2]",
+      "title": "The STATIC_MANIFESTS mutation result is handoff-only",
+      "description": "The critical AC requires a temporary tuple mutation and observed failure text, neither of which survives in the diff or runs in normal verification.",
+      "evidence": "rg found this requirement only at .claude/plans/improve-conditional-guards-sweep.json:344. The normal deploy recording at tests/test_eks_deploy.py:300-357 contains only the two current named applies, and no verification script mutates launcher/eks/config.py:86.",
+      "recommendation": "Require a diff-visible computation and diagnostic instead; leave the temporary mutation as execution guidance in notes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[6].acceptance_criteria[2]",
+        "proposed": "The committed test derives the applied manifest names from the recorded kubectl apply calls, computes which config.STATIC_MANIFESTS entries are missing, and asserts that set is empty with a failure message listing every unapplied manifest."
+      },
+      "round": 1
+    },
+    {
+      "id": "pr7",
+      "reviewer_ref": "f1",
+      "status": "applied",
+      "disposition_reason": "APPLIED with Codex's proposed ac6 essentially verbatim. This is my own rewritten constraint 8 applied unevenly: round 1 made me convert the probes in tasks 4, 5 and 7 into committed negative tests, and I did not carry the same rule back to task 1, whose ACs prescribed the scrub and the root override with nothing committed that fails when either disappears. Codex's evidence is exact -- the child programs at tests/test_smoke_queries.py:297-307,316 inspect trace and refusal behaviour only, never os.environ, core.ROOT or core.RUNTIME -- so both isolation limbs were unpinned.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T14:09:54-04:00",
+      "severity": "high",
+      "confidence": 0.98,
+      "category": "missing-task",
+      "target": "tasks[0].acceptance_criteria",
+      "title": "The child-isolation behavior has no regression test that proves it bites",
+      "description": "AC2 and AC3 prescribe the environment scrub and root redirection, but no AC requires a committed assertion of either behavior. The existing child tests exercise the smoke guards, so both isolation measures could later disappear while normal CI remains green on an unconfigured machine. That contradicts constraint 8.",
+      "evidence": "Opened tests/test_smoke_queries.py:267-320. The child programs at lines 297-307 and 316 inspect trace/refusal behavior only; none inspects os.environ, core.ROOT, or core.RUNTIME. The plan's repository copy at .claude/plans/improve-conditional-guards-sweep.json:26 requires every added guard to be exercised and pinned by a committed negative test.",
+      "recommendation": "Add a critical AC requiring a committed regression test that injects a sentinel credential into the parent and directly verifies both isolation limbs in the child.",
+      "suggested_change": {
+        "op": "add",
+        "target": "tasks[0].acceptance_criteria",
+        "proposed": "{\"id\":\"ac6\",\"text\":\"A COMMITTED regression test sets a sentinel API_KEY in the parent environment, invokes optimised() with a child program that reports os.environ, core.ROOT and core.RUNTIME, and asserts the sentinel is absent, core.ROOT is not the repository root, and core.RUNTIME is under the redirected root. The test must fail if either the env scrub or the root/runtime override is removed.\",\"critical\":true}"
+      },
+      "round": 2
+    },
+    {
+      "id": "pr8",
+      "reviewer_ref": "f2",
+      "status": "applied",
+      "disposition_reason": "APPLIED with Codex's proposed text. Same unevenness inside a single task: ac3 (which round 1 fixed) requires a tmp_path negative test for the refusal scan, while ac7 -- the guard I ADDED in round 1 to close f3 -- required only the real-tree assertion. A scan that detects neither import form would have passed over the current tree once task 3 removed the one violation. The proposed text also covers both syntaxes explicitly, which my version did not.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T14:09:55-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "missing-task",
+      "target": "tasks[3].acceptance_criteria[6]",
+      "title": "The new subprocess-import guard lacks its required negative test",
+      "description": "AC7 adds a real-tree AST assertion but does not require a synthetic violating input. An incorrectly implemented scan can therefore pass over the current tree without proving that either prohibited import form is detected, directly violating constraint 8.",
+      "evidence": "Opened .claude/plans/improve-conditional-guards-sweep.json:211: task 4 AC7 requires only the merged-tree assertion. By contrast, task 4 AC3 explicitly requires a tmp_path negative test for the refusal scan. Current tests/test_core.py:36-70 contains only the refusal scan, and `rg` confirmed the present subprocess imports are launcher/core.py:9 and tests/test_frontend_overlay.py:13.",
+      "recommendation": "Extend AC7 to require a factored scanner and a committed synthetic test covering both import syntaxes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[3].acceptance_criteria[6]",
+        "proposed": "A committed guard pins constraint 1 -- the claim at launcher/core.py:3 that core.py is the only module importing subprocess. Factor the AST scan into a module-level helper, then assert over launcher/, scripts/, tests/ and concierge/ that `import subprocess` and `from subprocess import ...` appear in launcher/core.py alone, with a failure message naming every offending file. Commit a negative test over a tmp_path tree containing one synthetic file with `import subprocess` and another with `from subprocess import run`, and assert that both files are reported. This task depends on task 3 because the real-tree assertion can only become green after that task removes the existing violation."
+      },
+      "round": 2
+    },
+    {
+      "id": "pr9",
+      "reviewer_ref": "f3",
+      "status": "applied",
+      "disposition_reason": "APPLIED, and it uncovered more than it claimed. Codex is right that d21 was missing from the out-of-scope list; auditing the ledger to fix that found a BOOKKEEPING DEFECT IN THE PRIOR CYCLE - feat-merge-ch-otel-demo.json still marked 19 deferrals carried when 15 had actually been resolved by improve-merge-cycle-cleanup, because that cycle closed its ledger without flipping the entries its own tasks had closed. Left alone, the next intake would have resurfaced 15 finished items and buried the 4 real ones. All 15 were verified against the code (not against task titles) and flipped to converted with their resolving task named, and feat-otel-demo-eks d13 was dropped as moot since the three lifecycle scripts it names no longer exist. d21 itself stays carried: info severity, not an attacker path, and binding the pid to the tunnel this CLI started is more than mechanical.",
+      "dispositioned_at": null,
+      "supersedes": null,
+      "discovered_at": "2026-09-15T14:09:55-04:00",
+      "severity": "low",
+      "confidence": 0.98,
+      "category": "ignores-deferral",
+      "target": "context",
+      "title": "The claimed out-of-scope list omits carried deferral d21",
+      "description": "The context says three prior-cycle items remain deliberately out of scope, but d21 is still carried and its underlying tunnel behavior remains present. The sweep need not adopt this info-level item, but its closed-ledger narrative should acknowledge it rather than silently dropping it.",
+      "evidence": "Opened .claude/plans/feat-merge-ch-otel-demo.json:591-604, where d21 remains `status: carried` with no resolution task. Opened launcher/eks/tunnel.py:240-262: stop() still accepts the pidfile integer and checks only liveness and process-group leadership before signaling. The current plan's context at .claude/plans/improve-conditional-guards-sweep.json:17 names only d2, d3 and d16.",
+      "recommendation": "Add d21 to the explicitly retained out-of-scope list without creating a task for it.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "context",
+        "proposed": "Replace “Three prior-cycle items remain deliberately out of scope: d3 ..., d2 ... and d16.” with “Four carried prior-plan items remain deliberately out of scope: d3 (the collector's CREATE DATABASE grant, which needs live ClickHouse Cloud validation), d2 (the profiles pipeline exporting to a disabled firepit), d16, and info-level d21 (stale tunnel pidfile reuse).”"
+      },
+      "round": 2
+    }
+  ],
+  "plan_review_state": {
+    "rounds": [
+      {
+        "round": 1,
+        "started_at": "2026-09-15T13:49:09-04:00",
+        "duration_s": 415,
+        "model_resolved": "gpt-5.6-sol",
+        "verdict": "revise",
+        "findings": 6,
+        "applied": 6,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-15T13:58:47-04:00"
+      },
+      {
+        "round": 2,
+        "started_at": "2026-09-15T14:05:00-04:00",
+        "duration_s": 480,
+        "model_resolved": "gpt-5.6-sol",
+        "verdict": "revise",
+        "findings": 3,
+        "applied": 3,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-15T14:09:56-04:00"
+      },
+      {
+        "round": 3,
+        "started_at": "2026-09-15T14:22:00-04:00",
+        "duration_s": 319,
+        "model_resolved": "gpt-5.6-sol",
+        "verdict": "approve",
+        "findings": 0,
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-15T14:16:25-04:00"
+      }
+    ],
+    "threshold": "medium",
+    "max_rounds": 3,
+    "round_timeout_s": 900,
+    "model_requested": "gpt-5.6-sol",
+    "effort": "high",
+    "enabled_by": "auto",
+    "stop_reason": "approve",
+    "summary": "3 rounds, 1214s, 9 findings, all 9 applied, 0 deferred, 0 rejected. Round 3 approved with zero findings. Round 2's convergence check returned budget_exhausted rather than a verdict-based stop; the budget was extended deliberately for one final round because both prior rounds had found the same defect class in new places and three substantive ACs had changed since Codex last read the plan. Round 3 confirmed rather than added, which is the result that justifies the extension.",
+    "last_run_at": "2026-09-15T14:16:35-04:00"
+  },
+  "managed_run": {
+    "started_at": "2026-09-15T14:26:52-04:00",
+    "go_confirmed_at": "2026-09-15T14:32:21-04:00",
+    "paused_at": null,
+    "pause_reason": "",
+    "resumes": [],
+    "completed_at": null,
+    "auto_decisions": [
+      {
+        "id": "ad1",
+        "timestamp": "2026-09-15T14:32:23-04:00",
+        "phase": "4.5",
+        "decision": "wave layout accepted as computed: wave 1 = tasks 1,2,3,5,7 (five tasks, one over the auto cap of 4)",
+        "reason": "the five predicted file sets are fully disjoint and all five cross-task symbol edges are pinned from both sides by ACs and constraints; the cap of 4 is an orchestration-overhead bound, not a correctness one. User confirmed the layout at the go gate."
+      },
+      {
+        "id": "ad2",
+        "timestamp": "2026-09-15T14:32:23-04:00",
+        "phase": "pre-flight",
+        "decision": "commit signing left as the repo has it (commit.gpgsign=false, gitsign x509 configured but off); plan.signing_disabled stays true so worktrees and merge commits pass --no-sign consistently",
+        "reason": "probed at plan time; the repo does not enforce signing, so there is no auth prompt to avoid and no posture to change. Stated in the go-gate echo."
+      },
+      {
+        "id": "ad3",
+        "timestamp": "2026-09-15T14:32:24-04:00",
+        "phase": "pre-flight",
+        "decision": "committed the dirty harness bookkeeping (_index.json, the two source plan JSONs the ledger repair touched, this plan JSON) as one chore commit rather than pausing on a dirty tree",
+        "reason": "the dirty paths are all under .claude/plans/ and are the harness's own state, which is dirty by construction whenever a plan is authored; no source file was uncommitted. Pausing here would make managed mode unusable. Stated in the go-gate echo and the user confirmed."
+      },
+      {
+        "id": "ad4",
+        "timestamp": "2026-09-15T14:32:26-04:00",
+        "phase": "2",
+        "decision": "triage order accepted as computed; no deferred-items pickup ran",
+        "reason": "single work item decomposed at plan time; the four genuinely carried deferrals (d2, d3, d16, d21) are named in plan.context as deliberately out of scope for this sweep."
+      }
+    ]
+  },
+  "wave_execution": null,
+  "log": [
+    {
+      "seq": 1,
+      "note": "Phase 4.5 conflict analysis, all four classes, run against 629f6cb. LEXICAL: 9 predicted files across the 6 wave-1 tasks, all unique -- no file is claimed twice anywhere in the plan. SYMBOLIC (the class I missed last cycle, which blocked task 3 there): grepped 16 cross-task identifiers. Five real edges found and all are pinned from BOTH sides rather than left to luck -- (a) config.STATIC_MANIFESTS is edited by task 7 and read by task 5's tests/test_eks_check.py:485,505-508, pinned by task 7 ac6 and constraint 7; (b) config.CHART_VERSION is DEFINED in task 7's file at :19 and read by task 5's new chart pin, pinned by task 7's new ac7 confining its config.py edit to :84-86; (c) core.die is edited by task 4 and called by 15 launcher modules plus scripts/smoke.py, pinned by task 4's new ac6 confining its core.py edit to the docstring; (d) launcher/core.py's module docstring is the claim task 3 restores, so ac6 also forbids task 4 from editing it -- the claim is restored by fixing the violation, not by narrowing the text; (e) conftest.REDIRECT_KEYS is newly read by task 1 and its file is edited by task 6, pinned by task 6 ac6 and separated by wave. SHARED INFRASTRUCTURE: none -- no task touches deploy/, docker/, .env.example or a CI file, and constraint 2 forbids the Tofu tree outright. TEST INTERFERENCE: one candidate edge checked and CLEARED -- task 5 rewords the restrict_agent_ingress log line and task 7's guard runs a full eks deploy in tests/test_eks_deploy.py, so an exact-output assertion there would break at merge; verified nothing in tests/ or launcher/ asserts that log text, and test_eks_deploy.py's capsys assertions at :544-560 are substring-based on tunnel URLs. WAVE LAYOUT: task 6 is alone in wave 2 and depends on 4 and 5 for a SEMANTIC reason, not a lexical one -- its q6 deliverable is an index of the suite's mechanical guards, and tasks 4 and 5 both change what those guards pin (widened refusal scope, new chart pin), so an index written against the current tree would be stale the moment wave 1 merges.",
+      "timestamp": "2026-09-15T13:14:00-04:00"
+    },
+    {
+      "timestamp": "2026-09-15T14:10:20-04:00",
+      "note": "DEFERRAL LEDGER REPAIR, done while authoring this plan and prompted by Codex round-2 f3. The prior cycle closed its ledger WITHOUT flipping the deferrals its own tasks had resolved: feat-merge-ch-otel-demo.json still carried 19 entries when 15 were done, and feat-otel-demo-eks.json carried d13 whose subject files no longer exist. Left alone this would have inverted the next intake - 15 finished items resurfacing while the 4 real ones sat in the same undifferentiated list. Each of the 15 was verified AGAINST THE CODE rather than against a matching task title before flipping (d1: stack.py:100-102 now calls langfuse_auth_header; d20: require_trace_id refuses via core.die and main refuses under -O; d25: the AST guard pins core.py as the only message site; d27: values.py's redundant gate is gone and image_overrides names require_published as the gate; d28: cluster_reachable only in infra.py and ASSISTANT_PATH only in collector.py; d29: no user-facing hint says scripts/demo.py, the six remaining occurrences are legitimate), and each flip names its resolving task and plan. d13 was dropped as moot. Four entries genuinely remain carried and all four are named in this plan's context as deliberately out of scope: d2, d3, d16 and info-level d21. NOTE FOR THE NEXT CYCLE: this is a harness-level lesson, not a repo one - principle 13 says nothing is dispositioned by forgetting, and a sweep plan's CLOSED ledger stops the sweep emitting NEW deferrals but does nothing to close the SOURCE plan's entries that the sweep's tasks resolved. That flip is the orchestrator's job at sweep close-out and I did not do it last cycle."
+    },
+    {
+      "timestamp": "2026-09-15T14:10:21-04:00",
+      "note": "CODEX PLAN REVIEW, 2 rounds, 9 findings, ALL 9 APPLIED, 0 deferred, 0 rejected (895s total; round 1 415s, round 2 480s, both at --timeout 900 after last cycle's 482s overrun of the 480s default). Round 1 found six: one AC naming the wrong function and return shape (pr1 - ac4 named env_script_source, which does pure regex extraction and spawns nothing, instead of emitted_env_script, which holds the node child), one missed dependency edge (pr2 - task 7 lands a mechanical inventory too, so task 6's index would have been false after consolidation), and FOUR HANDOFF-ONLY CRITICAL ACs (pr3-pr6). That last group is the same defect I made four times in the prior cycle, except worse: I wrote a constraint forbidding it and then made the probes critical ACs anyway. Resolved by CONVERTING rather than demoting - every probe became a committed negative test - which is a net gain, since plan constraint 1 (subprocess only in launcher/core.py) had zero machine enforcement before this review and now has a committed guard in task 4 ac7. Round 2 found the SAME RULE APPLIED UNEVENLY TWICE MORE: task 1's env scrub and root override had nothing committed that fails when they disappear (pr7), and task 4's ac7 - the guard I added in round 1 - required only a real-tree assertion with no synthetic negative (pr8). Plus pr9 on an incomplete out-of-scope list, which led to the ledger repair logged above. The pattern across both rounds is one thing: I state a rule, apply it where I am looking, and miss the places I am not. Both rounds paid for themselves."
+    }
+  ],
+  "parallel_plan": {
+    "computed_at": "2026-09-15T13:10:00-04:00",
+    "base_branch": "main",
+    "cycle_base_sha": "629f6cb",
+    "post_merge_build": [],
+    "waves": [
+      {
+        "id": 1,
+        "tasks": [
+          "1",
+          "2",
+          "3",
+          "5",
+          "7"
+        ],
+        "state": null
+      },
+      {
+        "id": 2,
+        "tasks": [
+          "4"
+        ],
+        "state": null
+      },
+      {
+        "id": 3,
+        "tasks": [
+          "6"
+        ],
+        "state": null
+      }
+    ],
+    "predicted_files": {
+      "1": [
+        "tests/test_smoke_queries.py"
+      ],
+      "2": [
+        "tests/test_cli.py"
+      ],
+      "3": [
+        "tests/test_frontend_overlay.py"
+      ],
+      "4": [
+        "tests/test_core.py",
+        "launcher/core.py"
+      ],
+      "5": [
+        "tests/test_eks_check.py",
+        "launcher/eks/lifecycle.py"
+      ],
+      "6": [
+        "tests/conftest.py",
+        "tests/test_docs.py"
+      ],
+      "7": [
+        "tests/test_eks_deploy.py",
+        "launcher/eks/config.py"
+      ]
+    }
+  }
+}

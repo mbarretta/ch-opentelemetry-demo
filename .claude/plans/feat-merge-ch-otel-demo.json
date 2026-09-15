@@ -276,12 +276,12 @@
       "reason_code": "contended",
       "location": "launcher/stack.py:52",
       "note": "environment() still assembles \"Basic \" + b64(pk:sk) inline instead of calling the new eks.config.langfuse_auth_header(). launcher/stack.py is reserved by wave-mate task 4, so the two definitions are pinned equal by tests/test_eks_config.py::test_the_auth_header_is_the_same_one_the_compose_stack_sends and the call can be redirected in one line once task 4 merges.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T13:49:35-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "2",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 2. Verified in code before flipping: launcher/stack.py:100-102 now imports and calls eks.config.langfuse_auth_header instead of assembling Basic + b64 inline."
     },
     {
       "id": "d2",
@@ -404,12 +404,12 @@
       "reason_code": "large",
       "location": "tests/test_cli.py (fake_sh no-process guard)",
       "note": "Two task-def-d8 EVALUATOR robustness nits on the new ac4 guard, neither an unmet AC because fake_sh prevents the live call either way. (1) The guard only fires when AWS_PROFILE is configured - on bare CI every implemented handler dies at the env precondition first, so fake_sh.lines() stays empty and a real regression would not be caught. (2) The assertion sits at the end of the test body, so an earlier failure in the same test masks it. Tightening it means restructuring the test to assert per-subcommand rather than once per body.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T14:45:28-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "7",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 7. Both nits closed: the fake_sh no-process assertion now fires per invocation rather than once at end of body, and the guard is exercised with AWS_PROFILE both set and unset."
     },
     {
       "id": "d10",
@@ -500,12 +500,12 @@
       "reason_code": "large",
       "location": "tests/test_docs.py (bare command spans)",
       "note": "The new mechanical doc gate only checks README spans containing 'demo.py', so roughly 24 bare command spans (eks up, publish --service frontend, eks tunnel stop, ...) sit outside it. All 24 were verified against the real parser by hand for this cycle, but nothing stops them drifting later. Widening the gate means teaching the extractor to recognise bare subcommand spans without false-positiving on prose.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T16:35:14-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "7",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 7. The doc gate's extractor now covers the READMEs bare command spans, not only spans containing demo.py; roughly 24 previously-ungated spans are inside it."
     },
     {
       "id": "d16",
@@ -548,12 +548,12 @@
       "reason_code": "large",
       "location": "frontend/patches/0006-document-assistant-env.patch (dangerouslySetInnerHTML)",
       "note": "Pre-existing and dismissed as a finding by the scope-B auditor, kept as hardening advice: patch 0006 extends upstream's UNESCAPED interpolation of env values into a dangerouslySetInnerHTML inline script (_document.tsx:59). The two values this cycle adds are boolean- and URL-shaped and operator-set, so there is no live injection path. But if that block is touched again the right hardening is JSON.stringify(value) per key instead of single-quote wrapping - and note the PRE-EXISTING ASSISTANT_DEMO_DETAILS free-prose key is the one that will break on an apostrophe.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:25:50-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "6",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 6, which hardened the env interpolation in the regenerated patch set rather than leaving it as advice."
     },
     {
       "id": "d19",
@@ -564,12 +564,12 @@
       "reason_code": "large",
       "location": "@hyperdx/browser@0.25.1 rrweb input-masking defaults",
       "note": "UNRESOLVED QUESTION that determines how bad sec3 actually is, and neither auditor could settle it offline because the SDK is not installed in this checkout: is rrweb's input masking ON by default in @hyperdx/browser 0.25.1? If it is OFF, typed form fields - the storefront's checkout form among them - are recorded in the clear alongside the captured request/response bodies, which would raise sec3's severity. Settle it by staging the frontend (demo.py stage, which runs npm ci) and reading the session-recorder defaults in the installed package, then either confirm masking or add explicit maskAllInputs to patch 0009.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:25:51-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "RESOLVED by the orchestrator, reading the installed SDK directly because the implementer and evaluator reached opposite conclusions. The implementer was right and the evaluator read stale README prose. @hyperdx/browser 0.25.1 build/index.js has TWO maskAllInputs destructuring sites and that is what caused the disagreement: 'maskAllInputs:p=!0' sits in HyperDX's own init() options (alongside consoleCapture, disableReplay, service) so the SDK default is TRUE, while 'maskAllInputs:l=!1' is rrweb's record() destructuring (alongside rr-block, rr-mask, slimDOM, dataURLOptions) which HyperDX overrides. maskAllText:h=!1 in the init destructuring means text masking is OFF. The package README lines 40-43 documents BOTH as default false, which contradicts its own shipped code. CONSEQUENCE: typed input fields are masked, so checkout keystrokes are NOT recorded in the clear - the better branch, and sec3's severity does not rise. Rendered DOM text is still recorded, and advancedNetworkCapture ships request/response bodies unmasked regardless, which is the dominant exposure and unchanged. RESIDUAL worth acting on: patch 0009 sets neither flag, so it depends on an UNDOCUMENTED default that the package's own README contradicts - an SDK minor version could flip it silently. Setting maskAllInputs explicitly in patch 0009 would pin the safe behavior instead of inheriting it."
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "6",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 6. The open question was settled by reading the compiled SDK directly (maskAllInputs defaults true in HyperDX init, false in rrweb record) and patch 0009 now sets maskAllInputs explicitly rather than relying on either default."
     },
     {
       "id": "d20",
@@ -580,12 +580,12 @@
       "reason_code": "contract",
       "location": "scripts/smoke.py:304,339",
       "note": "SQL injection guard is an 'assert', which python -O compiles out. The trace id crosses a trust boundary (read from the storefront's JSON response inside the cluster), so with asserts disabled a misbehaving frontend pod could inject SQL executed as the collector's write user - the same user create-user.sql grants CREATE DATABASE ON otel.* (d3), so the two findings compound. Carried under managed policy (severity low is below the auto-remediate bar of medium), NOT because the fix is hard: it is one line, mirroring the unconditional raise that launcher/eks/ops.py:113-125 already uses for the database name.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:26:12-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:18-04:00",
+      "resolution_task_id": "4",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 4. Verified in code before flipping: scripts/smoke.py require_trace_id now refuses unconditionally via core.die and main() refuses to run under -O at all, so the guard no longer compiles out."
     },
     {
       "id": "d21",
@@ -612,12 +612,12 @@
       "reason_code": "contract",
       "location": "deploy/eks/k8s/demo-values.yaml:124-136",
       "note": "The agent's /message endpoint has no authentication and no NetworkPolicy while now holding a live model API_KEY, so anything in the namespace - or on the operator's laptop via the port-forward - can spend the credential. Defense-in-depth: the laptop Compose target has the same posture, so this ports an accepted risk to a second target rather than creating a new one. Carried under managed policy (severity low). Fix is a NetworkPolicy under deploy/eks/k8s/ restricting ingress to agent:8010 to the frontend pod's label selector.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:26:12-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:19-04:00",
+      "resolution_task_id": "5",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 5, which added deploy/eks/k8s/network-policy.yaml limiting ingress to agent:8010 to the frontend pod - the exact fix this entry named."
     },
     {
       "id": "d23",
@@ -628,12 +628,12 @@
       "reason_code": "contract",
       "location": "frontend/patches/0009-frontend-tracer-session-replay.patch:31",
       "note": "The patch's own comment still reads 'derived from SESSION_REPLAY by the launcher on Compose, set on the deployment on EKS'. After sec-3 it is derived by the launcher on BOTH targets, so the line is now incomplete. Both the implementer and the evaluator independently flagged it and both correctly declined to hand-edit: critical ac5 pins that file and the evaluator diffs it, and the repo rule at frontend/patches/README.md:11-27 is regenerate-from-'demo.py stage', never hand-edit. Fix it on the next legitimate regeneration of the patch set.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:47:07-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:19-04:00",
+      "resolution_task_id": "6",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 6 on a legitimate regeneration of the patch set, which is the disposition this entry asked for."
     },
     {
       "id": "d24",
@@ -644,12 +644,12 @@
       "reason_code": "contract",
       "location": "tests/renders/langfuse-configured.yaml and langfuse-not-configured.yaml",
       "note": "STALE COMMITTED FIXTURES, caused by this cycle's own sec-3 remediation. The recordings' own header says regenerate after a change to either values document; sec-3 changed both and did not. The suite stays green only because check.environment_problems compares env-var NAMES, never values or order, and because the derived value coincidentally equals the hardcoded 'true' it replaced. 'demo.py eks check' is outside pytest, so these recordings are the only stand-in for the real render and the baseline has drifted silently - the next values change is diffed against a wrong reference. Fix: regenerate both with the command in their header and extend environment_problems to compare the generated half's VALUES too, which is what would have caught it. Carried under managed policy (medium is below the 7.6 auto-remediate bar of high), not because it is unimportant.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:22-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:19-04:00",
+      "resolution_task_id": "1",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 1, which regenerated both recordings AND extended the generated-values comparison to compare values rather than only names - the half that would have caught the staleness."
     },
     {
       "id": "d25",
@@ -660,12 +660,12 @@
       "reason_code": "large",
       "location": "launcher/ error-handling convention (core.die vs bare raise SystemExit)",
       "note": "One CLI, two user-visible refusal shapes: 'demo.py build' fails with 'Missing local image(s): ...' while 'demo.py eks deploy' fails with 'error: no published image for ...'. Task 1 introduced core.die but left its own ported modules raising SystemExit bare; tasks 5-14 then used core.die across ~40 sites. launcher/stack.py proves it is cross-task rather than one author's taste - task 1 wrote lines 255/272 bare while tasks 4 and 10 wrote lines 28/193-197 through core.die, in the same file. 11 message sites to convert plus ~8 test assertions; leave raise SystemExit(<int>) alone, those are exit codes.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:22-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:19-04:00",
+      "resolution_task_id": "2",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 2. Verified in code before flipping: the AST guard at tests/test_core.py now asserts the only message-bearing SystemExit site in launcher/ is launcher/core.py, so the convention is machine-enforced rather than reviewed."
     },
     {
       "id": "d26",
@@ -676,12 +676,12 @@
       "reason_code": "large",
       "location": "tests/conftest.py vs six per-file 'redirected' fixtures",
       "note": "Six test files from six implementers each define their own 'redirected' fixture doing the same three things, and two more inline it - while tests/conftest.py already exists as the shared home and every one of those files already uses its fake_sh. They have ALREADY DRIFTED in the way that bites: the environment-scrubbing differs per file, so which test files are safe to run on a developer machine with CLICKHOUSE_* or AGENT_MODE exported now varies. Also an identical 14-line stub/patch recorder body duplicated as Steps and Stubs, where Steps silently dropped callable-result support. Fix is a parameterised conftest fixture plus one shared recorder class. The reviewer deliberately did NOT ask for the Steps rename - task 12 rejected that with a stated reason and the name is not the duplication.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:22-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:19-04:00",
+      "resolution_task_id": "8",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 8, which consolidated the six per-file redirected fixtures and the duplicated recorder into tests/conftest.py with a single 21-key scrub union."
     },
     {
       "id": "d27",
@@ -692,12 +692,12 @@
       "reason_code": "large",
       "location": "launcher/eks/values.py:137-147",
       "note": "Redundant unreachable published-completeness gate: lifecycle.deploy calls the stronger images.require_published() before values.eks_values(), so values.py's own narrower check (it omits the digest field and the stale-tag case) can never fire and its differently-worded refusal can never be seen. Supersedes deferral d11, which described the same code as generic duplication; the reviewer's framing is more precise - it is a redundant gate, not a duplicated helper, and the fix is deletion plus a docstring line rather than unification.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:22-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:20-04:00",
+      "resolution_task_id": "3",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 3. Verified in code before flipping: launcher/eks/values.py no longer holds its own published-completeness gate and image_overrides documents images.require_published() as the gate."
     },
     {
       "id": "d28",
@@ -708,12 +708,12 @@
       "reason_code": "large",
       "location": "check.py:144 vs infra.py:319; ops.py:52 vs collector.py:9",
       "note": "Two same-name-different-meaning pairs, each in a module that imports the other: cluster_reachable is an AWS describe-cluster probe in infra.py and a kubectl version probe in check.py (which imports infra and calls infra.tofu()), with different signatures both live in that file; ASSISTANT_PATH is a prefix in collector.py and a full route in ops.py, which imports collector and shadows the name. Supersedes d10, which caught only the second pair - the reviewer found the first independently. Fix: rename check.py's to api_server_answers() and ops.py's to ASSISTANT_MESSAGE_PATH, leaving the canonical holders alone.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:22-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:20-04:00",
+      "resolution_task_id": "1",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved across improve-merge-cycle-cleanup tasks 1 and 10. Verified in code before flipping: cluster_reachable now exists only in launcher/eks/infra.py and ASSISTANT_PATH only in launcher/collector.py - both shadowing pairs are gone."
     },
     {
       "id": "d29",
@@ -724,12 +724,12 @@
       "reason_code": "large",
       "location": "launcher/images.py:448,458, upstream.py:10, cli.py:202",
       "note": "Four task-1 sites say 'scripts/demo.py <cmd>' where the cycle's ~40 other sites say 'demo.py <cmd>'; images.py carries both 60 lines apart. Supersedes deferral d12 AND CORRECTS IT: d12 recorded this as a repo-wide rename blocked by competing test pins, but the reviewer found it is four strings and two test assertions, and that neither spelling is directly runnable anyway (README documents '.venv/bin/python scripts/demo.py'), so the reader is not actually misled. Do it only if a remediation wave is running anyway.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T17:58:23-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": ""
+      "resolved_at": "2026-09-15T14:09:20-04:00",
+      "resolution_task_id": "2",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 2 (the hint spelling). Verified in code before flipping: no user-facing hint says scripts/demo.py any more; the six remaining occurrences are a correct shim description, two real path constructions and their assertions, and two shell invocations of the actual file."
     },
     {
       "id": "d30",
@@ -740,12 +740,12 @@
       "reason_code": "contract",
       "location": ".claude/plans/refactored-marinating-rain.md:54",
       "note": "The design document still lists scheduler_get/set_state and purge_state_bucket as launcher/eks/aws.py's surface, which qual-1 made false. The implementer REJECTED fixing it with a stated reason the orchestrator agrees with: that file is this plan's own design artifact recording decisions taken with the user - a dated record, not live documentation - and rewriting it would falsify the record. The live doc surface is the module docstring, which qual-1 did fix. Recorded so the staleness is known rather than discovered.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-14T18:10:20-04:00",
-      "resolved_at": null,
-      "resolution_task_id": "",
-      "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "resolved_at": "2026-09-15T14:09:20-04:00",
+      "resolution_task_id": "9",
+      "resolved_by_plan": "improve-merge-cycle-cleanup",
+      "reason": "Resolved by improve-merge-cycle-cleanup task 9 in the form this entry itself endorsed: a dated header marking the surface superseded, leaving the body of the design record unfalsified."
     }
   ],
   "security_findings": [
