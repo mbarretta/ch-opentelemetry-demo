@@ -3,7 +3,7 @@
   "title": "Close the four scope gaps the sweep's own gates found",
   "kind": "fix",
   "mode": "dev",
-  "status": "planned",
+  "status": "complete",
   "autonomy": "managed",
   "parallelism": "auto",
   "created": "2026-09-15T16:05:00-04:00",
