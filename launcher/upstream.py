@@ -7,11 +7,11 @@ from . import core
 
 def verify_upstream():
     if not core.UPSTREAM.exists():
-        raise SystemExit(f"Missing {core.UPSTREAM}; run scripts/demo.py bootstrap first.")
+        core.die(f"missing {core.UPSTREAM}: run demo.py bootstrap first")
     actual = core.capture("git", "-C", core.UPSTREAM, "rev-parse", "HEAD").stdout.strip()
     if actual != core.COMMIT:
-        raise SystemExit(
-            f"Expected upstream {core.COMMIT}, found {actual}; restore the pinned checkout."
+        core.die(
+            f"expected upstream {core.COMMIT}, found {actual}: restore the pinned checkout"
         )
 
 
@@ -56,8 +56,8 @@ def patch_tools(source):
     """Apply TOOLS_PATCH to the released src/shared/tools.py text; fail on any drift."""
     for old, new in TOOLS_PATCH:
         if source.count(old) != 1:
-            raise SystemExit(
-                f"Upstream tools.py changed around {old.splitlines()[0]!r}; review TOOLS_PATCH."
+            core.die(
+                f"upstream tools.py changed around {old.splitlines()[0]!r}: review TOOLS_PATCH"
             )
         source = source.replace(old, new)
     return source
@@ -83,7 +83,7 @@ def bootstrap():
     verify_upstream()
     changed = core.capture("git", "-C", core.UPSTREAM, "status", "--porcelain").stdout
     if changed:
-        raise SystemExit("Upstream checkout has changes. Keep overlay changes in the project root.")
+        core.die("upstream checkout has changes: keep overlay changes in the project root")
     core.RUNTIME.mkdir(exist_ok=True)
     (core.RUNTIME / "telemetry").mkdir(exist_ok=True)
     if not (core.RUNTIME / "flagd").exists():

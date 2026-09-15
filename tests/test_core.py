@@ -33,6 +33,43 @@ def test_die_reports_on_stderr_and_exits_non_zero():
     assert "no cluster" not in failed.stdout
 
 
+def test_every_launcher_refusal_goes_through_die_and_int_exits_are_left_alone():
+    """The refusal convention core.die's docstring states, enforced over launcher/.
+
+    A second spelling of failure is the thing being prevented, and it comes back one
+    `raise SystemExit("...")` at a time, so the rule is a test rather than a review habit.
+    `raise SystemExit(<int>)` is deliberately still allowed: that form sets an exit CODE and
+    prints nothing, which is how `eks tunnel status` answers the shell.
+    """
+    import ast
+
+    # Keyed by file rather than by line, so that editing any of these modules for an
+    # unrelated reason cannot fail this test with an accusation about refusal style.
+    messages, codes = [], []
+    for source in sorted((core.ROOT / "launcher").rglob("*.py")):
+        tree = ast.parse(source.read_text())
+        for node in ast.walk(tree):
+            raised = node.exc if isinstance(node, ast.Raise) else None
+            if not isinstance(raised, ast.Call) or getattr(raised.func, "id", None) != "SystemExit":
+                continue
+            where = str(source.relative_to(core.ROOT))
+            texts = [
+                child
+                for arg in raised.args
+                for child in ast.walk(arg)
+                if isinstance(child, ast.JoinedStr)
+                or (isinstance(child, ast.Constant) and isinstance(child.value, str))
+            ]
+            (messages if texts else codes).append(where)
+
+    assert messages == ["launcher/core.py"], (
+        "an operator-facing refusal outside core.die: use core.die(...) instead"
+    )
+    assert sorted(codes) == ["launcher/eks/tunnel.py"] * 2, (
+        "the tunnel's integer exits are exit codes, not messages, and must stay as they are"
+    )
+
+
 def test_need_names_every_missing_command_in_one_message():
     core.need("git", "python3")
     with pytest.raises(SystemExit) as failure:

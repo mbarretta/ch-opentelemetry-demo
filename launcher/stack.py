@@ -1,6 +1,5 @@
 """The Compose stack: its environment, the generated configuration, and the demo scenarios."""
 
-import base64
 import copy
 import json
 import os
@@ -94,10 +93,15 @@ def environment():
             built[service]["image"] if service in built else images.image_name(service, "unbuilt")
         )
     if values.get("LANGFUSE_PUBLIC_KEY") and values.get("LANGFUSE_SECRET_KEY"):
-        encoded = base64.b64encode(
-            f"{values['LANGFUSE_PUBLIC_KEY']}:{values['LANGFUSE_SECRET_KEY']}".encode()
-        ).decode()
-        values["LANGFUSE_AUTH_HEADER"] = "Basic " + encoded
+        # One definition of the credential for both targets: a second one here would let the
+        # laptop and the cluster encode the same key pair differently. Imported inside the
+        # function because `launcher.eks` imports this module back (eks.flags), so a
+        # module-level import would be a cycle.
+        from .eks.config import langfuse_auth_header
+
+        values["LANGFUSE_AUTH_HEADER"] = langfuse_auth_header(
+            values["LANGFUSE_PUBLIC_KEY"], values["LANGFUSE_SECRET_KEY"]
+        )
     return {
         key: str(value)
         for key, value in values.items()
@@ -252,7 +256,7 @@ async def seed_prompts():
 
     api = LangfuseAPI()
     if not api.enabled:
-        raise SystemExit("Configure Langfuse in .env before seeding prompts.")
+        core.die("configure Langfuse in .env before seeding prompts")
     for version in (1, 2):
         text = (PROMPTS / f"concierge-v{version}.txt").read_text()
         label = "production" if version == 1 else "budget-check"
@@ -269,8 +273,8 @@ async def seed_prompts():
             if existing.get("prompt") == text:
                 print(f"Prompt label '{label}' already matches; skipped.")
                 continue
-            raise SystemExit(
-                f"Prompt label '{label}' exists with different content; review it in Langfuse."
+            core.die(
+                f"prompt label '{label}' exists with different content: review it in Langfuse"
             )
         result = await api.request(
             "POST",

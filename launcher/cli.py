@@ -199,5 +199,5 @@ def run_seed_prompts(args):
 def main(argv=None):
     args = build_parser().parse_args(argv)
     if args.needs_bootstrap and not (core.RUNTIME / "tools.py").exists():
-        raise SystemExit("Run python3 scripts/demo.py bootstrap first.")
+        core.die("run demo.py bootstrap first")
     return args.handler(args)
