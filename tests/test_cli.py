@@ -1,8 +1,7 @@
 """launcher.cli: the command surface. What parses, what is refused, and where it dispatches."""
 
-import argparse
-
 import pytest
+from conftest import subparsers_action
 
 from launcher import cli, core, images, stack
 from launcher.eks import aws, check, ops, tunnel
@@ -75,11 +74,11 @@ EKS_INVOCATIONS = {
 
 
 def subcommands(parser):
-    """The subparsers a parser declares, keyed by name."""
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action.choices
-    raise AssertionError("parser declares no subcommands")
+    """The subparsers a parser declares, keyed by name; a parser without any is a failure."""
+    action = subparsers_action(parser)
+    if action is None:
+        raise AssertionError("parser declares no subcommands")
+    return action.choices
 
 
 @pytest.fixture

@@ -12,7 +12,6 @@ the bodies `ops` itself produced rather than any a test handed it.
 
 import base64
 import json
-import os
 from collections import Counter
 
 import httpx
@@ -167,17 +166,14 @@ def write_manifest(root, published=None, tag=TAG):
 
 
 @pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout of our own, with a filled-in `.env` and nothing inherited from the shell.
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes for these tests."""
+    return ENV
 
-    `config.load_env()` layers the process environment over `.env`, so an exported CLICKHOUSE_*
-    or AWS_PROFILE on the developer's machine would otherwise decide what these tests see.
-    `aws.aws_login()` then exports AWS_PROFILE and AWS_REGION into the real environment on
-    purpose -- that is how kubectl's exec-auth plugin sees them -- so both are saved and put
-    back here rather than left set for whatever test runs next.
-    """
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
+
+@pytest.fixture
+def redirected(redirected, monkeypatch):
+    """The shared checkout, plus the three patches these two reports need."""
     # Every external command is faked; `need` would still look for aws, tofu, kubectl and helm
     # on the developer's PATH, where a missing OpenTofu is not this module's problem.
     monkeypatch.setattr(core, "need", lambda *commands: None)
@@ -185,17 +181,7 @@ def redirected(tmp_path, monkeypatch):
     monkeypatch.setattr(aws, "_OUTPUTS", None)
     # The wait for the collector to flush is real time; nothing here is exporting anything.
     monkeypatch.setattr(ops, "SETTLE_SECONDS", 0)
-    (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in ENV.items()))
-
-    saved = {key: os.environ.get(key) for key in ("AWS_PROFILE", "AWS_REGION", *ENV)}
-    for key in saved:
-        os.environ.pop(key, None)
-    yield tmp_path
-    for key, value in saved.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    return redirected
 
 
 @pytest.fixture

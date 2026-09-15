@@ -9,10 +9,12 @@ import os
 
 import pytest
 
-from launcher import core
 from launcher.eks import aws, config
 
 REGISTRY = "111122223333.dkr.ecr.us-east-1.amazonaws.com"
+
+# The `.env` every test here runs against: one profile, the one `aws_login()` is asked for.
+ENV = {"AWS_PROFILE": "demo"}
 
 # `tofu output -json` as the CLI prints it: every output wrapped in its type and value, which is
 # why aws.tf_outputs() unwraps `value` before handing the mapping out.
@@ -68,32 +70,21 @@ def outputs(fake_sh, monkeypatch):
 
 
 @pytest.fixture
-def session(monkeypatch, tmp_path):
-    """A checkout with a filled-in `.env` and nothing inherited from the developer's shell.
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes for these tests.
 
     `aws_login()` exports AWS_PROFILE and AWS_REGION into the real process environment on
-    purpose -- that is how kubectl's exec-auth plugin sees them -- so the fixture saves and
-    restores both itself rather than leaving them set for whatever test runs next.
+    purpose -- that is how kubectl's exec-auth plugin sees them -- and the shared fixture takes
+    both back out again rather than leaving them set for whatever test runs next.
     """
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    (tmp_path / ".env").write_text("AWS_PROFILE=demo\n")
-    saved = {key: os.environ.get(key) for key in ("AWS_PROFILE", "AWS_REGION")}
-    for key in saved:
-        os.environ.pop(key, None)
-    yield tmp_path
-    for key, value in saved.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    return ENV
 
 
 # --- the session ---------------------------------------------------------------------------
 
 
 def test_aws_login_exports_the_profile_and_region_and_reuses_a_valid_session(
-    session, fake_sh, monkeypatch
+    redirected, fake_sh, monkeypatch
 ):
     fake_sh.reply("aws configure list-profiles", stdout="default\ndemo\nother\n")
 
@@ -104,7 +95,7 @@ def test_aws_login_exports_the_profile_and_region_and_reuses_a_valid_session(
     assert os.environ["AWS_REGION"] == config.DEFAULT_REGION
 
 
-def test_aws_login_logs_in_again_when_the_sso_session_has_expired(session, fake_sh):
+def test_aws_login_logs_in_again_when_the_sso_session_has_expired(redirected, fake_sh):
     fake_sh.reply("aws configure list-profiles", stdout="demo\n")
     # The first identity probe fails and the one after the login succeeds, which is how an
     # expired-then-renewed SSO session reads from outside the browser.
@@ -127,20 +118,20 @@ def test_aws_login_logs_in_again_when_the_sso_session_has_expired(session, fake_
     )
 
 
-def test_aws_login_names_the_fix_when_the_profile_is_unset_or_unknown(session, fake_sh):
-    (session / ".env").write_text("AWS_PROFILE=\n")
+def test_aws_login_names_the_fix_when_the_profile_is_unset_or_unknown(redirected, fake_sh):
+    (redirected / ".env").write_text("AWS_PROFILE=\n")
     with pytest.raises(SystemExit) as unset:
         aws.aws_login()
     assert "AWS_PROFILE" in str(unset.value)
 
-    (session / ".env").write_text("AWS_PROFILE=typo\n")
+    (redirected / ".env").write_text("AWS_PROFILE=typo\n")
     fake_sh.reply("aws configure list-profiles", stdout="default\ndemo\n")
     with pytest.raises(SystemExit) as unknown:
         aws.aws_login()
     assert "configure sso" in str(unknown.value), "the message carries the command that fixes it"
 
 
-def test_aws_login_fails_when_the_login_did_not_take(session, fake_sh):
+def test_aws_login_fails_when_the_login_did_not_take(redirected, fake_sh):
     fake_sh.reply("aws configure list-profiles", stdout="demo\n")
     fake_sh.reply("aws sts get-caller-identity", returncode=255)
 

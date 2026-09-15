@@ -15,12 +15,12 @@ proves the constraint the whole Secret path exists for: no secret value in any r
 
 import base64
 import json
-import os
 import shutil
 from pathlib import Path
 
 import pytest
 import yaml
+from conftest import Recorder, write_env
 
 from launcher import core, images
 from launcher.eks import aws, config, k8s, lifecycle, tunnel, values
@@ -188,10 +188,6 @@ def kubeconfig():
     ]
 
 
-def write_env(root, env):
-    (root / ".env").write_text("".join(f"{key}={value}\n" for key, value in env.items()))
-
-
 def argvs(shell):
     return [call.argv for call in shell.calls]
 
@@ -242,69 +238,36 @@ def generated():
     return yaml.safe_load(values.values_path().read_text())
 
 
-class Steps:
-    """The collaborators outside this module, recorded with the process count at the time.
-
-    Where a call sits in the sequence is the assertion here rather than what it was passed:
-    `require_published` has to have run before the first process and the tunnel after the last
-    one, and neither fact is visible in `fake_sh`'s own record, because neither of them starts
-    a process of its own.
-    """
-
-    def __init__(self, shell):
-        self.shell = shell
-        self.calls = []
-
-    def stub(self, name, result=None, raises=None):
-        def action(*args, **kwargs):
-            self.calls.append((name, len(self.shell.calls)))
-            if raises is not None:
-                raise raises
-            return result
-
-        return action
-
-    def patch(self, monkeypatch, module, name, **answer):
-        monkeypatch.setattr(module, name, self.stub(name, **answer))
-
-    def at(self, name):
-        """The process count at each call to `name`: 0 means it ran before any process did."""
-        return [position for called, position in self.calls if called == name]
+# The collaborators outside this module, recorded with the process count at the time. Where a
+# call sits in the sequence is the assertion here rather than what it was passed -- that is
+# `at()` -- because `require_published` has to have run before the first process and the tunnel
+# after the last one, and neither fact is visible in `fake_sh`'s own record: neither of them
+# starts a process of its own. The same body records arguments for tests/test_eks_infra.py,
+# where it is `Stubs`.
+Steps = Recorder
 
 
 @pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout of our own, with a filled-in `.env` and nothing inherited from the shell.
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes for these tests."""
+    return ENV
 
-    `config.load_env()` layers the process environment over `.env`, so an exported CLICKHOUSE_*
-    or AGENT_MODE on the developer's machine -- `tests/conftest.py` sets two of them -- would
-    otherwise decide what these tests see. `aws.aws_login()` then exports AWS_PROFILE and
-    AWS_REGION into the real environment on purpose, which is how kubectl's exec-auth plugin
-    sees them, so every key is saved and put back rather than left set for the next test.
+
+@pytest.fixture
+def redirected(redirected, monkeypatch):
+    """The shared checkout, plus the two patches and the one real directory a deploy needs.
 
     `deploy/eks/k8s` is copied in rather than faked: the deploy reads `demo-values.yaml` for
     the static `envOverrides` it has to carry into the generated document, and a stand-in file
     would make that carry-over untestable.
     """
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
     # Every external command is faked; `need` would still look for aws, docker, tofu, kubectl
     # and helm on the developer's PATH, where a missing one is not this module's problem.
     monkeypatch.setattr(core, "need", lambda *commands: None)
     # The process-wide `tofu output` cache outlives a redirected core.ROOT, so it starts empty.
     monkeypatch.setattr(aws, "_OUTPUTS", None)
-    shutil.copytree(Path(__file__).parent.parent / "deploy/eks/k8s", tmp_path / "deploy/eks/k8s")
-    write_env(tmp_path, ENV)
-
-    saved = {key: os.environ.get(key) for key in ENV}
-    for key in saved:
-        os.environ.pop(key, None)
-    yield tmp_path
-    for key, value in saved.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    shutil.copytree(Path(__file__).parent.parent / "deploy/eks/k8s", redirected / "deploy/eks/k8s")
+    return redirected
 
 
 @pytest.fixture
