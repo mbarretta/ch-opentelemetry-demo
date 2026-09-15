@@ -260,6 +260,10 @@
     {
       "timestamp": "2026-09-14T18:10:37-04:00",
       "note": "Phase 7.65 deferred sweep complete under managed policy: all 9 remaining open entries carried for interactive review. Final ledger 20 carried / 4 converted / 6 dropped. Worth recording how the 6 dropped got there, because none of them was dropped by this sweep - the 7.6 cross-task reviewer dispositioned them on independent evidence: d6 and d7 were ALREADY RESOLVED IN CODE and nobody had closed the ledger entries (d6 by task 5's scheduler_get returning the parsed mapping infra.nightly wants, d7 by task 14 documenting the deliberate TF_PLUGIN_CACHE_DIR drop at check.py:16-22), d14 was judged a genuine non-finding, and d10/d11/d12 were superseded by quality findings q6/q2/q7 which recorded the same items with better scoping - q7 in particular CORRECTED d12, which had overstated a four-string change as a repo-wide rename. Phase 7.7 skipped: no CHARTER.md exists. Plan complete."
+    },
+    {
+      "timestamp": "2026-09-15T09:27:00-04:00",
+      "note": "USER DECISIONS taken 2026-09-15 at the post-run review, recorded so they are not re-litigated. (1) SESSION-REPLAY CAPTURE POSTURE: KEEP AS-IS. advancedNetworkCapture and consoleCapture stay enabled, so request/response bodies and console output - assistant chat text included - continue to reach ClickHouse whenever replay is on. The user weighed this knowing that sec-3 made replay genuinely switchable on both targets and that d19 established typed inputs ARE masked, so the exposure is conversation content and network bodies rather than credentials or keystrokes. No code or doc change; patch 0009's capture flags are settled, not merely un-reviewed. (2) EKS API SERVER PUBLIC ACCESS (d17): LEAVE ENTIRELY AS-IS, dropped as an accepted posture. (3) FOLLOW-UP SCOPE: 'everything mechanical' - a sweep plan covering q2, q3, q4, q5, q6, q7, sec1, sec4, d1, d9, d15, d18, d19, d23 and d30. STILL UNDISPOSITIONED and deliberately left carried, since the review's question budget went to the three above: d3 (the CREATE DATABASE grant, which needs live ClickHouse validation rather than a static edit), d2 (the profiles pipeline pointing at a disabled firepit exporter, a deployment-design choice), and d16 (the orchestrator-authorised constraint-4 exception for the archived validation transcript, which the user did not reverse and which therefore stands as recorded)."
     }
   ],
   "deferrals": [
@@ -528,12 +532,12 @@
       "reason_code": "contract",
       "location": "deploy/eks/tofu/eks.tf:30-31 and deploy/eks/tofu/terraform.tfvars.example:25",
       "note": "OUT OF CYCLE RANGE (neither file's substantive lines changed this cycle) but raised by the scope-B auditor and important enough to record: eks.tf sets endpoint_public_access = true and terraform.tfvars.example ships endpoint_public_access_cidrs = [\"0.0.0.0/0\"] UNCOMMENTED with the restrictive example commented out. So the workloads are private as the docs say, but the EKS API SERVER is reachable from any IP (IAM/SSO auth still required). This cuts against the 'the cluster is private, kubectl port-forward is the only access path' framing that this plan - and the orchestrator's own dispatch briefings - used to justify severity elsewhere. In a PUBLIC reference repo the shipped example is what operators copy. Needs a user decision: either restrict the default CIDR in the example or stop describing the cluster as private.",
-      "status": "carried",
+      "status": "dropped",
       "deferred_at": "2026-09-14T17:25:50-04:00",
-      "resolved_at": null,
+      "resolved_at": "2026-09-15T09:27:00-04:00",
       "resolution_task_id": "",
       "resolved_by_plan": "",
-      "reason": "managed run: carried for interactive review"
+      "reason": "USER DECISION 2026-09-15: leave entirely as-is. The EKS API server stays reachable from 0.0.0.0/0 in the shipped terraform.tfvars.example, pre-existing and out of this cycle's diff range. Recorded as an accepted posture rather than an open question. NOTE for future severity judgements: 'the cluster is private' is true of the workloads only, not of the API server, so do not lean on it to discount a finding."
     },
     {
       "id": "d18",

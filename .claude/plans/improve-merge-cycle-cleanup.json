@@ -1,0 +1,673 @@
+{
+  "slug": "improve-merge-cycle-cleanup",
+  "title": "Mechanical cleanup from the ch-otel-demo merge cycle",
+  "kind": "improvement",
+  "mode": "dev",
+  "status": "planned",
+  "autonomy": "managed",
+  "parallelism": "auto",
+  "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests launcher && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
+  "created": "2026-09-15",
+  "security_audit": "auto",
+  "quality_review": "auto",
+  "deferred_review": "auto",
+  "plan_review": "auto",
+  "sweep": true,
+  "signing_disabled": true,
+  "wave_execution": null,
+  "model_overrides": null,
+  "constraints": [
+    "The session-replay capture posture is settled: advancedNetworkCapture and consoleCapture in frontend/patches/0009 stay enabled and unchanged. The user reviewed and decided this on 2026-09-15; task 6 pins input masking and fixes comments only",
+    "subprocess is imported and called only in launcher/core.py; every other launcher module goes through core.run(), core.capture() or core.popen()",
+    "No secret value reaches argv or disk: Kubernetes Secrets are assembled in Python and piped to `kubectl apply -f -` on stdin; ClickHouse and Langfuse auth travel in request headers or function kwargs, never a command line",
+    "Tofu identifiers var.name = \"otel-demo-eks\", state bucket otel-demo-eks-tfstate-<account> and state key otel-demo-eks/terraform.tfstate are unchanged - moving any of them replaces the live EKS cluster",
+    "The upstream pin stays 3.0.0 / commit 1755859a everywhere, and internal identifiers are unchanged: astronomy-concierge image prefix, concierge/ package name, Compose project name, Langfuse prompt and trace names"
+  ],
+  "charter": {
+    "path": "",
+    "checked_at": "2026-09-15T00:00:00-04:00",
+    "advances": [],
+    "tensions": [],
+    "reconciled_at": null,
+    "amendments": []
+  },
+  "context": "Mechanical cleanup sweep following plan feat-merge-ch-otel-demo, which merged ch-otel-demo-eks into this repo and is complete on main at 437 passing tests. Every task here is origin remediation, so this is a SWEEP plan: plan.sweep is true and the deferral ledger is CLOSED, which is deliberate - it stops this cleanup from emitting a ledger that becomes the next sweep's intake. Findings that cannot be applied get one end-of-cycle decision instead. Scope was chosen by the user on 2026-09-15 from the prior cycle's carried items ('everything mechanical'): quality findings q2, q3, q4, q5, q6, q7; security findings sec1 and sec4; and deferrals d1, d9, d15, d18, d19, d23, d30. THREE USER DECISIONS FROM THAT REVIEW BOUND THIS PLAN AND MUST NOT BE REOPENED: (1) the session-replay capture posture stays as-is, which is constraint 1 here and a hard boundary on task 6; (2) the EKS API server stays publicly reachable in the shipped tfvars example (prior-cycle deferral d17, dropped as accepted) - so do not cite 'the cluster is private' as a reason to weaken task 5; (3) three prior-cycle items were left carried UNDISPOSITIONED and are deliberately out of scope here: d3 (the collector's CREATE DATABASE ON otel.* grant, which needs live ClickHouse Cloud validation rather than a static edit), d2 (the profiles pipeline exporting to a disabled firepit, a deployment-design choice) and d16 (the orchestrator-authorised constraint-4 exception for the archived validation transcript). The prior cycle's full evidence is in .claude/plans/feat-merge-ch-otel-demo.json - its security_findings[], quality_findings[] and deferrals[] carry the exact locations and remediations, and its log[] records why each was deferred. READ THE RELEVANT FINDING before implementing a task. One lesson from that cycle is encoded in this plan's wave layout: reserving a shared test file from every task turned a coordination problem into a fake capability gap that cost two evaluator passes, so here each shared file has exactly one owning task and task 8 (which touches nine test files) runs alone in the final wave.",
+  "tasks": [
+    {
+      "id": "1",
+      "title": "Compare generated Helm values by value, regenerate the stale render fixtures, and un-shadow cluster_reachable",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The committed render fixtures are a wrong baseline the next values change gets diffed against, and the check that should have caught it only compares env-var names.",
+      "files": [
+        "launcher/eks/check.py",
+        "tests/test_eks_check.py",
+        "tests/renders/langfuse-configured.yaml",
+        "tests/renders/langfuse-not-configured.yaml"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q3 (medium) plus the check.py half of q6. q3 was caused by this repo's own sec-3 task: the fixtures' header says regenerate after a change to either values document, sec-3 changed both, and the suite stayed green only because the comparison ignores values. ac3 is the real deliverable - regenerating without strengthening the check just resets a trap.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Both tests/renders/*.yaml are regenerated with the command in their own header, so they match what the current code renders. The stale ones predate sec-3, which changed both values documents",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "check.environment_problems compares the generated half's VALUES as well as its names. Prove the new check would have caught the drift: show it FAILING against the old recordings before regenerating, or against a deliberately corrupted value",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "demo.py eks check still exits 0 on a correct tree and still names a missing tool and exits 1 without running anything",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "check.py's zero-arg cluster_reachable is renamed to api_server_answers (it is a kubectl probe) and its single caller updated; launcher/eks/infra.py:319's one-arg cluster_reachable is left alone as the canonical holder of that name",
+          "critical": false
+        },
+        {
+          "id": "ac6",
+          "text": "infra.py is not modified",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "2",
+      "title": "One refusal convention across launcher/, plus the hint spelling and the Langfuse auth-header dedup",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "One CLI answers failures two different ways, and a public reference implementation is copied convention and all.",
+      "files": [
+        "launcher/core.py",
+        "launcher/cli.py",
+        "launcher/collector.py",
+        "launcher/images.py",
+        "launcher/stack.py",
+        "launcher/upstream.py",
+        "tests/test_build.py",
+        "tests/test_frontend_overlay.py",
+        "tests/test_integration_config.py",
+        "tests/test_core.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality findings q4 (medium) and q7 (low) plus deferral d1. These three are one task because they all edit the same five launcher modules; splitting them buys a merge conflict. d1 is now UNCONTENDED - it was deferred in wave 2 only because task 4 held stack.py. Note q4's own evidence: stack.py has task 1's bare raises at 255/272 beside tasks 4 and 10's core.die calls, in one file.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Every operator-facing refusal in launcher/ goes through core.die. Enumerate the bare `raise SystemExit(\"...\")` message sites first and report the count - the orchestrator found roughly 15 across cli.py, collector.py, images.py, stack.py and upstream.py, more than the finding's estimate of 11, so work from your own enumeration",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "`raise SystemExit(<int>)` is NOT touched. launcher/eks/tunnel.py's two int exits are exit codes, not messages, and converting them would change the CLI's exit status",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "core.die's docstring states the rule, so the next contributor can read the convention off the code rather than inferring it",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The four `scripts/demo.py <cmd>` hint strings are normalised to the majority `demo.py <cmd>` spelling: images.py:448, images.py:458, upstream.py:10, cli.py:202. DO NOT touch launcher/eks/tunnel.py:208 or launcher/__init__.py:1 - the first is a real filesystem path the tunnel re-invokes and the second is a module docstring describing the shim, and both are correct as written",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "stack.environment() calls eks.config.langfuse_auth_header() instead of assembling \"Basic \" + b64(pk:sk) inline at stack.py:97-100, and tests/test_eks_config.py's test pinning the two definitions equal still passes",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "Every test that asserted an old message string is updated, and the count of tests is unchanged or higher - no test is deleted or skipped to absorb a message change",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "3",
+      "title": "Drop the unreachable publish gate in eks/values.py and un-shadow ASSISTANT_PATH in eks/ops.py",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "values.py re-checks a condition the deploy path already refused with a stronger check, and ops.py shadows a name it imports with a different meaning.",
+      "files": [
+        "launcher/eks/values.py",
+        "launcher/eks/ops.py",
+        "tests/test_eks_values.py",
+        "tests/test_eks_ops.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q2 (medium) plus the ops.py half of q6 (low). ac3 exists because q2's whole premise is that the deleted gate is unreachable - verify that, do not take the finding's word for it.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The unpublished check at launcher/eks/values.py:137-147 is deleted and image_overrides' docstring states that images.require_published() is the gate and this function assumes a complete set",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "Confirm by reading launcher/eks/lifecycle.py that images.require_published() really does run before values.eks_values(), and say so in the HANDOFF. If it does not, STOP and report - the deletion is only safe because the stronger gate fires first",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "tests/test_eks_values.py's partial-publish case asserts the refusal via images.require_published instead of the deleted branch, so the behaviour stays covered rather than losing a test",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "ops.py:52's ASSISTANT_PATH is renamed to ASSISTANT_MESSAGE_PATH with its callers and test assertions updated; launcher/collector.py:9's ASSISTANT_PATH keeps its name as the canonical prefix",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The renamed constant is still DERIVED from collector.ASSISTANT_PATH rather than restating the literal route, so the two cannot drift apart",
+          "critical": true
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "4",
+      "title": "Make the smoke trace-id guard survive python -O",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The only non-constant value interpolated into this repo's SQL is guarded by an assert, which optimised mode strips.",
+      "files": [
+        "scripts/smoke.py",
+        "tests/test_smoke_queries.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From security finding sec1 (low severity, high confidence). The trace id is read from the storefront's JSON response inside the cluster, so it crosses a trust boundary; with asserts compiled out a misbehaving frontend pod could inject SQL run as the collector's write user, which still holds CREATE DATABASE ON otel.* (deferral d3, left open by user decision). Low severity, one-line fix, and the compounding is why it is worth doing.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "require_trace_id raises unconditionally rather than asserting, mirroring the shape launcher/eks/ops.py already uses for the database name, so the guard survives python -O / PYTHONOPTIMIZE=1",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "A test proves the guard still refuses a malformed trace id when asserts are disabled - run it under python -O or PYTHONOPTIMIZE=1 rather than asserting the source shape",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Audit the rest of scripts/smoke.py for any other assert used as a validation guard on a value that crosses a trust boundary, and report what you find. Fix any you find; the finding named one site but the audit is the deliverable",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "5",
+      "title": "Restrict ingress to the agent with a NetworkPolicy",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The agent's /message endpoint has no authentication while holding a live model API key, so anything in the namespace can spend it.",
+      "files": [
+        "deploy/eks/k8s/network-policy.yaml",
+        "launcher/eks/config.py",
+        "launcher/eks/lifecycle.py",
+        "tests/test_eks_deploy.py",
+        "README.md",
+        "deploy/eks/README.md"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From security finding sec4 (low/medium). Defense-in-depth: the laptop Compose target has the same posture, so this hardens one target rather than closing a live hole. Note the cluster's WORKLOADS are private but its API server is not - the user accepted that separately (d17), so do not rely on 'the cluster is private' as a reason to weaken this.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "A NetworkPolicy manifest under deploy/eks/k8s/ restricts ingress to the agent's port 8010 to the frontend pod's label selector. Verify the selector against what the chart actually renders for the frontend pod rather than assuming a label",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "eks deploy applies it, with its path centralised in launcher/eks/config.py the way COLLECTOR_MANIFEST already is - do not hardcode the filename in lifecycle.py",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "A test asserts the manifest is applied in the deploy sequence, and asserts the argv the way the sibling deploy tests do",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "The manifest is valid and parses offline; demo.py eks check validates it alongside the collector manifest if that is where the existing offline parse lives",
+          "critical": false
+        },
+        {
+          "id": "ac6",
+          "text": "The README's EKS runbook notes the LLM spend exposure next to the tunnel instructions. If this adds an .env key, tests/test_docs.py's Configuration-table check must still pass",
+          "critical": false
+        },
+        {
+          "id": "ac7",
+          "text": "Plan constraint 3 holds: no Tofu identifier, state bucket or state key changes. This task adds a Kubernetes manifest, it does not touch deploy/eks/tofu/",
+          "critical": true
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "6",
+      "title": "Regenerate the frontend patch set: pin input masking, correct the replay comment, harden the env interpolation",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The replay patch inherits an undocumented SDK default that a minor version bump could silently flip, and its own comment now describes behaviour the repo no longer has.",
+      "files": [
+        "frontend/patches/0006-document-assistant-env.patch",
+        "frontend/patches/0009-frontend-tracer-session-replay.patch",
+        "frontend/patches/README.md",
+        "tests/test_frontend_overlay.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From deferrals d19, d23 and d18. ac3 is a hard boundary, not a preference: the capture flags are a recorded user decision and ac5 of the earlier sec-3 task was verified by an empty diff on this file. d18 was dismissed as a live finding by the security auditor - the two values this repo adds are boolean- and URL-shaped - so ac5 is hardening, not a bug fix.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes, including scripts/check-frontend.sh which restages from scratch and runs tsc and eslint",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "Patch 0009 sets maskAllInputs explicitly rather than inheriting it. The orchestrator established that @hyperdx/browser 0.25.1's init() defaults it to TRUE while the package README documents FALSE, so the safe behaviour is currently inherited from an undocumented default - pin it to the masking-on behaviour the code actually has today",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "advancedNetworkCapture and consoleCapture are UNCHANGED and still true. The user reviewed this on 2026-09-15 and decided to keep the capture posture as-is; this task pins masking and fixes comments, it does not reopen that decision",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "Patch 0009's comment at line 31 no longer says replay is 'set on the deployment on EKS' - after sec-3 it is derived by the launcher on both targets",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "Patch 0006 interpolates each env value into the inline script with JSON.stringify(value) per key rather than single-quote wrapping, so a value containing an apostrophe cannot break or escape the script. ASSISTANT_DEMO_DETAILS is free prose and is the realistic case - add a test with an apostrophe in it",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The patches are REGENERATED via the repo's documented flow, not hand-edited: frontend/patches/README.md:11-27 states the rule. If regeneration is impossible in this environment, say so explicitly in the HANDOFF rather than hand-editing silently",
+          "critical": true
+        },
+        {
+          "id": "ac7",
+          "text": "Every patch still applies cleanly to the 3.0.0 / 1755859a pin and the patch set's index pre-images still match the pristine upstream blobs",
+          "critical": true
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "7",
+      "title": "Widen the two mechanical guards that only cover part of their surface",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "Both guards pass today for reasons that do not generalise, so each will stop catching what it was written to catch.",
+      "files": [
+        "tests/test_cli.py",
+        "tests/test_docs.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From deferrals d9 and d15. Both are guards whose green is currently an accident: d9's assertion is end-of-body and profile-conditional, d15's extractor only matches one span shape. Same file neighbourhood, one task.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The fake_sh no-process assertion fires per invocation rather than once at the end of a test body, so an earlier failure cannot mask it and a regression is caught for the specific subcommand that caused it",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The no-process guard is effective with AWS_PROFILE UNSET as well as set. Today every implemented handler dies at the env precondition first on a bare machine, so the guard is vacuous in CI - prove the new version is not, by provoking it into failing",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "tests/test_docs.py's command extraction covers the README's bare command spans (eks up, publish --service frontend, eks tunnel stop, ...) and not only spans containing 'demo.py'. Roughly 24 spans are currently outside the gate and were verified by hand once",
+          "critical": false
+        },
+        {
+          "id": "ac5",
+          "text": "The widened extractor does not false-positive on prose. Show the full list of spans it now extracts so the set can be eyeballed",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "8",
+      "title": "Consolidate the redirected fixture and the step recorder into tests/conftest.py",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "Six implementers each hand-rolled the same fixture and they have already drifted, so which test files are safe to run on a configured developer machine now varies per file.",
+      "files": [
+        "tests/conftest.py",
+        "tests/test_eks_deploy.py",
+        "tests/test_eks_infra.py",
+        "tests/test_eks_ops.py",
+        "tests/test_eks_tunnel.py",
+        "tests/test_eks_config.py",
+        "tests/test_smoke_queries.py",
+        "tests/test_eks_aws.py",
+        "tests/test_eks_k8s.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From quality finding q5 (medium). This task runs LAST and alone because it touches nine test files that every other task in this plan also touches. ac5 is the deliverable that matters: the finding is not that the code is ugly, it is that the copies scrub different environments so the suite's isolation depends on which file you run.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes and the collected test count is UNCHANGED - this is a refactor, so a changed count means something was lost",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "One parameterised redirected fixture lives in tests/conftest.py beside fake_sh, taking the env mapping to write and the keys to scrub, and the six files that defined their own now request it",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The two files that inlined the redirect rather than defining a fixture (tests/test_eks_aws.py, tests/test_eks_k8s.py) use the shared fixture too",
+          "critical": true
+        },
+        {
+          "id": "ac4",
+          "text": "The shared fixture scrubs the UNION of what the six copies scrubbed, so no file becomes less isolated than it was. Enumerate what each copy scrubbed and show the union - the drift between them is the actual bug",
+          "critical": true
+        },
+        {
+          "id": "ac5",
+          "text": "Prove the isolation works: run the suite with CLICKHOUSE_ENDPOINT, CLICKHOUSE_PASSWORD, AGENT_MODE and AWS_PROFILE exported to junk values and show it still passes. That is the regression the drift would have caused",
+          "critical": true
+        },
+        {
+          "id": "ac6",
+          "text": "The duplicated stub/patch recorder body becomes one class in conftest.py carrying BOTH accessors (args() and at()), and the callable-result support that one copy dropped is restored",
+          "critical": false
+        },
+        {
+          "id": "ac7",
+          "text": "The recorder class names Steps and Stubs are NOT unified. Task 12 rejected that with a stated reason and the names are not the duplication",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    },
+    {
+      "id": "9",
+      "title": "Date-stamp the superseded surface of the merge design document",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "pending",
+      "why": "The design document still lists a module surface that no longer exists, and a reader cannot tell it is a historical record rather than live documentation.",
+      "files": [
+        ".claude/plans/refactored-marinating-rain.md"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "From deferral d30. Deliberately the narrowest possible change - a header, not a correction. The stale line is evidence of what was planned, and the plan-vs-code divergence is itself worth preserving.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "The document carries a dated header marking it a design record written before implementation, superseded where it disagrees with the code - the same treatment docs/history/eks-live-validation-2026-09-09.md received",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The body is NOT rewritten and line 54's now-stale aws.py surface list is NOT edited. Rewriting a dated record of decisions taken with the user falsifies it; both the qual-1 implementer and its evaluator reached that conclusion independently and the orchestrator agreed",
+          "critical": false
+        },
+        {
+          "id": "ac4",
+          "text": "The header names where the live truth is instead: the module docstrings, and this plan's log",
+          "critical": false
+        }
+      ],
+      "verdicts": [],
+      "drift": null,
+      "self_review": null
+    }
+  ],
+  "parallel_plan": {
+    "computed_at": "2026-09-15T09:40:00-04:00",
+    "base_branch": "main",
+    "cycle_base_sha": null,
+    "post_merge_build": [],
+    "waves": [
+      {
+        "id": 1,
+        "tasks": [
+          "1",
+          "2",
+          "3",
+          "4"
+        ],
+        "state": null
+      },
+      {
+        "id": 2,
+        "tasks": [
+          "5",
+          "6",
+          "9"
+        ],
+        "state": null
+      },
+      {
+        "id": 3,
+        "tasks": [
+          "7"
+        ],
+        "state": null
+      },
+      {
+        "id": 4,
+        "tasks": [
+          "8"
+        ],
+        "state": null
+      }
+    ],
+    "predicted_files": {
+      "1": [
+        "launcher/eks/check.py",
+        "tests/test_eks_check.py",
+        "tests/renders/langfuse-configured.yaml",
+        "tests/renders/langfuse-not-configured.yaml"
+      ],
+      "2": [
+        "launcher/core.py",
+        "launcher/cli.py",
+        "launcher/collector.py",
+        "launcher/images.py",
+        "launcher/stack.py",
+        "launcher/upstream.py",
+        "tests/test_build.py",
+        "tests/test_frontend_overlay.py",
+        "tests/test_integration_config.py",
+        "tests/test_core.py",
+        "tests/test_eks_config.py"
+      ],
+      "3": [
+        "launcher/eks/values.py",
+        "launcher/eks/ops.py",
+        "tests/test_eks_values.py",
+        "tests/test_eks_ops.py"
+      ],
+      "4": [
+        "scripts/smoke.py",
+        "tests/test_smoke_queries.py"
+      ],
+      "5": [
+        "deploy/eks/k8s/network-policy.yaml",
+        "launcher/eks/config.py",
+        "launcher/eks/lifecycle.py",
+        "launcher/eks/check.py",
+        "tests/test_eks_deploy.py",
+        "tests/test_eks_check.py",
+        "README.md",
+        "deploy/eks/README.md",
+        ".env.example"
+      ],
+      "6": [
+        "frontend/patches/0006-document-assistant-env.patch",
+        "frontend/patches/0009-frontend-tracer-session-replay.patch",
+        "frontend/patches/README.md",
+        "tests/test_frontend_overlay.py"
+      ],
+      "7": [
+        "tests/test_cli.py",
+        "tests/test_docs.py"
+      ],
+      "8": [
+        "tests/conftest.py",
+        "tests/test_eks_deploy.py",
+        "tests/test_eks_infra.py",
+        "tests/test_eks_ops.py",
+        "tests/test_eks_tunnel.py",
+        "tests/test_eks_config.py",
+        "tests/test_smoke_queries.py",
+        "tests/test_eks_aws.py",
+        "tests/test_eks_k8s.py"
+      ],
+      "9": [
+        ".claude/plans/refactored-marinating-rain.md"
+      ]
+    }
+  },
+  "log": [
+    {
+      "timestamp": "2026-09-15T09:38:21-04:00",
+      "note": "Codex plan review round 1 TIMED OUT at 482s against the script's 480s limit (codex rc=143), returning no envelope, so the plan stands as authored and stop_reason is 'timeout'. Not retried: round 2 would re-send an identical 59KB prompt at the same limit, since round 1 produced no findings to apply, so the expected value of a second 8-minute attempt is low. Worth recording that this is marginal rather than broken - the PRIOR plan's round 1 completed in 436s against the same limit and caught a load-bearing wave-coloring bug, and this prompt is larger (9 tasks with long notes). The escape hatch is '/harness review improve-merge-cycle-cleanup', which skips the kind/size gate and can be run later. Compensating control: the orchestrator verified every line reference cited in the source findings against the current tree before authoring (the q4 enumeration came back ~15 message sites rather than the finding's 11, and tunnel.py:208's scripts/demo.py is a real path rather than a hint string, both now encoded in task 2's ACs), so the plan is not unreviewed - it is unreviewed BY A SECOND MODEL."
+    },
+    {
+      "timestamp": "2026-09-15T09:39:59-04:00",
+      "note": "Phase 4.5: colored 9 tasks into 4 waves (4/3/1/1). Conflict edges were VERIFIED by grep rather than assumed, and the evidence changed the layout three times. (1) 1-5 is real: launcher/eks/check.py:125 already parses config.COLLECTOR_MANIFEST, so task 5's ac5 would edit the file task 1 owns - separated into waves 1 and 2, which also means task 5 MAY touch check.py freely. (2) 5-7 is real: tests/test_docs.py reads all four READMEs and diffs a Configuration table against .env.example, while task 5 edits README.md, deploy/eks/README.md and possibly .env.example - task 7 moved to wave 3. (3) 2-7 DISSOLVED on inspection: tests/test_cli.py:247 asserts pytest.raises(SystemExit, match='bootstrap first'), and match= is a regex SEARCH, so it survives core.die's 'error: ' prefix and task 2 needs no edit to that file - recorded in task 2's ac notes so an implementer does not 'helpfully' edit it and manufacture the conflict. (4) Task 8 runs ALONE in wave 4 because tests/conftest.py is shared infrastructure for every test file in the repo, so refactoring it conflicts with all of tasks 1-7 regardless of which test files it edits. That is the wave-4 lesson from the prior cycle applied in reverse: rather than reserving the shared file from everyone and breaking their critical ACs, the task that owns it runs when nothing else is in flight. No post_merge_build is needed - the image manifest lives under gitignored .runtime/, so nothing on the base branch goes stale."
+    }
+  ],
+  "verdicts": [],
+  "deferrals": [],
+  "security_findings": [],
+  "quality_findings": [],
+  "gap_notes": [],
+  "plan_review_state": {
+    "rounds": [
+      {
+        "round": 1,
+        "started_at": "2026-09-15T09:29:50-04:00",
+        "duration_s": 482,
+        "model_resolved": null,
+        "verdict": null,
+        "findings": 0,
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "timeout",
+        "recorded_at": "2026-09-15T09:38:21-04:00"
+      }
+    ],
+    "threshold": "medium"
+  },
+  "managed_run": {
+    "started_at": "2026-09-15T09:40:00-04:00",
+    "go_confirmed_at": null,
+    "paused_at": null,
+    "pause_reason": "",
+    "resumes": [],
+    "completed_at": null,
+    "auto_decisions": []
+  }
+}
