@@ -10,7 +10,7 @@ import re
 import shlex
 
 import pytest
-from conftest import subparsers_action
+from conftest import subparsers_action, takes_a_value
 
 from launcher import cli, core
 
@@ -191,9 +191,7 @@ def names_rather_than_runs(root, arguments):
         return True
 
     last = arguments[-1]
-    return last.startswith("-") and any(
-        last in action.option_strings and action.nargs != 0 for action in parser._actions
-    )
+    return last.startswith("-") and takes_a_value(parser, last)
 
 
 def invocations(text):

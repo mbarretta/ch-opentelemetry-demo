@@ -1,3 +1,48 @@
+# The suite's mechanical inventories: the hand-kept lists and the recorded files that an edit
+# made somewhere else obliges. Each is a real guard that names what moved when it fails, and
+# each fails in a file the person making that edit is not touching -- so this list is here to
+# make the obligation discoverable before the failure rather than after it. Read it as "if you
+# edit the left, update the right".
+#
+# - A README (README.md, deploy/eks/README.md, docker/README.md, frontend/overlay/README.md):
+#   `BARE_SPANS` in `tests/test_docs.py` pins every bare command span each of the four shows,
+#   and `MENTIONS` pins the spans that name a piece of the CLI instead of showing a line to
+#   run. `RETIRED` pins the pre-merge names no document may use outside the root README's
+#   History note, and the root's own outline and EKS runbook are pinned by `SECTIONS`,
+#   `FIRST_RUN` and `EVERYDAY`.
+# - A `raise SystemExit("...")` added under launcher/ or scripts/, or either tree renamed:
+#   `REFUSAL_TREES` in `tests/test_core.py` is the scanned pair -- scripts/ included, since it
+#   holds the other operator-facing entry points -- and
+#   `test_every_refusal_goes_through_die_and_int_exits_are_left_alone` pins the refusal sites
+#   by file: messages in launcher/core.py alone, and the tunnel's two integer exit codes.
+# - `subprocess` imported anywhere under launcher/, scripts/, tests/ or concierge/:
+#   `IMPORT_TREES` in `tests/test_core.py` is that scan's four trees, and
+#   `test_subprocess_is_imported_in_core_alone_so_the_process_surface_stays_one_place` pins
+#   launcher/core.py as the only importer.
+# - A key added to a module's `redirect_env` mapping, or a former per-module scrub set changed:
+#   `REDIRECT_KEYS` below is the union those scrub sets were consolidated into, and `MIGRATED`
+#   in `tests/test_conftest.py` holds the enumeration this tuple has to keep covering.
+# - `config.CHART_VERSION` bumped: both recordings in `tests/renders/` have to be regenerated,
+#   because every assertion read out of them is a stale render until they are.
+#   `chart_pin_problems` in `tests/test_eks_check.py` compares each recording's `helm.sh/chart`
+#   label against the pin and names the regeneration command.
+# - The `vpc-cni` add-on in `deploy/eks/tofu/eks.tf`: `enforcement_problems` in
+#   `tests/test_eks_check.py` pins the one setting, `enableNetworkPolicy = "true"` in that
+#   add-on's own `configuration_values`, that makes the agent NetworkPolicy enforceable on the
+#   cluster. That OpenTofu is read as text and never written.
+# - `config.STATIC_MANIFESTS` edited: `unapplied_static_manifests` and
+#   `test_every_manifest_eks_check_parses_is_one_the_deploy_actually_applies` in
+#   `tests/test_eks_deploy.py` pin the tuple `eks check` parses against the manifests
+#   `eks deploy` really applies, so an entry nothing applies is named rather than trusted.
+# - An `eks` subcommand implemented: `IMPLEMENTED` in `tests/test_cli.py` names the test file
+#   that owns each landed handler, and the dispatch guard calls every subcommand outside it.
+#
+# Six of these are paired with a committed negative test that provokes the guard with the
+# failure it exists to catch -- the two scans in `tests/test_core.py`, the chart pin and the
+# add-on setting in `tests/test_eks_check.py`, the manifest tuple in `tests/test_eks_deploy.py`
+# and the dispatch guard in `tests/test_cli.py` -- and each of those sits directly below the
+# guard it feeds. The README lists and the `REDIRECT_KEYS` union are pinned by assertion only.
+
 import argparse
 import io
 import os
@@ -295,7 +340,11 @@ def redirected(tmp_path, monkeypatch, redirect_env):
     undo entry for a key that was not set to begin with, so a key the test then exports itself
     would outlive it. `aws.aws_login()` exports AWS_PROFILE and AWS_REGION into the real
     environment on purpose -- that is how kubectl's exec-auth plugin sees them -- which makes
-    that the normal case here rather than a corner of one.
+    that the normal case here rather than a corner of one. `tests/test_cli.py` spells that same
+    save-and-restore as a `restored(*keys)` context manager, for the two keys a provoked login
+    exports mid-test; the shape is shared deliberately and the code is not, because the body of
+    this fixture is what every test module requests by name and moving it is a refactor rather
+    than a guard.
 
     Modules that need more than a checkout and an `.env` override this fixture and request it,
     adding their own patches on top (see `tests/test_eks_deploy.py`).
@@ -317,12 +366,26 @@ def subparsers_action(parser):
     """The subparser action a parser declares, or None when it declares no subcommands.
 
     `_actions` and `_SubParsersAction` are argparse internals with no public equivalent, which
-    is the reason this is in one place: an upgrade that moves them breaks one line rather than
-    one per test module. `tests/test_cli.py` wants the choices and treats an absence as a
-    failure; `tests/test_docs.py` wants the action and has documented command groups that
-    legitimately have none, so the shared piece is the lookup and neither contract moves here.
+    is the reason this and `takes_a_value` below are the suite's only two readers of them: an
+    upgrade that moves them breaks these two functions rather than one line per test module.
+    `tests/test_cli.py` wants the choices and treats an absence as a failure;
+    `tests/test_docs.py` wants the action and has documented command groups that legitimately
+    have none, so the shared piece is the lookup and neither contract moves here.
     """
     for action in parser._actions:
         if isinstance(action, argparse._SubParsersAction):
             return action
     return None
+
+
+def takes_a_value(parser, option):
+    """Whether `option` is one of `parser`'s own options and expects a value after it.
+
+    The other half of the internals above, here for the same reason: `option_strings` and
+    `nargs` are read in the file that reads `_actions`, not once per test module. `nargs != 0`
+    is the whole distinction -- `build --platform <arch>` takes a value that the sentence
+    around it supplies, where `up --dev` stands alone -- and `tests/test_docs.py` is the
+    caller, because that is how it tells a README span naming an option from one showing a
+    command to run.
+    """
+    return any(option in action.option_strings and action.nargs != 0 for action in parser._actions)
