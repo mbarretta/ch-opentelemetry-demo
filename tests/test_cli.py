@@ -5,7 +5,7 @@ import argparse
 import pytest
 
 from launcher import cli, core, images, stack
-from launcher.eks import check, ops, tunnel
+from launcher.eks import aws, check, ops, tunnel
 from launcher.eks import flags as eks_flags
 
 # Every command line the CLI accepts. The EKS half is declared by the modules that implement it
@@ -191,31 +191,154 @@ IMPLEMENTED = {
 }
 
 
+def dispatch_every_eks_subcommand(parser, fake_sh, implemented=IMPLEMENTED):
+    """Call the handler of every `eks` subcommand outside `implemented`, checking each call.
+
+    Three things are asserted about a handler, and all three are asserted immediately after
+    the call that they are about rather than once at the end of the caller's body, so each
+    failure names the subcommand that caused it and no failure can mask another:
+
+    1. It reached no process. Checked first, and against only the calls this one invocation
+       added -- parsing the line included -- because an unimplemented handler that talks to
+       AWS is the thing this guard exists to catch: checked after (3), a landed body's own
+       refusal message would fail first and the process would go unreported. The closing
+       assertion keeps the whole-body guarantee this replaced, for the calls no single
+       invocation owns.
+    2. It refused rather than returned.
+    3. It refused with the stub's own message.
+
+    Limbs (1) and (3) are what make the guard hold whatever the environment has in it, which
+    is the other half of the point. A body that lands without its `IMPLEMENTED` entry trips
+    (1) when `AWS_PROFILE` is set -- `aws.aws_login()` reaches `aws configure list-profiles`
+    before anything else -- and trips (3) when the profile is unset, because then it dies at
+    that precondition having started no process at all. Bare CI is the unset case, so a guard
+    resting on (1) alone is a guard that passes there for a reason that has nothing to do with
+    the handlers.
+
+    Provoked into failing by the two tests below, which is the only way to know a guard that
+    is green on every run is green because it held.
+    """
+    for name, line in EKS_INVOCATIONS.items():
+        started = len(fake_sh.calls)
+        args = parser.parse_args(line.split())
+        assert callable(args.handler), name
+        if name in implemented:
+            continue
+
+        raised = None
+        try:
+            args.handler(args)
+        except (Exception, SystemExit) as error:
+            raised = error
+        spawned = fake_sh.lines()[started:]
+
+        assert spawned == [], (
+            f"`demo.py {line}` has no entry in IMPLEMENTED but reached {spawned}: a body has "
+            f"landed without the test file that owns it"
+        )
+        assert isinstance(raised, SystemExit), (
+            f"`demo.py {line}` did not refuse as unimplemented; it raised {raised!r}"
+        )
+        assert str(raised) == "not implemented yet", f"`demo.py {line}` refused with: {raised}"
+
+    assert fake_sh.lines() == [], (
+        "a dispatch test reaches no aws, kubectl, helm or tofu call. The per-invocation checks "
+        f"above did not account for these: {fake_sh.lines()}"
+    )
+
+
 def test_every_eks_subcommand_dispatches_to_its_module(fake_sh):
     """A reachable command in every case: a stub that says so, or a body with its own tests.
 
     `fake_sh` is the safety net rather than a convenience. It stands in front of the three
     `core` chokepoints every launcher module reaches the outside world through, so a body that
     lands without its `IMPLEMENTED` entry is recorded here instead of running live `aws`,
-    `kubectl`, `helm` or `tofu` from a parser test. The closing assertion is what proves the
-    net held: this test is expected to reach no process at all.
+    `kubectl`, `helm` or `tofu` from a parser test. `dispatch_every_eks_subcommand` is where
+    that net is checked, once per invocation.
     """
     parser = cli.build_parser()
     assert set(EKS_INVOCATIONS) == set(subcommands(subcommands(parser)["eks"]))
+    assert fake_sh.lines() == [], "building the parser reaches no process"
 
     for name, owner in IMPLEMENTED.items():
         assert (core.ROOT / owner).exists(), f"{name} names a test file that does not exist"
 
-    for name, line in EKS_INVOCATIONS.items():
-        args = parser.parse_args(line.split())
-        assert callable(args.handler), name
-        if name in IMPLEMENTED:
-            continue
-        with pytest.raises(SystemExit) as failure:
-            args.handler(args)
-        assert str(failure.value) == "not implemented yet", name
+    dispatch_every_eks_subcommand(parser, fake_sh)
 
-    assert fake_sh.lines() == [], "a parser test reaches no aws, kubectl, helm or tofu call"
+
+def spawn_a_process(*_arguments, **_keywords):
+    """A handler body that reaches the outside world, which is what the guard is there to catch."""
+    core.run("aws", "sts", "get-caller-identity")
+
+
+def use_profile(monkeypatch, value):
+    """Decide what `AWS_PROFILE` and `AWS_REGION` hold, whatever the caller's shell says.
+
+    Both keys are handed to monkeypatch even when they are being cleared, so the original
+    values are restored afterwards: `aws.aws_login()` writes both into `os.environ` directly,
+    and a leaked AWS_REGION would decide what a later test sees.
+    """
+    for key in ("AWS_PROFILE", "AWS_REGION"):
+        monkeypatch.delenv(key, raising=False)
+    if value:
+        monkeypatch.setenv("AWS_PROFILE", value)
+
+
+@pytest.mark.parametrize("configured", (False, True), ids=("profile-unset", "profile-set"))
+def test_the_dispatch_guard_names_the_subcommand_that_reaches_a_process(
+    monkeypatch, fake_sh, configured
+):
+    """The guard above, provoked: substitute one body and it has to fail, and say which one.
+
+    `eks status` is given a body that calls `core.run()`, and taken out of `IMPLEMENTED` so
+    that the guard reaches it -- which is exactly the shape of the mistake being guarded
+    against, a subcommand implemented without its test file. Run with the profile unset and
+    set, because bare CI has no AWS_PROFILE and a laptop does, and a guard that only bites on
+    one of the two is not a guard the CI run is entitled to.
+    """
+    use_profile(monkeypatch, "demo" if configured else "")
+    monkeypatch.setattr(ops, "status", spawn_a_process)
+
+    with pytest.raises(AssertionError) as caught:
+        dispatch_every_eks_subcommand(
+            cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
+        )
+
+    assert "demo.py eks status" in str(caught.value), "the guard names the offending subcommand"
+    assert "aws sts get-caller-identity" in str(caught.value), "and the call it let through"
+
+
+@pytest.mark.parametrize("configured", (False, True), ids=("profile-unset", "profile-set"))
+def test_the_dispatch_guard_catches_a_landed_body_whatever_the_profile_holds(
+    tmp_path, monkeypatch, fake_sh, configured
+):
+    """The same provocation with a realistic body, which is where the old guard leaked.
+
+    `aws.aws_login()` is the first line of every implemented `eks` body, so it stands in for
+    one here. With the profile set it reaches `aws configure list-profiles` and the no-process
+    limb catches it; with the profile unset it dies at its own precondition before starting
+    anything, and only the refusal-message limb can. The guard this replaced was a single
+    end-of-body `fake_sh.lines() == []`, so on bare CI -- profile unset -- a landed body
+    started no process and the assertion held: green, and blind.
+
+    `core.ROOT` is redirected at an empty directory so the repository's own `.env`, if the
+    developer has one, cannot supply the profile that the unset case is about.
+    """
+    monkeypatch.setattr(core, "ROOT", tmp_path)
+    use_profile(monkeypatch, "demo" if configured else "")
+    monkeypatch.setattr(ops, "status", aws.aws_login)
+
+    with pytest.raises(AssertionError) as caught:
+        dispatch_every_eks_subcommand(
+            cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
+        )
+
+    reported = str(caught.value)
+    assert "demo.py eks status" in reported, "the guard names the offending subcommand"
+    if configured:
+        assert "aws configure list-profiles" in reported, "caught by the no-process limb"
+    else:
+        assert "AWS_PROFILE is unset" in reported, "caught by the refusal-message limb"
 
 
 def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch, fake_sh):
