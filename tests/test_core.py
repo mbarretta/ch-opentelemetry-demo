@@ -20,10 +20,18 @@ def python_sources(base, *trees):
     A tree that is not there is refused rather than skipped: `rglob` over a missing directory
     yields nothing, which is how a scan whose tree was renamed stays green while covering
     none of it -- the exact way the guards below would go silent.
+
+    Raised rather than asserted, because `python -O` strips `assert` and this is the one line
+    standing between a renamed tree and a scan that silently covers nothing. The suite is not
+    run under `-O` today, but `tests/test_smoke_queries.py` exists because this repo does run
+    `-O` children, so the cost of not relying on that is one keyword.
     """
     for tree in trees:
         root = base / tree
-        assert root.is_dir(), f"{tree}/ is not a directory under {base}: the scan would be empty"
+        if not root.is_dir():
+            raise AssertionError(
+                f"{tree}/ is not a directory under {base}: the scan would be empty"
+            )
         for source in sorted(root.rglob("*.py")):
             yield source, str(source.relative_to(base))
 

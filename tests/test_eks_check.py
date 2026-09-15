@@ -182,12 +182,20 @@ def chart_pin_problems(rendered, name):
     Text in for the same reason: a stale recording is something to assert about, not to commit.
     """
     pinned = f"{k8s.CHART_NAME}-{config.CHART_VERSION}"
+    # EVERY label the demo chart stamped has to be the pin, not merely one of them. A recording
+    # carries the label once per document it renders -- four, at this chart version -- so a
+    # regeneration that was interrupted, or run against a half-updated cache, leaves a file
+    # whose documents disagree with each other. Asking whether the pin appears AT ALL passes on
+    # exactly that file, which is the stale render this guard exists to refuse. The set also
+    # dedupes: without it the message repeats one label once per document.
     carried = sorted(
-        label
-        for label in CHART_LABEL.findall(rendered)
-        if label.startswith(f"{k8s.CHART_NAME}-")
+        {
+            label
+            for label in CHART_LABEL.findall(rendered)
+            if label.startswith(f"{k8s.CHART_NAME}-")
+        }
     )
-    if pinned in carried:
+    if carried == [pinned]:
         return []
     return [
         f"tests/renders/{name}.yaml carries {', '.join(carried) or 'no'} helm.sh/chart label"
@@ -722,6 +730,26 @@ def test_the_chart_pin_guard_names_the_stale_version_and_where_to_refresh_it():
     stale = recorded(CONFIGURED).replace(pinned, f"{k8s.CHART_NAME}-0.40.0")
 
     named(chart_pin_problems(stale, CONFIGURED), "0.40.0", pinned, "header")
+
+
+def test_the_chart_pin_guard_refuses_a_partly_regenerated_recording():
+    """The guard's SCOPE, not its behaviour: one stale document out of four has to be enough.
+
+    The recording carries the chart label once per document it renders, so an interrupted
+    regeneration -- or one run against a half-updated chart cache -- produces a file whose
+    documents disagree. Asking whether the pin appears at all passed on that file, which is
+    precisely the stale render the guard exists to refuse, and the version-bump case above
+    could never have caught it because it rewrites every occurrence at once.
+    """
+    pinned = f"{k8s.CHART_NAME}-{config.CHART_VERSION}"
+    fresh = recorded(CONFIGURED)
+    assert fresh.count(pinned) > 1, "one label per document is what makes this case possible"
+
+    # One document left behind, the rest regenerated.
+    partial = fresh.replace(pinned, f"{k8s.CHART_NAME}-0.40.0", 1)
+    assert partial.count(pinned) > 0, "the pin still appears, which is why the old guard passed"
+
+    named(chart_pin_problems(partial, CONFIGURED), "0.40.0", pinned, "header")
 
 
 def test_a_missing_tool_is_named_and_nothing_else_runs(monkeypatch, fake_sh):
