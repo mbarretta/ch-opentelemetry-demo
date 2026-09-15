@@ -1,5 +1,8 @@
 """launcher.cli: the command surface. What parses, what is refused, and where it dispatches."""
 
+import contextlib
+import os
+
 import pytest
 from conftest import subparsers_action
 
@@ -270,17 +273,47 @@ def spawn_a_process(*_arguments, **_keywords):
     core.run("aws", "sts", "get-caller-identity")
 
 
-def use_profile(monkeypatch, value):
-    """Decide what `AWS_PROFILE` and `AWS_REGION` hold, whatever the caller's shell says.
+# The two keys `aws.aws_login()` writes straight into `os.environ` before anything it starts
+# can read them (launcher/eks/aws.py:37-38), which is how kubectl's exec-auth plugin inherits
+# them -- and why a test that provokes a login is the thing that has to put them back.
+EXPORTED_BY_A_LOGIN = ("AWS_PROFILE", "AWS_REGION")
 
-    Both keys are handed to monkeypatch even when they are being cleared, so the original
-    values are restored afterwards: `aws.aws_login()` writes both into `os.environ` directly,
-    and a leaked AWS_REGION would decide what a later test sees.
+
+@contextlib.contextmanager
+def restored(*keys):
+    """Every key removed for the duration of the block and put back as it was, unset included.
+
+    The shape `tests/conftest.py`'s `redirected` uses at :305-313, for the reason it documents:
+    `monkeypatch.delenv` records no undo entry for a key that was unset to begin with, so a key
+    the test then exports itself is never taken back out.
     """
-    for key in ("AWS_PROFILE", "AWS_REGION"):
-        monkeypatch.delenv(key, raising=False)
-    if value:
-        monkeypatch.setenv("AWS_PROFILE", value)
+    before = {key: os.environ.pop(key, None) for key in keys}
+    try:
+        yield
+    finally:
+        for key, value in before.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
+@contextlib.contextmanager
+def use_profile(value):
+    """Decide what `AWS_PROFILE` and `AWS_REGION` hold inside the block, whatever the shell says.
+
+    Saved and restored rather than handed to `monkeypatch.delenv`, which is unsound here in
+    exactly the case these tests parametrize for: `delenv` records no undo entry for a key that
+    was already unset, and `aws.aws_login()` exports AWS_REGION itself mid-test, so on a machine
+    that has it unset -- bare CI, which is what the profile-unset parameter covers -- that
+    export outlived the test. What the caller's shell held before the block is what `os.environ`
+    holds when it closes, and `test_the_guard_tests_hand_the_aws_environment_back_as_they_found_it`
+    is what keeps that true.
+    """
+    with restored(*EXPORTED_BY_A_LOGIN):
+        if value:
+            os.environ["AWS_PROFILE"] = value
+        yield
 
 
 @pytest.mark.parametrize("configured", (False, True), ids=("profile-unset", "profile-set"))
@@ -295,13 +328,13 @@ def test_the_dispatch_guard_names_the_subcommand_that_reaches_a_process(
     set, because bare CI has no AWS_PROFILE and a laptop does, and a guard that only bites on
     one of the two is not a guard the CI run is entitled to.
     """
-    use_profile(monkeypatch, "demo" if configured else "")
-    monkeypatch.setattr(ops, "status", spawn_a_process)
+    with use_profile("demo" if configured else ""):
+        monkeypatch.setattr(ops, "status", spawn_a_process)
 
-    with pytest.raises(AssertionError) as caught:
-        dispatch_every_eks_subcommand(
-            cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
-        )
+        with pytest.raises(AssertionError) as caught:
+            dispatch_every_eks_subcommand(
+                cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
+            )
 
     assert "demo.py eks status" in str(caught.value), "the guard names the offending subcommand"
     assert "aws sts get-caller-identity" in str(caught.value), "and the call it let through"
@@ -324,13 +357,13 @@ def test_the_dispatch_guard_catches_a_landed_body_whatever_the_profile_holds(
     developer has one, cannot supply the profile that the unset case is about.
     """
     monkeypatch.setattr(core, "ROOT", tmp_path)
-    use_profile(monkeypatch, "demo" if configured else "")
-    monkeypatch.setattr(ops, "status", aws.aws_login)
+    with use_profile("demo" if configured else ""):
+        monkeypatch.setattr(ops, "status", aws.aws_login)
 
-    with pytest.raises(AssertionError) as caught:
-        dispatch_every_eks_subcommand(
-            cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
-        )
+        with pytest.raises(AssertionError) as caught:
+            dispatch_every_eks_subcommand(
+                cli.build_parser(), fake_sh, implemented=set(IMPLEMENTED) - {"status"}
+            )
 
     reported = str(caught.value)
     assert "demo.py eks status" in reported, "the guard names the offending subcommand"
@@ -338,6 +371,46 @@ def test_the_dispatch_guard_catches_a_landed_body_whatever_the_profile_holds(
         assert "aws configure list-profiles" in reported, "caught by the no-process limb"
     else:
         assert "AWS_PROFILE is unset" in reported, "caught by the refusal-message limb"
+
+
+@pytest.mark.parametrize(
+    "shell",
+    ({}, {"AWS_PROFILE": "from-the-shell", "AWS_REGION": "from-the-shell-too"}),
+    ids=("bare-ci", "configured-laptop"),
+)
+@pytest.mark.parametrize("configured", (False, True), ids=("profile-unset", "profile-set"))
+def test_the_guard_tests_hand_the_aws_environment_back_as_they_found_it(
+    tmp_path, monkeypatch, fake_sh, configured, shell
+):
+    """The guard test above run for its side effect: the AWS environment it borrowed comes back.
+
+    `aws.aws_login()` exports AWS_PROFILE and AWS_REGION into the real environment and only then
+    dies on the unconfigured profile, so the profile-set case leaves a live export behind for
+    `use_profile` to take out again. Nothing reddened while that leak was real, because
+    `conftest.REDIRECT_KEYS` happens to name both keys -- a scrub belonging to a fixture no test
+    in this module even requests. Pinned here instead, so the restoration stops depending on a
+    union somewhere else continuing to cover it.
+
+    The guard test is called rather than re-implemented, because what is being pinned is the
+    whole composition -- the helper, the login that exports mid-test, and the refusal that cuts
+    the body short -- and a hand-rolled `os.environ` write would only pin the helper. Read from
+    inside this test rather than from a finalizer for the same reason it is a `with` block now:
+    `use_profile` restores when its block closes, not when the session's fixtures unwind.
+    """
+    with restored(*EXPORTED_BY_A_LOGIN):
+        os.environ.update(shell)
+        handed_over = {key: os.environ.get(key) for key in EXPORTED_BY_A_LOGIN}
+        assert handed_over == {key: shell.get(key) for key in EXPORTED_BY_A_LOGIN}, (
+            "the start state is this case's shell and nothing else: `restored` scrubbed first"
+        )
+
+        test_the_dispatch_guard_catches_a_landed_body_whatever_the_profile_holds(
+            tmp_path, monkeypatch, fake_sh, configured
+        )
+
+        assert {key: os.environ.get(key) for key in EXPORTED_BY_A_LOGIN} == handed_over, (
+            "the guard test kept what `aws.aws_login()` exported instead of handing it back"
+        )
 
 
 def test_publish_and_eks_do_not_need_the_upstream_checkout(tmp_path, monkeypatch, fake_sh):
