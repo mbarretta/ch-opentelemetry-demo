@@ -10,7 +10,6 @@ layout.
 import json
 import re
 import shutil
-import subprocess
 from pathlib import Path
 from typing import get_args
 
@@ -18,6 +17,7 @@ import pytest
 
 from concierge import contract
 from concierge.agent import FeedbackRequest
+from launcher import core
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ROOT / "frontend/overlay"
@@ -303,7 +303,9 @@ def emitted_env_script(values: dict[str, str]) -> tuple[str, dict[str, str]]:
     Escaping can only be checked by running the program, so node evaluates the real helper and
     the real template the way the browser does: as a function body handed a `window` object. Only
     the helper's TypeScript parameter annotation is dropped; its body is the shipped one. A name
-    `values` does not mention falls back to its declared default, or to `undefined`.
+    `values` does not mention falls back to its declared default, or to `undefined`. The child
+    goes through `core.run` like every other process this repository starts -- nothing here
+    requests `fake_sh`, so the chokepoint is unpatched and node really runs.
     """
     assert NODE, "node is required to evaluate the inline env script"
     helper, template, bound = env_script_source()
@@ -321,7 +323,9 @@ def emitted_env_script(values: dict[str, str]) -> tuple[str, dict[str, str]]:
             "process.stdout.write(JSON.stringify({ script: envString, env: host.ENV }));",
         ]
     )
-    result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=True)
+    result = core.run(
+        NODE, "-e", program, check=True, stdout=core.PIPE, stderr=core.PIPE, text=True
+    )
     payload = json.loads(result.stdout)
     return payload["script"], payload["env"]
 
