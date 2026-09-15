@@ -10,6 +10,7 @@ import json
 import shlex
 
 import pytest
+from conftest import Recorder, write_env
 
 from launcher import core
 from launcher.eks import aws, config, infra, k8s, lifecycle, tunnel
@@ -61,47 +62,16 @@ FULL_CLICKSTACK = {
 TF_OUTPUTS = {"cluster_name": CLUSTER, "scheduler_name": SCHEDULE["Name"]}
 
 
-class Stubs:
-    """The collaborators outside this module, recorded rather than run."""
-
-    def __init__(self):
-        self.calls = []
-
-    def stub(self, name, result=None, raises=None):
-        def action(*args, **kwargs):
-            self.calls.append((name, args))
-            if raises is not None:
-                raise raises
-            return result(*args) if callable(result) else result
-
-        return action
-
-    def patch(self, monkeypatch, module, name, **answer):
-        monkeypatch.setattr(module, name, self.stub(name, **answer))
-
-    def args(self, name):
-        """The positional arguments of every recorded call to `name`."""
-        return [args for called, args in self.calls if called == name]
-
-    def called(self, name):
-        return bool(self.args(name))
-
-
-def write_env(root, values):
-    (root / ".env").write_text("".join(f"{key}={value}\n" for key, value in values.items()))
+# The collaborators outside this module, recorded rather than run. What they were passed is the
+# assertion here, which is `args()`; the same body records process positions for
+# tests/test_eks_deploy.py, where it is `Steps`.
+Stubs = Recorder
 
 
 @pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout of our own, so no real `.env` is read and no real `.terraform` is removed."""
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    # config.load_env() layers the process environment over `.env`, so an exported AWS_REGION or
-    # CLICKHOUSE_* on the developer's machine would otherwise decide what these tests see.
-    for key in ("AWS_REGION", "AWS_PROFILE", *config.CLICKSTACK_KEYS):
-        monkeypatch.delenv(key, raising=False)
-    write_env(tmp_path, FULL_CLICKSTACK)
-    return tmp_path
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes, so no real one is read."""
+    return FULL_CLICKSTACK
 
 
 @pytest.fixture
@@ -354,7 +324,7 @@ def test_destroy_closes_the_tunnel_and_takes_the_workloads_down_first(
     assert stubbed.called("stop"), "the tunnel holds a port-forward against a cluster going away"
     assert stubbed.called("down")
     assert find(fake_sh, "aws", "eks", "describe-cluster"), "down only runs for a live cluster"
-    order = [name for name, _ in stubbed.calls]
+    order = stubbed.names()
     assert order.index("stop") < order.index("down"), "the port-forward goes first"
     destroy = one(fake_sh, "tofu", *chdir(), "destroy")
     assert destroy.argv == ["tofu", f"-chdir={config.tofu_dir()}", "destroy"]

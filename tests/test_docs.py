@@ -6,11 +6,11 @@ name from before the merge left in a runbook. All three are decidable from the d
 code, so they are asserted here instead of re-read by hand after every CLI change.
 """
 
-import argparse
 import re
 import shlex
 
 import pytest
+from conftest import subparsers_action
 
 from launcher import cli, core
 
@@ -156,14 +156,6 @@ def code_regions(text):
     fenced, prose = split_fences(text)
     spans = re.findall(r"`([^`]+)`", "\n".join(prose))
     return fenced + [" ".join(span.split()) for span in spans]
-
-
-def subparsers_action(parser):
-    """The subparser action a parser declares, or None when it declares no subcommands."""
-    for action in parser._actions:
-        if isinstance(action, argparse._SubParsersAction):
-            return action
-    return None
 
 
 def names_rather_than_runs(root, arguments):

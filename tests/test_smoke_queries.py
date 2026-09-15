@@ -18,7 +18,6 @@ They reach no backend -- both refuse before anything is driven.
 
 import base64
 import json
-import os
 import sys
 
 import httpx
@@ -154,29 +153,21 @@ class Answers:
 
 
 @pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout of our own with a filled-in `.env`, and nothing inherited from the shell.
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes for these tests."""
+    return ENV
 
-    `config.load_env()` layers the process environment over `.env`, so an exported CLICKHOUSE_*
-    or LANGFUSE_* on the developer's machine would otherwise decide what these tests see.
-    `smoke.RUNTIME` is patched as well as `core.RUNTIME`: the script binds the name at import on
-    purpose (it patches nothing when it runs for real), so the module attribute is the seam.
+
+@pytest.fixture
+def redirected(redirected, monkeypatch):
+    """The shared checkout with its `.runtime` made and the script's own copy of the path.
+
+    `smoke.RUNTIME` is patched as well as `core.RUNTIME`: the script binds the name at import
+    on purpose (it patches nothing when it runs for real), so the module attribute is the seam.
     """
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    monkeypatch.setattr(smoke, "RUNTIME", tmp_path / ".runtime")
-    (tmp_path / ".runtime").mkdir()
-    (tmp_path / ".env").write_text("".join(f"{key}={value}\n" for key, value in ENV.items()))
-
-    saved = {key: os.environ.get(key) for key in ENV}
-    for key in saved:
-        os.environ.pop(key, None)
-    yield tmp_path
-    for key, value in saved.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    monkeypatch.setattr(smoke, "RUNTIME", redirected / ".runtime")
+    (redirected / ".runtime").mkdir()
+    return redirected
 
 
 @pytest.fixture

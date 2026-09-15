@@ -10,7 +10,6 @@ import json
 
 import pytest
 
-from launcher import core
 from launcher.eks import aws, config, k8s
 
 OUTPUTS = {
@@ -139,16 +138,14 @@ def test_a_single_key_secret_keeps_the_value_exactly_as_given():
     )
 
 
-def test_apply_manifest_pipes_the_document_to_kubectl_on_stdin(fake_sh, tmp_path, monkeypatch):
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
+def test_apply_manifest_pipes_the_document_to_kubectl_on_stdin(fake_sh, redirected):
     manifest = k8s.secret_manifest(config.SECRET_CLICKSTACK, config.NS_CS, CLICKSTACK)
 
     k8s.apply_manifest(manifest, namespace=config.NS_CS)
 
     assert fake_sh.last.argv == ["kubectl", "-n", "clickstack", "apply", "-f", "-"]
     assert json.loads(fake_sh.last.stdin)["metadata"]["name"] == "clickstack-credentials"
-    assert list(tmp_path.rglob("*.yaml")) == [], "nothing with a credential in it is written out"
+    assert list(redirected.rglob("*.yaml")) == [], "nothing with a credential in it is written out"
 
 
 def test_no_secret_value_reaches_argv_anywhere_in_the_secret_path(fake_sh):

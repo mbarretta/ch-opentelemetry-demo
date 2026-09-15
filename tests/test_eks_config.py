@@ -21,12 +21,9 @@ FULL_LANGFUSE = {
 }
 
 
-@pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout and a .runtime of our own, so nobody's real `.env` is read."""
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    return tmp_path
+# `redirected` -- a checkout of our own, so nobody's real `.env` is read, and no exported
+# AWS_PROFILE or CLICKHOUSE_* decides what these tests see -- is shared: see tests/conftest.py.
+# These tests write the `.env` they need themselves, so they ask it for no mapping.
 
 
 def test_the_state_location_is_the_one_the_live_cluster_already_uses():

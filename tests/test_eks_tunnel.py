@@ -14,16 +14,21 @@ import pytest
 from launcher import core
 from launcher.eks import aws, config, k8s, tunnel
 
+# The one value these tests read out of `.env`, as the shared `redirected` fixture writes it.
+ENV = {"EKS_TUNNEL_PORT": "9090"}
+
 
 @pytest.fixture
-def redirected(tmp_path, monkeypatch):
-    """A checkout and a `.runtime` of our own, so no real pidfile, log or `.env` is touched."""
-    monkeypatch.setattr(core, "ROOT", tmp_path)
-    monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    monkeypatch.delenv("EKS_TUNNEL_PORT", raising=False)
-    (tmp_path / ".env").write_text("EKS_TUNNEL_PORT=9090\n")
+def redirect_env():
+    """The `.env` the shared `redirected` fixture writes for these tests."""
+    return ENV
+
+
+@pytest.fixture
+def redirected(redirected):
+    """The shared checkout with its run directory made, so no real pidfile or log is touched."""
     config.run_dir().mkdir(parents=True)
-    return tmp_path
+    return redirected
 
 
 class Spawned:
