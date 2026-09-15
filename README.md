@@ -111,7 +111,7 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 | `eks apply` | `tofu apply` for the VPC lookup, the EKS control plane, the node group, the four ECR repositories and the nightly schedule, then writes the kubeconfig. Interactive: tofu's own prompt reads your terminal, or pass `--yes`. About 15 minutes the first time, and the only step that takes that long. |
 | `build` | The same build as the laptop target — one content-derived tag for all four images. |
 | `publish` | Logs in to ECR and pushes the four images, refusing a platform that does not match the node group's and skipping a tag the registry already holds unless you pass `--force`. |
-| `eks deploy` | Creates the namespaces and the Secrets (assembled in Python and piped to `kubectl apply -f -`, never written to disk or to a command line), installs the ClickStack collector, writes the generated Helm values from `.env` and the build manifest, installs the demo release, and opens the tunnel. Safe to re-run. |
+| `eks deploy` | Creates the namespaces, applies the NetworkPolicy that keeps everything but the storefront off the agent, creates the Secrets (assembled in Python and piped to `kubectl apply -f -`, never written to disk or to a command line), installs the ClickStack collector, writes the generated Helm values from `.env` and the build manifest, installs the demo release, and opens the tunnel. Safe to re-run. |
 
 > **The first `eks apply` after this merge destroys the old `otel-demo-frontend` ECR repository and every image in it.** This repository uses four repositories, `ch-opentelemetry-demo/{frontend,frontend-proxy,agent,mcp}`, where the pre-merge deployment used the single `otel-demo-frontend`; an ECR repository name forces replacement and there is no `moved` block, so tofu deletes the old repository and every image in it. That is intended — the old images are built from a different upstream pin and cannot serve this release — but it means **`eks apply` must be followed by `build` and `publish` before anything can be deployed.** `eks apply` prints the same warning, and `eks deploy` refuses rather than rolling out a partial set.
 
@@ -136,7 +136,18 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 | `eks verify` | The demo's claim as a report: it sends one assistant turn through the tunnel, prints that turn's trace ID, then counts the spans, logs, metrics and replay sessions that reached ClickHouse Cloud. The Langfuse half of the same ID is checked in the Langfuse UI. |
 | `scenario backend-failure --target eks` | Breaks `GetProduct` for the Explorascope in the cluster's flagd file, exactly as the laptop command does to the laptop's. `scenario shopping --target eks` restores it. |
 | `eks flag` | Lists, shows or sets any other flagd flag without a restart; `eks flag --reset` restarts flagd back to the chart defaults. The product-catalog fault is not settable here (its targeting rule always yields a variant, so `defaultVariant` decides nothing for it) — use `scenario` for that, which is why the two commands exist. |
-| `eks check` | Offline validation of the whole EKS surface: OpenTofu fmt, init and validate, the collector manifest parsed, and the chart rendered twice (Langfuse configured and not) with every image override and every referenced collector processor asserted. No AWS credentials, no cluster. |
+| `eks check` | Offline validation of the whole EKS surface: OpenTofu fmt, init and validate, the collector manifest and the agent's NetworkPolicy parsed, and the chart rendered twice (Langfuse configured and not) with every image override and every referenced collector processor asserted. No AWS credentials, no cluster. |
+
+> **Anything that can reach the tunnel can spend the model credential.** The storefront's
+> assistant route has no authentication and the agent behind it runs with the live `API_KEY`
+> from the `llm-credentials` Secret, so while the port-forward is open every process on your
+> laptop can drive paid model turns through it. Close it with `demo.py eks tunnel stop` when the
+> demo is over, and keep `API_KEY` out of `.env` for a scripted-only session. Inside the cluster
+> the exposure stops at the storefront: `deploy/eks/k8s/network-policy.yaml` restricts ingress to
+> the agent's port 8010 to the frontend pod, so no other pod in `otel-demo` can call it. That
+> policy is enforced only because the `vpc-cni` add-on carries `enableNetworkPolicy`
+> (`deploy/eks/tofu/eks.tf`) — on a cluster applied before that, re-run `demo.py eks apply`, or
+> the API server accepts the policy and filters nothing.
 
 ### Costs and the nightly schedule
 

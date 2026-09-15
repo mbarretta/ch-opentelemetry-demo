@@ -28,8 +28,8 @@ from pathlib import Path
 from .. import core
 from . import config, infra, k8s, values
 
-# The workload kinds a rendered chart can put a container in. The collector manifest's own name
-# is `config.COLLECTOR_MANIFEST`: `eks deploy` applies the same file this parses.
+# The workload kinds a rendered chart can put a container in. The manifests parsed alongside
+# the render are `config.STATIC_MANIFESTS`: `eks deploy` applies the same files.
 WORKLOAD_KINDS = ("Deployment", "DaemonSet", "StatefulSet")
 
 # The image references the render is done with. The real ones are account-specific (the ECR URL
@@ -76,13 +76,13 @@ RENDERS = (("langfuse configured", CHECK_LANGFUSE_ENV), ("langfuse not configure
 def register(subparsers):
     """Declare `eks check`."""
     parser = subparsers.add_parser(
-        "check", help="validate the OpenTofu, the collector manifest and the rendered chart"
+        "check", help="validate the OpenTofu, the static manifests and the rendered chart"
     )
     parser.set_defaults(handler=lambda args: check())
 
 
 def check():
-    """Run `tofu fmt/init/validate`, parse the collector manifest, render the chart twice.
+    """Run `tofu fmt/init/validate`, parse the static manifests, render the chart twice.
 
     Twice because the Langfuse exporter is conditional: both the configured and the
     unconfigured generated values have to render, and each rendering is asserted against -- the
@@ -92,10 +92,10 @@ def check():
     """
     core.need("tofu", "helm", "kubectl")
     check_tofu()
-    check_collector_manifest()
+    check_static_manifests()
     check_rendered_chart()
     print()
-    core.log("check complete: OpenTofu, the collector manifest and both renders are valid")
+    core.log("check complete: OpenTofu, the static manifests and both renders are valid")
 
 
 def check_tofu():
@@ -114,30 +114,37 @@ def check_tofu():
     infra.tofu("validate")
 
 
-def check_collector_manifest():
-    """Parse the ClickStack collector manifest the way the cluster will read it.
+def check_static_manifests():
+    """Parse every manifest `eks deploy` applies as-is, the way the cluster will read it.
+
+    The ClickStack collector and the agent's NetworkPolicy, in one parse rather than one each:
+    both are `config.STATIC_MANIFESTS`, both fail the same way -- accepted by this command and
+    rejected by the API server -- and a run that names both missing files at once is one run.
 
     `kubectl apply --dry-run=client` still needs a live API server for schema validation and
     resource discovery, so it only runs when one answers. With no cluster -- the normal case
     for this command -- `kubectl kustomize` is the offline equivalent: it parses every document
     and requires apiVersion, kind and metadata.name on each.
     """
-    manifest = config.k8s_dir() / config.COLLECTOR_MANIFEST
-    if not manifest.is_file():
-        core.die(f"missing {manifest}: `eks deploy` applies this manifest as-is")
+    manifests = [config.k8s_dir() / name for name in config.STATIC_MANIFESTS]
+    missing = [str(manifest) for manifest in manifests if not manifest.is_file()]
+    if missing:
+        core.die(f"missing {', '.join(missing)}: `eks deploy` applies these manifests as-is")
 
+    named = ", ".join(config.STATIC_MANIFESTS)
     if api_server_answers():
-        core.log(f"kubectl apply --dry-run=client -f {config.COLLECTOR_MANIFEST}")
-        core.run("kubectl", "apply", "--dry-run=client", "-f", manifest, stdout=core.DEVNULL)
+        core.log(f"kubectl apply --dry-run=client -f {named}")
+        flags = [argument for manifest in manifests for argument in ("-f", manifest)]
+        core.run("kubectl", "apply", "--dry-run=client", *flags, stdout=core.DEVNULL)
         return
 
-    core.log(
-        f"kubectl kustomize {config.COLLECTOR_MANIFEST} (no cluster reachable; offline parse)"
-    )
+    core.log(f"kubectl kustomize {named} (no cluster reachable; offline parse)")
     with tempfile.TemporaryDirectory() as directory:
         staged = Path(directory)
-        (staged / config.COLLECTOR_MANIFEST).write_text(manifest.read_text())
-        (staged / "kustomization.yaml").write_text(f"resources:\n  - {config.COLLECTOR_MANIFEST}\n")
+        for manifest in manifests:
+            (staged / manifest.name).write_text(manifest.read_text())
+        resources = "".join(f"  - {name}\n" for name in config.STATIC_MANIFESTS)
+        (staged / "kustomization.yaml").write_text(f"resources:\n{resources}")
         core.run("kubectl", "kustomize", staged, stdout=core.DEVNULL)
 
 

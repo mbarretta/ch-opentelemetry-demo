@@ -1,0 +1,43 @@
+# Who may call the concierge agent.
+#
+# The agent's HTTP API has no authentication and the pod holds the live model
+# API_KEY (the Secret llm-credentials), so every pod in the otel-demo namespace
+# could otherwise spend that credential. The only legitimate caller is the
+# storefront: the frontend's server-side /api/assistant routes reach it at
+# http://agent:8010 (AGENT_BASE_URL in demo-values.yaml), and the front proxy
+# sends /api/assistant/ to the frontend rather than to the agent.
+#
+# Ingress only, deliberately: the agent still calls the model endpoint, the MCP
+# server and the gateway collector, and an egress rule here would break all
+# three. A pod selected by an ingress rule refuses every other inbound
+# connection, which is the whole effect -- and the only one, since nothing in
+# the chart probes the agent (no liveness or readiness probe is rendered).
+#
+# The two selectors are the labels the pinned chart (0.41.0) puts on the pods,
+# not the ones it puts on the Deployments: `opentelemetry.io/name` is also what
+# the chart's own Deployment selectors match on. tests/test_eks_check.py asserts
+# both against the recorded render, so a chart bump that renames the label
+# fails the suite instead of quietly admitting the whole namespace again.
+#
+# EKS enforces this only because the vpc-cni add-on is configured with
+# enableNetworkPolicy (deploy/eks/tofu/eks.tf). Without it the API server
+# accepts the object and no traffic is ever filtered.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: agent-allow-frontend
+  namespace: otel-demo
+spec:
+  podSelector:
+    matchLabels:
+      opentelemetry.io/name: agent
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              opentelemetry.io/name: frontend
+      ports:
+        - protocol: TCP
+          port: 8010

@@ -56,8 +56,9 @@ def deploy():
     Ordered so that nothing expensive or half-done happens after a knowable refusal: the
     environment and the published-image gate first, then the AWS session and kubeconfig, then
     the zero-node refusal (deploying onto no nodes would leave every pod Pending until the
-    20-minute `helm --wait` gave up), and only then the namespaces, Secrets, collector, and the
-    release. Safe to re-run: every step is an apply or an upgrade.
+    20-minute `helm --wait` gave up), and only then the namespaces, the agent's NetworkPolicy,
+    the Secrets, the collector and the release. Safe to re-run: every step is an apply or an
+    upgrade.
 
     The order, and what each step is waiting for the one before it to have done:
 
@@ -65,14 +66,15 @@ def deploy():
     2. AWS session and ECR login -- the first read of the OpenTofu state
     3. refuse a node group at zero, *before* the first kubectl call
     4. kubeconfig, then both namespaces (applied manifests, so a re-run is a no-op)
-    5. `clickstack-credentials`, which the collector in step 6 starts by reading
-    6. the ClickStack collector: apply, wait for the roll-out, show its first log lines
-    7. `clickstack-otlp-token`, the credential the demo's own collector presents to it
-    8. `langfuse-credentials` and `llm-credentials`: applied, or deleted when `.env` dropped them
-    9. the generated values, written from `.env` and the build manifest
-    10. `helm upgrade --install` with the static and the generated values, in that order
-    11. the tunnel, whose failure is tolerated
-    12. the three URLs
+    5. the agent's NetworkPolicy, in the API before the release creates the pod it selects
+    6. `clickstack-credentials`, which the collector in step 7 starts by reading
+    7. the ClickStack collector: apply, wait for the roll-out, show its first log lines
+    8. `clickstack-otlp-token`, the credential the demo's own collector presents to it
+    9. `langfuse-credentials` and `llm-credentials`: applied, or deleted when `.env` dropped them
+    10. the generated values, written from `.env` and the build manifest
+    11. `helm upgrade --install` with the static and the generated values, in that order
+    12. the tunnel, whose failure is tolerated
+    13. the three URLs
     """
     # docker for the ECR login below; the other four are this command's whole tool set.
     core.need("aws", "docker", "tofu", "kubectl", "helm")
@@ -109,6 +111,8 @@ def deploy():
     k8s.ensure_namespace(config.NS_CS)
     k8s.ensure_namespace(config.NS_DEMO)
 
+    restrict_agent_ingress()
+
     # The collector reads all five of these with `envFrom` and CrashLoops without any one of
     # them, so the Secret goes in before the manifest that references it.
     core.log(f"creating Secret {config.NS_CS}/{config.SECRET_CLICKSTACK}")
@@ -133,6 +137,22 @@ def deploy():
 
     install_release(values.write_values(values.eks_values(env, published, langfuse)))
     open_tunnel()
+
+
+def restrict_agent_ingress():
+    """Apply the static NetworkPolicy that limits who may call the agent.
+
+    With the namespace and before the release, not after it: the agent pod holds the live model
+    credential and answers unauthenticated requests, so the policy that fronts it belongs in
+    the API before the pod exists rather than for the second half of a `helm --wait`.
+
+    Enforcement is the cluster's half of this, and it is not a given: the VPC CNI ignores
+    NetworkPolicy objects unless the add-on is configured with `enableNetworkPolicy`, which
+    `deploy/eks/tofu/eks.tf` does. A cluster applied before that went in accepts this manifest
+    and filters nothing, so `eks apply` is what makes it take effect there.
+    """
+    core.log(f"restricting ingress to the agent ({config.NETWORK_POLICY_MANIFEST})")
+    core.run("kubectl", "apply", "-f", config.k8s_dir() / config.NETWORK_POLICY_MANIFEST)
 
 
 def deploy_collector():

@@ -54,6 +54,14 @@ which authenticates every request with IAM. The demo's bundled backends
 (Jaeger, Prometheus, Grafana, OpenSearch) are turned off; ClickStack replaces
 all four.
 
+Inside the namespace, `k8s/network-policy.yaml` is the one restriction: only the
+frontend pod may open a connection to the agent's port 8010. The agent's HTTP
+API is unauthenticated and its pod holds the live model `API_KEY`, so without
+that policy any pod in `otel-demo` -- and anything on your laptop that can reach
+the port-forward, through the front proxy's `/api/assistant/` route -- could
+spend the credential. The policy is ingress-only: the agent still calls the
+model endpoint, the MCP server and the collector.
+
 ## Design decisions
 
 | Decision | Why |
@@ -67,6 +75,7 @@ all four.
 | **Nightly scale-to-zero via EventBridge Scheduler** | A forgotten demo costs at most one day of nodes. The schedule calls `eks:UpdateNodegroupConfig` directly (universal target), so there is no Lambda to maintain. |
 | **Cost trims in the EKS module** | No control-plane CloudWatch logs, no customer-managed KMS key (`create_kms_key = false` together with `encryption_config = null`, which the module needs to skip the encryption block entirely; EKS still encrypts secrets with an AWS-owned key), no IRSA OIDC provider, no EBS CSI (nothing needs a PersistentVolume with the backends off). |
 | **One ECR repository per custom image** (`ch-opentelemetry-demo/{frontend,frontend-proxy,agent,mcp}`) | Per-repository lifecycle policies and scan settings, and `demo.py eks status` can report each image independently. Tags are `MUTABLE` because they are derived from image content: the same tag always means the same bytes, so re-pushing it is a no-op that must be allowed rather than an overwrite of something else. That is also why the Helm values pull with `IfNotPresent`. |
+| **One NetworkPolicy, on the agent only** (`k8s/network-policy.yaml`, with `enableNetworkPolicy` on the `vpc-cni` add-on) | The agent is the one pod in the demo that both answers unauthenticated requests and holds a credential worth money, so it is the one pod worth fencing: ingress to port 8010 is limited to the frontend pod, which is its only real caller. Defense in depth rather than a closed hole -- the storefront route in front of it has no authentication either, and the laptop target has the same posture -- so it buys a bounded blast radius, not a secured endpoint. The add-on setting is what makes it real: the VPC CNI accepts NetworkPolicy objects and ignores them unless its network policy agent is switched on, so a cluster applied without it needs one more `eks apply`. |
 | **Secrets only in Kubernetes Secrets** | `demo.py eks deploy` assembles the ClickStack, Langfuse and model credentials from the root `.env`, pipes the Secret manifests to `kubectl apply -f -` on stdin, and lets the collector and the agent read them through `${env:...}` and `secretKeyRef`. No credential is written to a file in the cluster, to the Helm release, or to a process argument list. |
 | **Langfuse stays external** | Langfuse Cloud serves both targets, so nothing in the cluster stores assistant traces and the EKS and laptop runs land in the same project. The collector's Langfuse pipeline is only rendered when `.env` carries the keys; without them the demo still runs, ClickStack-only. |
 
@@ -118,6 +127,7 @@ status is `Ready`.
 | `tofu/` | OpenTofu: network (`vpc.tf`: default-VPC lookup, or the dedicated-VPC module behind `use_default_vpc = false`), EKS + node group (`eks.tf`), the four ECR repositories (`ecr.tf`), nightly schedule (`scheduler.tf`), S3 backend with no account values (`backend.tf`), variables, outputs, `terraform.tfvars.example`, committed lock file. |
 | `k8s/demo-values.yaml` | Static Helm values for the demo chart: backends off, chatbot off, gateway collector → ClickStack with the token from a Secret, the traces-pipeline transforms, and the assistant env for the frontend, agent and MCP services. Account-specific values (image repositories and tags) and the Langfuse pipeline are generated at deploy time into `.runtime/eks/values.generated.yaml`. |
 | `k8s/clickstack-collector.yaml` | Namespace, Deployment and Service for the ClickStack collector; credentials come from the Secret `demo.py eks deploy` creates. |
+| `k8s/network-policy.yaml` | The agent's ingress policy: only the frontend pod may reach port 8010, so nothing else in `otel-demo` can spend the model credential. Applied by `demo.py eks deploy` with the namespaces, parsed offline by `eks check`, and enforced only because the `vpc-cni` add-on carries `enableNetworkPolicy`. |
 | `sql/create-user.sql` | Creates the `clickstack` ClickHouse user with grants on `otel`. Run it once in the ClickHouse Cloud SQL console with a real password in place of `SECURE_PASSWORD`; the collector creates the tables. |
 
 The Python that drives all of it is in `launcher/eks/` at the repository root,
