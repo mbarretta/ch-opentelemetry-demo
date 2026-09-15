@@ -56,6 +56,16 @@ module "eks" {
       # Install the CNI before the node group so nodes come up with networking
       # already configured instead of being re-patched afterwards.
       before_compute = true
+      # The VPC CNI ignores NetworkPolicy objects unless its network policy
+      # agent is enabled, so without this the API server would accept
+      # k8s/network-policy.yaml and filter nothing: the agent pod holds the
+      # live model credential and answers unauthenticated requests, so that
+      # policy is the only thing keeping the rest of the namespace off it.
+      # A string, not a bool -- the add-on's configuration schema types it as
+      # one, and the API rejects a JSON boolean here.
+      configuration_values = jsonencode({
+        enableNetworkPolicy = "true"
+      })
     }
   }
 

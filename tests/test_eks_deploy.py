@@ -228,6 +228,11 @@ def secret(shell, name):
     }
 
 
+def network_policy():
+    """The `kubectl apply` of the agent's ingress policy, from the committed manifest."""
+    return ["kubectl", "apply", "-f", str(config.k8s_dir() / config.NETWORK_POLICY_MANIFEST)]
+
+
 def deletion(name):
     return ["kubectl", "-n", config.NS_DEMO, "delete", "secret", name, "--ignore-not-found"]
 
@@ -330,7 +335,7 @@ def steps(cluster, monkeypatch):
 
 
 def test_deploy_runs_every_step_in_the_order_the_cluster_needs_them(cluster, steps):
-    """AC2: the twelve steps, as the argv of every process the deploy starts, in order."""
+    """AC2: the thirteen steps, as the argv of every process the deploy starts, in order."""
     lifecycle.deploy()
 
     assert argvs(cluster) == [
@@ -345,9 +350,11 @@ def test_deploy_runs_every_step_in_the_order_the_cluster_needs_them(cluster, ste
         *kubeconfig(),
         APPLY,
         APPLY,
-        # 5. clickstack-credentials
+        # 5. the agent's ingress policy, before the release creates the pod it selects
+        network_policy(),
+        # 6. clickstack-credentials
         APPLY,
-        # 6. the collector, its roll-out, and its first log lines
+        # 7. the collector, its roll-out, and its first log lines
         ["kubectl", "apply", "-f", str(config.k8s_dir() / config.COLLECTOR_MANIFEST)],
         [
             "kubectl",
@@ -359,11 +366,11 @@ def test_deploy_runs_every_step_in_the_order_the_cluster_needs_them(cluster, ste
             "--timeout=300s",
         ],
         ["kubectl", "-n", config.NS_CS, "logs", config.COLLECTOR_DEPLOYMENT, "--tail=40"],
-        # 7. and 8. the OTLP token, then the two optional Secrets
+        # 8. and 9. the OTLP token, then the two optional Secrets
         APPLY,
         APPLY,
         APPLY,
-        # 10. the release, from the two values files
+        # 11. the release, from the two values files
         ["helm", "repo", "add", config.HELM_REPO_NAME, config.HELM_REPO_URL, "--force-update"],
         ["helm", "repo", "update", config.HELM_REPO_NAME],
         [
@@ -396,9 +403,30 @@ def test_deploy_runs_every_step_in_the_order_the_cluster_needs_them(cluster, ste
         ("Secret", config.SECRET_LANGFUSE),
         ("Secret", config.SECRET_LLM),
     ]
-    # 1. and 11.: the gate ran before the first process, the tunnel after the last one.
+    # 1. and 12.: the gate ran before the first process, the tunnel after the last one.
     assert steps.at("require_published") == [0]
     assert steps.at("start") == [len(cluster.calls)]
+
+
+def test_deploy_restricts_ingress_to_the_agent_before_the_release_creates_it(cluster, steps):
+    """AC4: the committed NetworkPolicy is applied, once, and ahead of the `helm upgrade`.
+
+    The order is the assertion rather than the presence: the agent answers unauthenticated
+    requests with the live model credential in its environment, so a policy applied after the
+    release would leave it open for the length of a twenty-minute `helm --wait`.
+    """
+    lifecycle.deploy()
+
+    sequence = argvs(cluster)
+    assert sequence.count(network_policy()) == 1, sequence
+    assert sequence.index(network_policy()) < [argv[:2] for argv in sequence].index(
+        ["helm", "upgrade"]
+    )
+    # Applied by path rather than piped, so the committed manifest is the whole contract: it
+    # names the namespace itself, because nothing on that argv does.
+    policy = yaml.safe_load(Path(network_policy()[-1]).read_text())
+    assert policy["kind"] == "NetworkPolicy"
+    assert policy["metadata"]["namespace"] == config.NS_DEMO
 
 
 def test_deploy_refuses_a_node_group_at_zero_before_it_touches_the_cluster(cluster, steps):

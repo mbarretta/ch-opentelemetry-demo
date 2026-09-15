@@ -102,6 +102,35 @@ def tools(monkeypatch):
     return required
 
 
+def rendered_pod(service):
+    """The pod template the recorded render gives `service`, found by its example image."""
+    documents = check.load_documents(recorded(CONFIGURED))
+    workloads = [d for d in documents if d.get("kind") in check.WORKLOAD_KINDS]
+    workload = check.service_workload(workloads, service)
+    assert workload is not None, f"the recorded render has no workload running our {service}"
+    return workload["spec"]["template"]
+
+
+def selects(selector, labels):
+    """Whether a NetworkPolicy `matchLabels` selector matches a pod with `labels`."""
+    return selector.items() <= labels.items()
+
+
+@pytest.fixture
+def staged(monkeypatch, fake_sh):
+    """What the offline parse staged for kustomize, read while the temporary copy still exists."""
+    seen = []
+
+    def recording(*args, **kwargs):
+        if [str(argument) for argument in args[:2]] == ["kubectl", "kustomize"]:
+            directory = Path(args[2])
+            seen.append({path.name: path.read_text() for path in directory.iterdir()})
+        return fake_sh.run(*args, **kwargs)
+
+    monkeypatch.setattr(core, "run", recording)
+    return seen
+
+
 @pytest.fixture
 def values_files(monkeypatch, fake_sh):
     """The `-f` files of each `helm template`, read while they still exist.
@@ -443,19 +472,77 @@ def test_check_renders_exactly_what_the_deploy_installs(tools, fake_sh, values_f
         ]
 
 
-def test_check_uses_the_cluster_to_validate_the_manifest_when_one_answers(tools, fake_sh, renders):
+def test_check_uses_the_cluster_to_validate_the_manifests_when_one_answers(tools, fake_sh, renders):
     """A cluster is a bonus: it adds schema validation, and its absence changes the parse."""
     check.check()
 
-    manifest = config.k8s_dir() / config.COLLECTOR_MANIFEST
     assert fake_sh.calls[4].argv == [
         "kubectl",
         "apply",
         "--dry-run=client",
-        "-f",
-        str(manifest),
+        *[
+            argument
+            for name in config.STATIC_MANIFESTS
+            for argument in ("-f", str(config.k8s_dir() / name))
+        ],
     ]
     assert not any("kustomize" in line for line in fake_sh.lines())
+
+
+def test_the_offline_parse_covers_every_manifest_the_deploy_applies_as_is(
+    tools, fake_sh, renders, staged
+):
+    """AC5: the NetworkPolicy is parsed beside the collector, from copies of the real files.
+
+    One kustomize build over both, so a missing `apiVersion` or a mistyped `kind` in either is
+    named here rather than by the API server in the middle of a deploy.
+    """
+    fake_sh.reply("kubectl version", returncode=1)
+
+    check.check()
+
+    assert len(staged) == 1, staged
+    assert set(staged[0]) == {"kustomization.yaml", *config.STATIC_MANIFESTS}
+    kustomization = yaml.safe_load(staged[0]["kustomization.yaml"])
+    assert kustomization == {"resources": list(config.STATIC_MANIFESTS)}
+    for name in config.STATIC_MANIFESTS:
+        assert staged[0][name] == (config.k8s_dir() / name).read_text(), (
+            f"{name} was staged as something other than the committed file"
+        )
+
+
+def test_the_agent_network_policy_selects_the_pods_the_chart_actually_renders():
+    """AC2: the policy's two selectors and its port, against the recorded render's labels.
+
+    The whole risk in this manifest is a label that no pod carries: a `podSelector` that
+    matches nothing leaves the agent open, and a `from` selector that matches nothing cuts the
+    storefront off. Both are asserted against the pinned chart's own output, so a bump that
+    renames `opentelemetry.io/name` fails here instead of in front of an audience.
+    """
+    policy = yaml.safe_load((config.k8s_dir() / config.NETWORK_POLICY_MANIFEST).read_text())
+    agent = rendered_pod("agent")["metadata"]["labels"]
+    frontend = rendered_pod("frontend")["metadata"]["labels"]
+    port = rendered_pod("agent")["spec"]["containers"][0]["ports"][0]["containerPort"]
+
+    assert policy["metadata"]["namespace"] == config.NS_DEMO
+    assert policy["spec"]["policyTypes"] == ["Ingress"], (
+        "egress stays open: the agent calls the model endpoint, the MCP server and the collector"
+    )
+    selector = policy["spec"]["podSelector"]["matchLabels"]
+    assert selects(selector, agent) and not selects(selector, frontend), (
+        f"the policy selects {selector}, which is not the agent pod alone"
+    )
+
+    rules = policy["spec"]["ingress"]
+    assert len(rules) == 1, "one allowed caller; anything else is a second way to spend the key"
+    for allowed in rules[0]["from"]:
+        matched = allowed["podSelector"]["matchLabels"]
+        assert selects(matched, frontend) and not selects(matched, agent), (
+            f"the policy admits {matched}, which is not the storefront pod alone"
+        )
+    assert rules[0]["ports"] == [{"protocol": "TCP", "port": port}], (
+        f"the agent's container listens on {port}"
+    )
 
 
 def test_a_missing_tool_is_named_and_nothing_else_runs(monkeypatch, fake_sh):

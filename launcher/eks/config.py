@@ -75,9 +75,19 @@ COLLECTOR_DEPLOYMENT = "deploy/clickstack-otel-collector"
 # credentials it has just read are being accepted.
 COLLECTOR_LOG_TAIL = 40
 
+# The agent's ingress policy: the other static manifest `eks deploy` applies as-is, restricting
+# who may call the pod that holds the model credential. Named here rather than at the call site
+# for the same reason the collector manifest is -- `eks deploy` applies it and `eks check`
+# parses it, and a filename spelled in two modules is a filename that can drift in one.
+NETWORK_POLICY_MANIFEST = "network-policy.yaml"
+# Every manifest under `k8s_dir()` that is applied unchanged, which is exactly what `eks check`
+# has to be able to parse offline. The generated and static *values* are not here: those are
+# Helm input, and the check renders them instead.
+STATIC_MANIFESTS = (COLLECTOR_MANIFEST, NETWORK_POLICY_MANIFEST)
+
 
 def eks_dir():
-    """The deployment data: OpenTofu, the static Helm values, the collector manifest, the SQL."""
+    """The deployment data: OpenTofu, the static Helm values, the static manifests, the SQL."""
     return core.ROOT / "deploy/eks"
 
 
