@@ -275,8 +275,8 @@ def smoke_local():
 # belongs in the set here rather than only in the unfiltered capture.
 EKS_SERVICES = ("frontend-web", "frontend-proxy", "frontend", "agent", "product-catalog")
 # The agent's own span for the turn, and the storefront service whose server span carries the
-# route. The route is `ops.ASSISTANT_PATH` (`/api/assistant/message`) and deliberately not
-# `collector.ASSISTANT_PATH`, which is the `/api/assistant` prefix the OTTL statements match on.
+# route. The route is `ops.ASSISTANT_MESSAGE_PATH` (`/api/assistant/message`) and deliberately
+# not `collector.ASSISTANT_PATH` -- the `/api/assistant` prefix the OTTL statements match on.
 TURN_SPAN = "concierge.turn"
 ROUTE_SERVICE = "frontend"
 # The gateway collector batches spans, the ClickStack collector batches again, and ClickHouse
@@ -401,11 +401,11 @@ def eks_trace_failures(spans, parent):
     if stray:
         failures.append(f"spans whose parent is not in the trace: {stray}")
     if not any(
-        span["service"] == ROUTE_SERVICE and span["route"] == ops.ASSISTANT_PATH
+        span["service"] == ROUTE_SERVICE and span["route"] == ops.ASSISTANT_MESSAGE_PATH
         for span in spans
     ):
         failures.append(
-            f"no {ROUTE_SERVICE} span carries http.route = {ops.ASSISTANT_PATH}"
+            f"no {ROUTE_SERVICE} span carries http.route = {ops.ASSISTANT_MESSAGE_PATH}"
         )
     if parent not in {span["spanId"] for span in spans}:
         failures.append("the synthetic browser parent span is not in the trace")
