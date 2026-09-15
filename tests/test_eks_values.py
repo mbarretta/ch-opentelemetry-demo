@@ -9,7 +9,7 @@ the credentials, while the pipeline that carries the filtered spans stays valid 
 import pytest
 import yaml
 
-from launcher import collector, core, stack
+from launcher import collector, core, images, stack
 from launcher.eks import config, values
 
 # A fully filled-in `.env`: the values the generated document is allowed to render plus the
@@ -31,11 +31,14 @@ FULL_ENV = {
     "CLICKHOUSE_PASSWORD": "sensitive-clickhouse",
     "OTLP_AUTH_TOKEN": "sensitive-otlp-token",
 }
-# What `demo.py publish` records, in the shape images.PUBLISHED_FIELDS pins.
+# What `demo.py publish` records, in the shape images.PUBLISHED_FIELDS pins. The tag is named
+# because the gate below compares it against the current build tag, which is the check the
+# document's own image references cannot make for themselves.
+PUBLISHED_TAG = "c0ffee1234"
 PUBLISHED = {
     service: {
         "repository": f"111122223333.dkr.ecr.us-east-1.amazonaws.com/otel-demo-eks/{service}",
-        "tag": "c0ffee1234",
+        "tag": PUBLISHED_TAG,
         "digest": "sha256:" + "d" * 64,
     }
     for service in core.IMAGES
@@ -94,6 +97,28 @@ def static_values():
 
 
 @pytest.fixture
+def gate(monkeypatch):
+    """`images.require_published()` over a `published` section the test supplies.
+
+    The refusals below are the gate's rather than this module's: `lifecycle.deploy` runs it
+    before `eks_values`, ahead of the first AWS and kubectl call, so a partial set never
+    reaches `image_overrides` and `image_overrides` re-checks nothing. Returns a callable so
+    each case reads as "publish this, then run the gate".
+
+    `build_tag()` hashes the pinned upstream checkout through a subprocess, which has nothing
+    to do with whether the published set is complete, so it is pinned to the tag `PUBLISHED`
+    carries -- what the tag is computed from is tests/test_build.py's subject.
+    """
+
+    def published(section):
+        monkeypatch.setattr(images, "read_manifest", lambda: {"published": section})
+        monkeypatch.setattr(images, "build_tag", lambda: PUBLISHED_TAG)
+        return images.require_published
+
+    return published
+
+
+@pytest.fixture
 def configured():
     return values.eks_values(FULL_ENV, PUBLISHED, LANGFUSE)
 
@@ -117,13 +142,26 @@ def test_all_four_image_references_come_from_the_manifest(configured):
     )
 
 
-def test_a_missing_published_image_refuses_instead_of_emitting_a_partial_set():
+# --- the gate this module's image references depend on --------------------------------------
+#
+# `image_overrides` used to re-check the published set and refuse a partial one itself. That
+# branch was unreachable -- `lifecycle.deploy` calls `images.require_published()` first, which
+# tests/test_eks_deploy.py pins at step 0 -- and weaker than the gate it sat behind, reading
+# `repository` and `tag` where the gate reads every field in `images.PUBLISHED_FIELDS` and the
+# tag's value too. It is gone; the refusal it stood for is asserted here at the gate instead,
+# so the deletion does not take the behaviour with it. The gate's three message shapes are
+# tests/test_publish.py's subject. What the two refusal cases below assert is that a set this
+# module could not render is refused before it is asked to, and the third that what the gate
+# hands on is what this module renders from.
+
+
+def test_a_missing_published_image_refuses_before_a_partial_set_can_be_generated(gate):
     """A partial set would deploy the released image beside ours and look like a bad build."""
     partial = {service: entry for service, entry in PUBLISHED.items() if service != "mcp"}
     partial["frontend-proxy"] = {"repository": PUBLISHED["frontend-proxy"]["repository"]}
 
     with pytest.raises(SystemExit) as failure:
-        values.eks_values(FULL_ENV, partial, LANGFUSE)
+        gate(partial)()
 
     message = str(failure.value)
     assert "mcp" in message, "the service with no entry at all is named"
@@ -131,11 +169,36 @@ def test_a_missing_published_image_refuses_instead_of_emitting_a_partial_set():
     assert "frontend" in message and "publish" in message
 
 
-def test_a_never_published_build_refuses():
+def test_a_never_published_build_refuses(gate, monkeypatch):
+    """The two shapes of nothing: a build that was never published, and no build at all."""
     with pytest.raises(SystemExit):
-        values.eks_values(FULL_ENV, {}, LANGFUSE)
+        gate({})()
+
+    # One level up from a `published` section: no manifest file to read a section out of,
+    # which is the gate's other refusal for a deploy that has never published anything.
+    monkeypatch.setattr(images, "read_manifest", lambda: None)
     with pytest.raises(SystemExit):
-        values.eks_values(FULL_ENV, None, LANGFUSE)
+        images.require_published()
+
+
+def test_the_gate_hands_on_the_complete_set_image_overrides_assumes(gate):
+    """The contract, asserted where the two halves meet: the gate's output is this module's input.
+
+    `digest` is in the gate's field tuple but in no image reference -- the release points at
+    `repository:tag` -- which is why re-checking the set here could only ever be a weaker copy
+    of the same check. What the references themselves carry is
+    test_all_four_image_references_come_from_the_manifest's subject; what is asserted here is
+    the one property only the gate can establish and the deleted check never could, because it
+    read the tag field and never its value: every reference is at the *current* build tag.
+    """
+    published = gate(PUBLISHED)()
+
+    assert published == PUBLISHED, "the gate accepts this module's `published`, digest and all"
+
+    document = values.eks_values(FULL_ENV, published, LANGFUSE)
+
+    tags = {document["components"][service]["imageOverride"]["tag"] for service in core.IMAGES}
+    assert tags == {PUBLISHED_TAG}, "the tag the gate compared against the build inputs"
 
 
 def test_the_langfuse_exporter_exists_exactly_when_langfuse_is_configured(
