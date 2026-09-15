@@ -127,24 +127,27 @@ def clickstack_endpoint(static):
 
 
 def image_overrides(published):
-    """`imageOverride.{repository,tag}` for all four services, or refuse to deploy a partial set.
+    """`imageOverride.{repository,tag}` for all four services, from an already-gated manifest.
+
+    `images.require_published()` is the gate, and this function assumes a complete set: a
+    repository and a tag for every service in `core.IMAGES`. Both callers supply one and
+    neither needs re-checking here. `lifecycle.deploy` runs the gate before it reaches this
+    module -- ahead of the first AWS and kubectl call, so the refusal costs nothing -- and it
+    guarantees more than this document uses: every field in `images.PUBLISHED_FIELDS`, digest
+    included, at the current build tag. `eks check` passes `check.example_images()`, which
+    synthesises the two fields an image reference needs rather than a published record.
+
+    Nothing here re-checks any of it. A second check would have to be kept in step with the
+    gate's, and the copy that used to live on these lines had already fallen behind: it read
+    `repository` and `tag` and never their values, so it could not see the case that matters --
+    a complete set published at a tag the build inputs have moved past, which would roll out
+    last week's images perfectly happily.
 
     `pullPolicy: IfNotPresent` is in the static values: the tags are content-derived, so it is
     true of every deployment. All four or none, because a release running two of our images and
-    two released ones looks like a broken build rather than a missing `publish`.
+    two released ones looks like a broken build rather than a missing `publish` -- which is
+    what the gate refuses on.
     """
-    published = published or {}
-    unpublished = [
-        service
-        for service in core.IMAGES
-        if not all((published.get(service) or {}).get(field) for field in ("repository", "tag"))
-    ]
-    if unpublished:
-        core.die(
-            f"no published image for {', '.join(unpublished)}: "
-            "run `demo.py build` then `demo.py publish` before deploying. "
-            f"All of {', '.join(core.IMAGES)} must be in the manifest with a repository and tag."
-        )
     return {
         service: {
             "imageOverride": {
