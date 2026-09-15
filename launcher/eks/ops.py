@@ -49,7 +49,7 @@ AGENT_SERVICE = "agent"
 # `http.route` attribute the query below reads: a prefix that moved in one place and not the
 # other would leave this report answering zero rows instead of saying it had lost the route.
 ASSISTANT_ROUTE_PATTERN = f"{collector.ASSISTANT_PATH}/%"
-ASSISTANT_PATH = f"{collector.ASSISTANT_PATH}/message"
+ASSISTANT_MESSAGE_PATH = f"{collector.ASSISTANT_PATH}/message"
 ASSISTANT_MESSAGE = "Find a beginner telescope for the moon under $150"
 ASSISTANT_BUDGET = 150
 ASSISTANT_CURRENCY = "USD"
@@ -269,11 +269,11 @@ def assistant_turn(port=None):
     """
     httpx = _httpx()
     port = tunnel.resolved_port(port)
-    endpoint = tunnel.url(port).rstrip("/") + ASSISTANT_PATH
+    endpoint = tunnel.url(port).rstrip("/") + ASSISTANT_MESSAGE_PATH
     core.log(f"one assistant turn through the tunnel ({endpoint})")
     try:
         with storefront_client(port) as client:
-            response = client.post(ASSISTANT_PATH, json=assistant_request())
+            response = client.post(ASSISTANT_MESSAGE_PATH, json=assistant_request())
             response.raise_for_status()
             answer = response.json()
     except (httpx.HTTPError, ValueError) as failure:

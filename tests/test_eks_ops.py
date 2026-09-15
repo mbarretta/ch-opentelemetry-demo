@@ -123,7 +123,7 @@ class FakeHttpx:
 
 def answer_everything(request):
     """The storefront answers one turn; ClickHouse answers a one-row table for every query."""
-    if request.url.path == ops.ASSISTANT_PATH:
+    if request.url.path == ops.ASSISTANT_MESSAGE_PATH:
         return httpx.Response(200, json=TURN)
     return httpx.Response(200, text=TABLE)
 
@@ -237,7 +237,10 @@ def test_verify_issues_the_bash_queries_and_the_two_the_merge_made_possible(clus
     # The route prefix is read from the module whose OTTL statements set `http.route`, so the
     # query cannot go on matching a prefix the storefront has stopped using.
     assert ops.ASSISTANT_ROUTE_PATTERN == f"{collector.ASSISTANT_PATH}/%"
-    assert ops.ASSISTANT_PATH == f"{collector.ASSISTANT_PATH}/message"
+    assert ops.ASSISTANT_MESSAGE_PATH == f"{collector.ASSISTANT_PATH}/message"
+    # `ops` reads `collector.ASSISTANT_PATH`, so it must not bind that name itself: the prefix
+    # and the one route it sends a turn to are different values and need different names.
+    assert not hasattr(ops, "ASSISTANT_PATH"), "the prefix's name belongs to collector alone"
     assert statements.count(f"FORMAT {ops.OUTPUT_FORMAT}") == 5, "every report is a table"
     assert f"INTERVAL {ops.WINDOW}" in statements
 
@@ -246,9 +249,9 @@ def test_verify_drives_one_assistant_turn_before_it_counts_anything(cluster, htt
     """The turn is the demo's proof, and its spans have to be inside the window queried."""
     assert exits_zero(ops.verify) == TRACE_ID
 
-    assert http.paths()[0] == ops.ASSISTANT_PATH, "the turn runs first, then the counts"
-    assert http.paths().count(ops.ASSISTANT_PATH) == 1
-    request = json.loads(http.bodies(ops.ASSISTANT_PATH)[0])
+    assert http.paths()[0] == ops.ASSISTANT_MESSAGE_PATH, "the turn runs first, then the counts"
+    assert http.paths().count(ops.ASSISTANT_MESSAGE_PATH) == 1
+    request = json.loads(http.bodies(ops.ASSISTANT_MESSAGE_PATH)[0])
     assert set(request) == {
         "shop_session_id",
         "request_id",
@@ -280,7 +283,7 @@ def test_a_zero_session_replay_count_is_reported_not_failed(cluster, monkeypatch
     replayless = FakeHttpx(
         lambda request: (
             httpx.Response(200, json=TURN)
-            if request.url.path == ops.ASSISTANT_PATH
+            if request.url.path == ops.ASSISTANT_MESSAGE_PATH
             else httpx.Response(200, text=ZERO_REPLAY)
         )
     )
@@ -297,7 +300,7 @@ def test_verify_still_counts_rows_when_the_tunnel_is_not_up(cluster, monkeypatch
     """The SQL half says whether anything is landing at all, which is worth knowing either way."""
 
     def refuse_the_turn(request):
-        if request.url.path == ops.ASSISTANT_PATH:
+        if request.url.path == ops.ASSISTANT_MESSAGE_PATH:
             raise httpx.ConnectError("connection refused", request=request)
         return httpx.Response(200, text=TABLE)
 
