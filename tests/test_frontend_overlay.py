@@ -9,6 +9,8 @@ layout.
 
 import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import get_args
 
@@ -22,6 +24,10 @@ OVERLAY = ROOT / "frontend/overlay"
 PATCHES = ROOT / "frontend/patches"
 UPSTREAM_FRONTEND = ROOT / ".upstream/opentelemetry-demo/src/frontend"
 ENVOY_TEMPLATE = ROOT / "docker/envoy.tmpl.yaml"
+DOCUMENT_PATCH = PATCHES / "0006-document-assistant-env.patch"
+# Already required to build the frontend image and to run scripts/check-frontend.sh; used here
+# only to evaluate the inline env script the way a browser does.
+NODE = shutil.which("node")
 
 # Browser code: everything here is compiled into the client bundle.
 ASSISTANT_SOURCES = sorted(
@@ -250,9 +256,117 @@ def test_cypress_fields_patch_adds_the_assistant_hooks():
 
 
 def test_document_patch_injects_assistant_env_without_next_public_prefix():
-    patch = (PATCHES / "0006-document-assistant-env.patch").read_text()
+    patch = DOCUMENT_PATCH.read_text()
     assert "ASSISTANT_TRANSPORT" in patch and "ASSISTANT_DEMO_DETAILS" in patch
     assert "NEXT_PUBLIC_ASSISTANT" not in patch
+
+
+# -- the inline window.ENV script (frontend/patches/0006) -------------------------------------
+#
+# _document.tsx writes window.ENV into an inline <script> through dangerouslySetInnerHTML, so
+# every value it interpolates is part of a JavaScript program. Upstream wrapped each one in single
+# quotes. None of the values is prose today -- they are operator-set strings from .env, shaped
+# like an enum, a service name, a URL or a boolean -- so this is hardening, not a live injection
+# path: an apostrophe typed into any of them, or a free-text key added later, would end the string
+# literal and leave the browser parsing the rest of the value as code.
+
+ENV_VALUE_LINE = re.compile(r"^ +(\w+): (.+),$", flags=re.MULTILINE)
+
+
+def env_script_source() -> tuple[str, str, dict[str, str | None]]:
+    """The patched document's escaping helper, its `envString` template, and the names it binds.
+
+    Both are lifted verbatim rather than restated here, so a test that passes is a statement
+    about the shipped patch and not about a copy of it. The names map to the default the
+    destructuring gives them, or to None for the ones that arrive unset when the variable is
+    missing from the frontend service environment.
+    """
+    document = patched_upstream(DOCUMENT_PATCH)
+    helper = re.search(
+        r"^const jsonScriptValue = \(value: unknown\) => (.+);$", document, flags=re.MULTILINE
+    )
+    assert helper, "the document patch has no jsonScriptValue helper"
+    template = re.search(r"const envString = (`\n.*?`);", document, flags=re.DOTALL)
+    assert template, "the document patch has no envString template"
+    defaults = dict(re.findall(r"^  (\w+) = '(.*)',$", document, flags=re.MULTILINE))
+    bound = {
+        name: defaults.get(name)
+        for name in re.findall(r"\$\{jsonScriptValue\((\w+)\)\}", template.group(1))
+    }
+    assert bound, "no window.ENV value goes through jsonScriptValue"
+    return helper.group(1), template.group(1), bound
+
+
+def emitted_env_script(values: dict[str, str]) -> tuple[str, dict[str, str]]:
+    """The inline script the patched document emits for `values`, and the `window.ENV` it yields.
+
+    Escaping can only be checked by running the program, so node evaluates the real helper and
+    the real template the way the browser does: as a function body handed a `window` object. Only
+    the helper's TypeScript parameter annotation is dropped; its body is the shipped one. A name
+    `values` does not mention falls back to its declared default, or to `undefined`.
+    """
+    assert NODE, "node is required to evaluate the inline env script"
+    helper, template, bound = env_script_source()
+    literals = {name: values.get(name, default) for name, default in bound.items()}
+    program = "\n".join(
+        [
+            *(
+                f"const {name} = {'undefined' if value is None else json.dumps(value)};"
+                for name, value in literals.items()
+            ),
+            f"const jsonScriptValue = (value) => {helper};",
+            f"const envString = {template};",
+            "const host = {};",
+            "new Function('window', envString)(host);",
+            "process.stdout.write(JSON.stringify({ script: envString, env: host.ENV }));",
+        ]
+    )
+    result = subprocess.run([NODE, "-e", program], capture_output=True, text=True, check=True)
+    payload = json.loads(result.stdout)
+    return payload["script"], payload["env"]
+
+
+def test_every_window_env_value_is_a_json_literal_not_a_quoted_interpolation():
+    helper, template, bound = env_script_source()
+    emitted = dict(ENV_VALUE_LINE.findall(template))
+    assert emitted, "no window.ENV keys found in the envString template"
+    for key, value in emitted.items():
+        interpolation = re.fullmatch(r"\$\{jsonScriptValue\((\w+)\)\}", value)
+        assert interpolation, (
+            f"window.ENV.{key} is interpolated as {value} rather than a JSON literal"
+        )
+        assert interpolation.group(1) in bound, f"window.ENV.{key} binds an unknown name"
+    assert "'${" not in template, "a window.ENV value is still wrapped in single quotes"
+    # The two halves of the escaping, asserted here as well as exercised by the node tests below,
+    # so an environment without node still fails if either is dropped: JSON quoting for the
+    # apostrophe and the backslash, and the '<' escape for '</script>'.
+    assert "JSON.stringify(" in helper, "the helper no longer JSON-quotes the value"
+    assert re.search(r"\.replace\(/</g, '\\\\u003c'\)", helper), (
+        "the helper no longer escapes '<', so a value can end the script element early"
+    )
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_an_apostrophe_and_a_script_tag_survive_the_inline_env_script():
+    # ASSISTANT_DEMO_DETAILS is the longest-lived of the keys this patch adds and the one most
+    # likely to grow a free-text form, so it carries the apostrophe that used to close the string
+    # literal it was pasted into. The hostile shapes ride along for the same money.
+    prose = """It's Mike's "demo" -- </script><script>alert(1)</script>, a \\ backslash, and \u2028."""
+    script, env = emitted_env_script({"ASSISTANT_DEMO_DETAILS": prose, "ASSISTANT_TRANSPORT": "http"})
+    assert env["ASSISTANT_DEMO_DETAILS"] == prose, "the value did not survive the inline script"
+    # The keys after it are still there, so the value did not swallow the rest of the object.
+    assert env["ASSISTANT_TRANSPORT"] == "http"
+    # And nothing in a value can end the <script> element early, which JSON quoting alone allows.
+    assert "</script" not in script.lower()
+
+
+@pytest.mark.skipif(NODE is None, reason="node is not installed")
+def test_an_unset_env_value_reaches_the_browser_as_the_string_it_always_did():
+    # `'${ENV_PLATFORM}'` emitted the string "undefined" for an unset variable. The JSON literal
+    # keeps that shape rather than quietly changing window.ENV's contract to an empty string.
+    _, env = emitted_env_script({})
+    assert env["NEXT_PUBLIC_PLATFORM"] == "undefined"
+    assert env["ASSISTANT_DEMO_DETAILS"] == ""
 
 
 # -- same-origin API routes (task 5) ---------------------------------------------------------
@@ -647,7 +761,6 @@ TRACER_PATCH = PATCHES / "0009-frontend-tracer-session-replay.patch"
 LOCK_PATCH = PATCHES / "0010-package-lock-hyperdx.patch"
 PACKAGE_PATCH = PATCHES / "0000-package-lint-and-hyperdx.patch"
 APP_PATCH = PATCHES / "0001-app-assistant-provider.patch"
-DOCUMENT_PATCH = PATCHES / "0006-document-assistant-env.patch"
 REPLAY_SDK = "@hyperdx/browser"
 REPLAY_SDK_VERSION = "0.25.1"
 REPLAY_FLAG = "NEXT_PUBLIC_HYPERDX_ENABLED"
@@ -696,6 +809,27 @@ def test_replay_branch_exports_same_origin_and_leaves_the_released_tracer_to_the
     assert body.rstrip().endswith("return;")
 
 
+def test_replay_branch_pins_input_masking_and_keeps_the_agreed_capture_posture():
+    body = replay_branch(patched_upstream(TRACER_PATCH))
+    # @hyperdx/browser 0.25.1 defaults maskAllInputs to true in init() while its own README
+    # documents false, so masking is stated here rather than inherited from a default an SDK bump
+    # could flip silently: typed input -- the checkout form's fields among them -- stays masked.
+    assert "maskAllInputs: true," in body, "the replay branch does not pin input masking"
+    # The rest of the capture posture is a settled decision, not something to drift: full
+    # request/response bodies and console logs are captured on purpose.
+    assert "consoleCapture: true," in body
+    assert "advancedNetworkCapture: true," in body
+
+
+def test_no_patch_claims_session_replay_is_set_on_the_eks_deployment():
+    # The launcher derives PUBLIC_HYPERDX_ENABLED from SESSION_REPLAY on Compose and on EKS; the
+    # comments said EKS set it on the deployment, which stopped being true.
+    for patch in (TRACER_PATCH, DOCUMENT_PATCH):
+        text = patch.read_text()
+        assert "set on the deployment" not in text, f"{patch.name} still says EKS sets it"
+        assert "on both Compose and EKS" in text, f"{patch.name} does not name both targets"
+
+
 def test_replay_patch_only_adds_to_the_released_tracer_and_keeps_the_api_entry_points():
     removed = [
         line
@@ -733,8 +867,8 @@ def test_replay_flag_travels_from_the_service_environment_to_the_tracer():
     # switches beside them, and handed to the browser under the names the tracer reads.
     assert "PUBLIC_HYPERDX_ENABLED = ''," in document
     assert "PUBLIC_HYPERDX_URL = ''," in document
-    assert f"{REPLAY_FLAG}: '${{PUBLIC_HYPERDX_ENABLED}}'," in document
-    assert "NEXT_PUBLIC_HYPERDX_URL: '${PUBLIC_HYPERDX_URL}'," in document
+    assert f"{REPLAY_FLAG}: ${{jsonScriptValue(PUBLIC_HYPERDX_ENABLED)}}," in document
+    assert "NEXT_PUBLIC_HYPERDX_URL: ${jsonScriptValue(PUBLIC_HYPERDX_URL)}," in document
     assert REPLAY_FLAG in patched_upstream(TRACER_PATCH)
 
 

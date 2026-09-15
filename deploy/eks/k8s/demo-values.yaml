@@ -87,7 +87,7 @@ components:
     # the port-forward to the gateway collector.
     # AGENT_BASE_URL is server-side only (the Next.js /api/assistant routes call
     # the agent with it); no agent or model address reaches the browser bundle.
-    # ASSISTANT_DEMO_DETAILS is optional prose and comes from .env via
+    # ASSISTANT_DEMO_DETAILS is an optional opt-in switch and comes from .env via
     # values.generated.yaml, and so does PUBLIC_HYPERDX_ENABLED -- the session
     # replay switch, derived from SESSION_REPLAY per deployment rather than set
     # here, where it recorded every session whatever .env asked for. It only
