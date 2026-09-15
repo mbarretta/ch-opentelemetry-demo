@@ -262,6 +262,63 @@ def test_the_values_files_have_to_be_merged_in_the_order_helm_needs():
     )
 
 
+def test_a_generated_env_value_the_render_disagrees_with_is_caught():
+    """Names are not enough: the value is the thing the deployment actually runs.
+
+    Every generated `envOverrides` value is derived -- from `.env`, from the build manifest, or
+    from another value -- so a name can keep rendering while what it renders stops being what
+    the values document asked for. A wrong model is a release talking to the wrong endpoint,
+    and the names-only check reported nothing at all.
+
+    The second case is the same mistake arriving by a different route: a generated literal that
+    the render reads from a Secret instead. The reference is named in full, because a value
+    that came from somewhere else is as wrong as a value that came back different.
+    """
+    changed = edited(
+        recorded(CONFIGURED),
+        "            - name: LLM_MODEL\n              value: example-model\n",
+        "            - name: LLM_MODEL\n              value: other-model\n",
+    )
+
+    named(problems_for(changed), "agent workload", "LLM_MODEL", "'other-model'", "'example-model'")
+
+    referenced = edited(
+        recorded(CONFIGURED),
+        "            - name: LLM_MODEL\n              value: example-model\n",
+        "            - name: LLM_MODEL\n"
+        "              valueFrom:\n"
+        "                secretKeyRef:\n"
+        "                  key: LLM_MODEL\n"
+        "                  name: llm-credentials\n",
+    )
+
+    named(problems_for(referenced), "LLM_MODEL", "llm-credentials", "'example-model'")
+
+
+def test_the_storefronts_derived_replay_flag_is_compared_by_value():
+    """`PUBLIC_HYPERDX_ENABLED` is the key that made the values comparison necessary.
+
+    It is the one generated value nothing reads from `.env`: `values.frontend_env` derives it
+    from SESSION_REPLAY. It used to be a hardcoded `true` in demo-values.yaml, and when it
+    moved the recordings went stale while the suite stayed green -- the name was still
+    rendered, and the derived value happened to equal the literal it replaced. A deployment
+    that renders the opposite of what SESSION_REPLAY asked for is now a reported problem.
+    """
+    rendered = edited(
+        recorded(CONFIGURED),
+        '            - name: PUBLIC_HYPERDX_ENABLED\n              value: "true"\n',
+        '            - name: PUBLIC_HYPERDX_ENABLED\n              value: "false"\n',
+    )
+
+    named(
+        problems_for(rendered),
+        "frontend workload",
+        "PUBLIC_HYPERDX_ENABLED",
+        "'false'",
+        "'true'",
+    )
+
+
 def test_the_langfuse_exporter_appears_exactly_with_the_credentials():
     """Each render is asserted against the credentials it was made with, so both ways fail.
 
@@ -306,10 +363,16 @@ def test_a_rendered_credential_is_refused():
     )
     named(problems_for(payload), "LANGFUSE_AUTH_HEADER value")
 
+    # The only place the recording carries a value a secret key could be written over is the
+    # agent's LANGFUSE_PROJECT_ID, which is one of the generated values -- so overwriting it is
+    # now caught twice: as a rendered credential, and as a render that disagrees with the
+    # document it was made from. Both are asserted; neither is relaxed away to keep the count.
     key = edited(
         recorded(CONFIGURED), "example-project", check.CHECK_LANGFUSE_ENV["LANGFUSE_SECRET_KEY"]
     )
-    named(problems_for(key), "LANGFUSE_SECRET_KEY value")
+    reported = problems_for(key)
+    assert len(reported) == 2, reported
+    mentions(reported, "LANGFUSE_SECRET_KEY value", "renders LANGFUSE_PROJECT_ID as")
 
 
 def test_an_endpoint_is_configuration_rather_than_a_credential():

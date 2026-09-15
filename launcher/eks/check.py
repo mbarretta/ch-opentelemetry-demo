@@ -126,7 +126,7 @@ def check_collector_manifest():
     if not manifest.is_file():
         core.die(f"missing {manifest}: `eks deploy` applies this manifest as-is")
 
-    if cluster_reachable():
+    if api_server_answers():
         core.log(f"kubectl apply --dry-run=client -f {config.COLLECTOR_MANIFEST}")
         core.run("kubectl", "apply", "--dry-run=client", "-f", manifest, stdout=core.DEVNULL)
         return
@@ -141,11 +141,16 @@ def check_collector_manifest():
         core.run("kubectl", "kustomize", staged, stdout=core.DEVNULL)
 
 
-def cluster_reachable():
+def api_server_answers():
     """Whether an API server answers, on the short timeout `check.sh` used.
 
     A cluster is a bonus here, never a requirement: no answer selects the offline parse above
     rather than failing.
+
+    Named for the probe it is rather than `cluster_reachable`: this module imports `infra`,
+    whose `cluster_reachable(cluster)` asks AWS whether a named EKS cluster still exists. Two
+    live names, one signature apart, reading as the same question is how a caller ends up
+    passing the wrong one.
     """
     probe = core.run(
         "kubectl",
@@ -398,6 +403,10 @@ def environment_problems(workloads, generated):
     generated half means the generated file was passed to Helm first, where the static list
     replaces it wholesale.
 
+    The generated half is then checked by *value* as well, which `value_problems` explains: a
+    name can keep rendering long after what it renders stopped being what the document asked
+    for, and that is a release running the wrong configuration rather than a cosmetic drift.
+
     A service with no workload in the render is skipped here because `image_problems` has
     already reported it; there is no environment to read either way.
     """
@@ -410,9 +419,7 @@ def environment_problems(workloads, generated):
             continue
         rendered = rendered_environment(workload)
         for source, document in (("demo-values.yaml", static), ("the generated values", components)):
-            expected = {
-                entry.get("name") for entry in document.get(service, {}).get("envOverrides", [])
-            }
+            expected = {entry.get("name") for entry in component_overrides(document, service)}
             missing = sorted(name for name in expected if name not in rendered)
             if missing:
                 problems.append(
@@ -420,7 +427,66 @@ def environment_problems(workloads, generated):
                     "helm replaces lists, so the values files have to be passed "
                     "demo-values.yaml first"
                 )
+        problems += value_problems(service, rendered, component_overrides(components, service))
     return problems
+
+
+def component_overrides(document, service):
+    """One component's `envOverrides` entries out of a values document's `components` map.
+
+    Not `env_overrides`, which is `values.env_overrides` -- the three-argument function that
+    *builds* these lists, cited by name in this module twice. Reading a list out of a
+    document and assembling one are not the same question.
+    """
+    return (document.get(service) or {}).get("envOverrides") or []
+
+
+def value_problems(service, rendered, entries):
+    """Every generated `envOverrides` value reached the render as the value it was generated as.
+
+    Names alone are not enough, and the storefront's session-replay flag is why: every
+    generated value is *derived* -- from `.env`, from the build manifest, or from another value
+    -- so a name goes on rendering while what it renders stops being what the document asked
+    for. That is the wrong model, the wrong endpoint, or a session recorded against the
+    operator's instruction, and none of it moves a name.
+
+    Only the generated half is compared this way. Its entries always carry a literal value,
+    while the static half sets three of the agent's from `langfuse-credentials` `secretKeyRef`s
+    -- entries with no literal to compare, which is what the `expected is None` skip passes
+    over.
+
+    A name the render dropped entirely is the missing-name finding above, not this one, so it
+    is passed over here rather than reported twice.
+    """
+    problems = []
+    for entry in entries:
+        name, expected = entry.get("name"), entry.get("value")
+        if expected is None or name not in rendered:
+            continue
+        found = entry_value(rendered[name])
+        if found == expected:
+            continue
+        problems.append(
+            f"the {service} workload renders {name} as {found!r} rather than the generated "
+            f"{expected!r}: the render disagrees with the values document it was made from"
+        )
+    return problems
+
+
+def entry_value(entry):
+    """What a rendered env entry carries: its literal value, or the reference it reads instead.
+
+    The literal is stringified because YAML decides the type and Kubernetes does not: an
+    unquoted `value: 3` parses as an int against a values document whose every generated value
+    is `str()`-ed. An entry with no `value` at all is an empty one, which is how the kubelet
+    reads it -- reporting it as `None` against a generated `""` would be a problem that is not
+    one. A reference comes back as the mapping it is, which can never compare equal to a
+    literal and so gets named in full: a generated value that arrived from a Secret is as
+    wrong as one that arrived with the wrong text.
+    """
+    if "valueFrom" in entry:
+        return entry["valueFrom"]
+    return str(entry.get("value", ""))
 
 
 def collector_configs(documents):
