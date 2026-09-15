@@ -6,12 +6,18 @@ assertion it makes is checked twice: once against a recorded `helm template` ren
 come back clean, and once against that render with the thing it checks for broken, which must
 come back named.
 
-The recordings in `tests/renders/` are real output of the pinned chart (0.41.0), which is what
-keeps this offline: the command itself downloads the chart and is deliberately not part of the
-default pytest run, and no test here reaches a process.
+The recordings in `tests/renders/` are real output of the chart `config.CHART_VERSION` pins,
+which is what keeps this offline: the command itself downloads the chart and is deliberately
+not part of the default pytest run, and no test here reaches a process. Two assertions here
+are about the cluster rather than the render -- that the recordings still carry the pinned
+chart's label, and that the `vpc-cni` add-on in `deploy/eks/tofu/eks.tf` still enforces the
+NetworkPolicy beside them -- because a selector asserted against a stale label set, or an
+unenforced policy, is green here and open on the cluster. That OpenTofu is read, never
+written.
 """
 
 import argparse
+import re
 from pathlib import Path
 
 import pytest
@@ -49,6 +55,22 @@ spec:
         - name: chatbot
           image: ghcr.io/open-telemetry/demo:3.0.0-chatbot
 """
+
+
+# The OpenTofu that decides whether the NetworkPolicy `eks deploy` applies is enforced at all.
+# Read as text and never written: the identifiers of the live cluster live in the same tree.
+TOFU_MAIN = "eks.tf"
+# That decision, as the add-on spells it. Both character classes are bounded on purpose: the
+# first cannot reach past the `vpc-cni` block's own closing brace into a sibling add-on's,
+# because it is the CNI's policy agent that filters and the setting anywhere else enforces
+# nothing; the second cannot leave the payload, but does let the setting sit at any position
+# in it, so adding a second add-on setting above it is not a failure.
+VPC_CNI_ENFORCEMENT = re.compile(
+    r"vpc-cni\s*=\s*\{[^{}]*configuration_values\s*=\s*jsonencode\(\{[^}]*"
+    r'enableNetworkPolicy\s*=\s*"true"'
+)
+# `helm.sh/chart` as the chart stamps it on every document it renders: name, then version.
+CHART_LABEL = re.compile(r"^\s*helm\.sh/chart:\s*(\S+)\s*$", re.MULTILINE)
 
 
 def recorded(name):
@@ -114,6 +136,50 @@ def rendered_pod(service):
 def selects(selector, labels):
     """Whether a NetworkPolicy `matchLabels` selector matches a pod with `labels`."""
     return selector.items() <= labels.items()
+
+
+def tofu_main():
+    """The OpenTofu the cluster is built from, as text. Read only; the suite never writes it."""
+    return (config.tofu_dir() / TOFU_MAIN).read_text()
+
+
+def enforcement_problems(tofu_text):
+    """Whatever stops the agent's NetworkPolicy from being enforced, given the OpenTofu text.
+
+    Text in rather than a path, so the failing input can be held in a test instead of written
+    over `deploy/eks/tofu/`.
+    """
+    if VPC_CNI_ENFORCEMENT.search(tofu_text):
+        return []
+    return [
+        f"the vpc-cni add-on in deploy/eks/tofu/{TOFU_MAIN} no longer carries"
+        ' enableNetworkPolicy = "true" in its own configuration_values, which is the only thing'
+        f" that makes deploy/eks/k8s/{config.NETWORK_POLICY_MANIFEST} real: without it the VPC"
+        " CNI accepts that policy and filters nothing, and every pod in"
+        f" {config.NS_DEMO} regains access to the agent and the live model credential it holds"
+    ]
+
+
+def chart_pin_problems(rendered, name):
+    """Whatever says a recording is the output of a chart other than the pinned one.
+
+    Text in for the same reason: a stale recording is something to assert about, not to commit.
+    """
+    pinned = f"{k8s.CHART_NAME}-{config.CHART_VERSION}"
+    carried = sorted(
+        label
+        for label in CHART_LABEL.findall(rendered)
+        if label.startswith(f"{k8s.CHART_NAME}-")
+    )
+    if pinned in carried:
+        return []
+    return [
+        f"tests/renders/{name}.yaml carries {', '.join(carried) or 'no'} helm.sh/chart label"
+        f" where config.CHART_VERSION pins {pinned}: re-run the regeneration command in that"
+        " file's header, because everything these tests read out of it -- the pod labels the"
+        " agent NetworkPolicy's selectors are checked against included -- is a stale render"
+        " until you do"
+    ]
 
 
 @pytest.fixture
@@ -543,6 +609,70 @@ def test_the_agent_network_policy_selects_the_pods_the_chart_actually_renders():
     assert rules[0]["ports"] == [{"protocol": "TCP", "port": port}], (
         f"the agent's container listens on {port}"
     )
+
+
+def test_the_addon_that_makes_the_agent_network_policy_enforceable_is_still_configured():
+    """The selectors above are only half of it: the cluster has to be told to enforce them.
+
+    `tofu validate` does not look inside an add-on's `configuration_values` payload and neither
+    does `eks check`, so until this assertion the one line the whole protection rests on was
+    checked by nothing at all. Dropping it leaves the suite green, the plan green and the apply
+    green while every pod in the namespace quietly regains access to the agent's credential.
+    """
+    assert enforcement_problems(tofu_main()) == []
+
+    # And it must not fire on a correct cluster: the payload is a map, so a second add-on
+    # setting can land above this one without changing what the CNI enforces. A guard that
+    # reddens on a legitimate edit is a guard the next editor loosens instead of reading.
+    ordered = edited(
+        tofu_main(),
+        'enableNetworkPolicy = "true"',
+        'enableWindowsIpam    = "false"\n        enableNetworkPolicy = "true"',
+    )
+    assert enforcement_problems(ordered) == []
+
+
+def test_the_enforcement_guard_names_the_manifest_the_addon_setting_makes_real():
+    """The guard above, watched failing -- otherwise its reach is a claim rather than a fact.
+
+    Both failing inputs are text held here. `deploy/eks/tofu/` is never written by the suite:
+    it is where the live cluster's identifiers live.
+    """
+    dropped = edited(tofu_main(), 'enableNetworkPolicy = "true"', "")
+    named(
+        enforcement_problems(dropped),
+        "enableNetworkPolicy",
+        config.NETWORK_POLICY_MANIFEST,
+        "vpc-cni",
+    )
+
+    # The setting on some other add-on is the same inert cluster, because it is the vpc-cni
+    # agent that filters. `vpc-cni = {}` closes before the payload, so a guard that credited a
+    # `configuration_values` the add-on does not own would report nothing here.
+    elsewhere = edited(tofu_main(), "vpc-cni = {", "vpc-cni = {}\n    other-addon = {")
+    named(enforcement_problems(elsewhere), config.NETWORK_POLICY_MANIFEST)
+
+
+@pytest.mark.parametrize("name", [CONFIGURED, PLAIN])
+def test_both_recordings_carry_the_chart_label_of_the_version_they_are_pinned_to(name):
+    """The other half of the same protection: the selector guard reads these files, not a cluster.
+
+    So it is only as true as they are fresh, and their freshness rests on a hand-run
+    regeneration this repo has already missed once. A `config.CHART_VERSION` bump now fails
+    here, instead of leaving the selectors passing against a label set the chart stopped
+    rendering -- which is a `podSelector` matching nothing and an open agent, with the suite
+    green.
+    """
+    assert chart_pin_problems(recorded(name), name) == []
+
+
+def test_the_chart_pin_guard_names_the_stale_version_and_where_to_refresh_it():
+    """That guard watched failing, on the recording a bump would leave behind."""
+    pinned = f"{k8s.CHART_NAME}-{config.CHART_VERSION}"
+    assert pinned in recorded(CONFIGURED), f"the recording no longer carries {pinned}"
+    stale = recorded(CONFIGURED).replace(pinned, f"{k8s.CHART_NAME}-0.40.0")
+
+    named(chart_pin_problems(stale, CONFIGURED), "0.40.0", pinned, "header")
 
 
 def test_a_missing_tool_is_named_and_nothing_else_runs(monkeypatch, fake_sh):

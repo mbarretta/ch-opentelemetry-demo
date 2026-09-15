@@ -151,7 +151,10 @@ def restrict_agent_ingress():
     `deploy/eks/tofu/eks.tf` does. A cluster applied before that went in accepts this manifest
     and filters nothing, so `eks apply` is what makes it take effect there.
     """
-    core.log(f"restricting ingress to the agent ({config.NETWORK_POLICY_MANIFEST})")
+    core.log(
+        f"applying the agent's ingress policy ({config.NETWORK_POLICY_MANIFEST}),"
+        " which filters only where the vpc-cni add-on carries enableNetworkPolicy"
+    )
     core.run("kubectl", "apply", "-f", config.k8s_dir() / config.NETWORK_POLICY_MANIFEST)
 
 
