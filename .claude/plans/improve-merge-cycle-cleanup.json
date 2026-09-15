@@ -3,7 +3,7 @@
   "title": "Mechanical cleanup from the ch-otel-demo merge cycle",
   "kind": "improvement",
   "mode": "dev",
-  "status": "planned",
+  "status": "complete",
   "autonomy": "managed",
   "parallelism": "auto",
   "verification": "scripts/dev-setup.sh && .venv/bin/ruff check concierge scripts tests launcher && .venv/bin/pytest -q && ([ ! -x scripts/check-frontend.sh ] || scripts/check-frontend.sh)",
@@ -20,7 +20,7 @@
     "The session-replay capture posture is settled: advancedNetworkCapture and consoleCapture in frontend/patches/0009 stay enabled and unchanged. The user reviewed and decided this on 2026-09-15; task 6 pins input masking and fixes comments only",
     "subprocess is imported and called only in launcher/core.py; every other launcher module goes through core.run(), core.capture() or core.popen()",
     "No secret value reaches argv or disk: Kubernetes Secrets are assembled in Python and piped to `kubectl apply -f -` on stdin; ClickHouse and Langfuse auth travel in request headers or function kwargs, never a command line",
-    "Tofu identifiers var.name = \"otel-demo-eks\", state bucket otel-demo-eks-tfstate-<account> and state key otel-demo-eks/terraform.tfstate are unchanged - moving any of them replaces the live EKS cluster",
+    "Tofu identifiers var.name = \"otel-demo-eks\", state bucket otel-demo-eks-tfstate-<account> and state key otel-demo-eks/terraform.tfstate are unchanged - moving any of them replaces the live EKS cluster. ONE deploy/eks/tofu edit is authorised by the user (2026-09-15) and only this one: adding enableNetworkPolicy to the existing vpc-cni add-on in eks.tf so Kubernetes NetworkPolicy resources are actually enforced. No other Tofu change, and no identifier moves.",
     "The upstream pin stays 3.0.0 / commit 1755859a everywhere, and internal identifiers are unchanged: astronomy-concierge image prefix, concierge/ package name, Compose project name, Langfuse prompt and trace names"
   ],
   "charter": {
@@ -38,7 +38,7 @@
       "title": "Compare generated Helm values by value, regenerate the stale render fixtures, and un-shadow cluster_reachable",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "The committed render fixtures are a wrong baseline the next values change gets diffed against, and the check that should have caught it only compares env-var names.",
       "files": [
         "launcher/eks/check.py",
@@ -64,7 +64,7 @@
         },
         {
           "id": "ac3",
-          "text": "check.environment_problems compares the generated half's VALUES as well as its names. Prove the new check would have caught the drift: show it FAILING against the old recordings before regenerating, or against a deliberately corrupted value",
+          "text": "check.environment_problems compares the generated half's VALUES as well as its names. tests/test_eks_check.py includes a COMMITTED regression test that changes one generated env value in a recording and asserts the check reports the service, key, expected value and rendered value; that test must fail against the pre-task implementation. Do not satisfy this by running a failure before regenerating and reporting it - that evidence does not survive into the diff the evaluator grades.",
           "critical": true
         },
         {
@@ -83,16 +83,44 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: nit - value_problems docstring attributes the expected-is-None skip to the static half secretKeyRefs, but the generated half also carries None-valued entries (API_KEY, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY), which are what the skip actually passes over on every run. The behaviour is right and is what keeps secrets out of the messages; only the explanation is narrower than the code.",
+            "RESIDUAL GAP raised by the implementer and corroborated by the evaluator: the value comparison ac3 adds would NOT by itself have caught the drift ac2 fixes, because sec-3 relocation is positional and the derived value coincidentally equals the literal it replaced. Rendered env ORDER was deliberately not asserted (chart-controlled, and first-definition-wins makes order semantically inert), so nothing now detects a purely POSITIONAL fixture staleness."
+          ],
+          "notes": "Verification green (439 passed, up from the 437 baseline). ac2 verified ACTIVELY rather than from the HANDOFF: the evaluator re-ran the fixture header own regeneration command against the real chart in a scratch copy and every document in both committed fixtures is byte-identical to the fresh render, while main fixtures each differ in the frontend Deployment - the 4-line PUBLIC_HYPERDX_ENABLED relocation and nothing else. ac3 verified by reconstructing main check.py under HEAD tests: both new regression tests fail there with zero problems reported, so they genuinely depend on the new value comparison. CRITICALLY the evaluator also confirmed the fixture regeneration SILENCED NOTHING - HEAD check returns [] against main stale fixtures - so this is not fixture drift toward the code and the two deliverables are independent. Step 5 found one non-additive test edit (a 1 to 2 expected-count change) and ruled it a strict strengthening: main reports 1 problem for that case and HEAD reports 2, the second a real LANGFUSE_PROJECT_ID value mismatch, and the replacement pins the count exactly while asserting both problems by name where the old form asserted one.",
+          "timestamp": "2026-09-15T10:28:48-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 4,
+        "touched": 4,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:28:49-04:00"
+      },
+      "self_review": {
+        "applied": 3,
+        "deferred": 0,
+        "rejected": 4,
+        "recorded_at": "2026-09-15T10:28:48-04:00"
+      }
     },
     {
       "id": "2",
       "title": "One refusal convention across launcher/, plus the hint spelling and the Langfuse auth-header dedup",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "One CLI answers failures two different ways, and a public reference implementation is copied convention and all.",
       "files": [
         "launcher/core.py",
@@ -148,28 +176,54 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit - the new AST guard keys on raised.func.id == \"SystemExit\", so a qualified `raise builtins.SystemExit(\"...\")` or a bare `raise SystemExit` with no call would slip past it. Neither form exists in the repo and the common regression is caught, so non-blocking.",
+            "ac6: nit - the `from .eks.config import langfuse_auth_header` inside stack.environment() is a function-local import to break the launcher.eks.flags -> stack cycle. Correct and commented, but the only deferred import in the module."
+          ],
+          "notes": "Verification passed end to end (ruff clean, 438 passed vs 437 on main, check-frontend ok). All six critical ACs verified against the diff rather than the report: the evaluators own grep of main found exactly the 15 bare message sites the implementer reported, and all 15 now route through core.die while tunnel.py two int exits are untouched (that file is not in the diff). The four hint strings are normalised and both must-not-touch scripts/demo.py sites are intact. core.die docstring now states the rule including the int-exit carve-out, and stack.environment() delegates to config.langfuse_auth_header with base64 dropped. The new AST test logic re-run against the PRE-TASK tree collects 16 message sites across 6 files, so the guard genuinely fails against main rather than being a tautology. Test integrity clean: one test added, none deleted or skipped, and all three assertion edits TIGHTEN rather than relax - the error: prefix is now pinned and a new negative assertion forbids scripts/demo.py in the require_images hint.",
+          "timestamp": "2026-09-15T10:23:56-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 11,
+        "touched": 8,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:23:58-04:00"
+      },
+      "self_review": {
+        "applied": 3,
+        "deferred": 0,
+        "rejected": 2,
+        "recorded_at": "2026-09-15T10:23:57-04:00"
+      }
     },
     {
       "id": "3",
-      "title": "Drop the unreachable publish gate in eks/values.py and un-shadow ASSISTANT_PATH in eks/ops.py",
+      "title": "Drop the unreachable publish gate in eks/values.py",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
-      "why": "values.py re-checks a condition the deploy path already refused with a stronger check, and ops.py shadows a name it imports with a different meaning.",
+      "status": "complete",
+      "why": "values.py re-checks a condition the deploy path already refused with a stronger check, so the dead copy is the weaker contract a future caller would hit.",
       "files": [
         "launcher/eks/values.py",
-        "launcher/eks/ops.py",
-        "tests/test_eks_values.py",
-        "tests/test_eks_ops.py"
+        "tests/test_eks_values.py"
       ],
       "depends_on": [],
       "origin": "remediation",
       "worktree": "",
       "branch": "",
-      "notes": "From quality finding q2 (medium) plus the ops.py half of q6 (low). ac3 exists because q2's whole premise is that the deleted gate is unreachable - verify that, do not take the finding's word for it.",
+      "notes": "From quality finding q2 (medium) plus the ops.py half of q6 (low). ac3 exists because q2's whole premise is that the deleted gate is unreachable - verify that, do not take the finding's word for it. RE-SCOPED BY THE ORCHESTRATOR mid-wave: ac5 and ac6 (the ASSISTANT_PATH rename) were MOVED VERBATIM to task 10, not weakened or dropped. Cause was an orchestrator error, not an implementer one: the Phase 4.5 analysis checked shared FILES but not shared IDENTIFIERS, and scripts/smoke.py:379,383 read ops.ASSISTANT_PATH while scripts/smoke.py is task 4's reserved file - so the rename had no green path from this worktree. The implementer proved the edge rather than inferring it (applied the rename, got 13 failures in tests/test_smoke_queries.py via smoke.eks_trace_failures, reverted ops.py to pristine) and reported blocked instead of spending two evaluator FAILs to reach the same decision.",
       "acceptance_criteria": [
         {
           "id": "ac1",
@@ -190,28 +244,47 @@
           "id": "ac4",
           "text": "tests/test_eks_values.py's partial-publish case asserts the refusal via images.require_published instead of the deleted branch, so the behaviour stays covered rather than losing a test",
           "critical": true
-        },
-        {
-          "id": "ac5",
-          "text": "ops.py:52's ASSISTANT_PATH is renamed to ASSISTANT_MESSAGE_PATH with its callers and test assertions updated; launcher/collector.py:9's ASSISTANT_PATH keeps its name as the canonical prefix",
-          "critical": true
-        },
-        {
-          "id": "ac6",
-          "text": "The renamed constant is still DERIVED from collector.ASSISTANT_PATH rather than restating the literal route, so the two cannot drift apart",
-          "critical": true
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac4: the gate two distinctive refusals (missing digest, stale build tag) are NOT exercised in tests/test_eks_values.py - the gate fixture pins build_tag to PUBLISHED_TAG, so a stale set is reachable but never constructed there. Those cases live in the untouched tests/test_publish.py:428 (every distinct stale tag) and :451 (an entry missing digest), which the file own comment explicitly delegates to. Repo coverage is genuine, but the implementer framing that the extra coverage is reachable by these tests is slightly overstated. ac4 does not require it, so this is a note rather than a failure.",
+            "quality: image_overrides no longer normalises published = published or {}, so a future caller passing None gets a TypeError rather than a refusal. That is the task intent, is documented in the new docstring, and both current callers pass dicts. Noted, not a defect.",
+            "ORCHESTRATOR NOTE: this verdict grades the RE-SCOPED task. Its original ac5/ac6 (the ASSISTANT_PATH rename, both critical) moved VERBATIM to task 10 after the orchestrator Phase 4.5 analysis missed a shared-identifier conflict with task 4 reserved scripts/smoke.py. No AC was weakened to reach this PASS; two critical ACs changed owner."
+          ],
+          "notes": "Verification ran in the worktree and is green end to end (ruff, 438 passed, check-frontend ok). The diff is exactly the two owned files, with lifecycle.py and ops.py confirmed BYTE-IDENTICAL to main by targeted diff, so no half-rename leaked into the commit - the implementer pristine-revert claim was confirmed rather than assumed. ac2 gate is gone with no residual check in values.py. ac3 was checked against source rather than the finding: lifecycle.py:90 gates before line 134 eks_values call and ahead of aws.aws_login(), tests/test_eks_deploy.py:400,420 independently pin steps.at(require_published) == [0], AND the evaluator enumerated the OTHER eks_values caller that the AC never mentioned - check.py:189 via example_images(), which synthesises repository and tag for all four of core.IMAGES - so neither call site can reach the removed branch. ac4 migrated refusals run the REAL unpatched gate: the fixture monkeypatches only read_manifest and build_tag, and in the partial case frontend-proxy is left with only a repository, so if the gate absent-check were removed the test would raise KeyError rather than pass vacuously. No tautological or self-comparing assertion remains. Test surface grew 17 to 18 in-file and 437 to 438 repo-wide with no deletions, skips or relaxed assertions.",
+          "timestamp": "2026-09-15T10:27:48-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 2,
+        "touched": 2,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:27:49-04:00"
+      },
+      "self_review": {
+        "applied": 5,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T10:27:48-04:00"
+      }
     },
     {
       "id": "4",
       "title": "Make the smoke trace-id guard survive python -O",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "The only non-constant value interpolated into this repo's SQL is guarded by an assert, which optimised mode strips.",
       "files": [
         "scripts/smoke.py",
@@ -244,16 +317,43 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac3: nit - the -O child in test_the_run_refuses_to_start_when_asserts_are_compiled_out inherits the real environment and calls smoke.main([--target,eks]), so the test safety rests entirely on the guard it is testing. It would still fail loudly if require_assertions regressed, but on a configured machine the failure could follow an attempted aws/kubectl call. Passing a scrubbed env= to core.run would make it self-contained."
+          ],
+          "notes": "Verification green at 439 passed (base 437) with ruff and check-frontend clean, and the green is not manufactured - the only assertion edit is the AssertionError-to-SystemExit change ac2 requires, with the same match string, alongside two added tests and no deletions, skips or config edits. All three critical ACs verified ACTIVELY: require_trace_id now refuses through core.die in the same shape as ops.require_identifier, and the evaluator reproduced the guard refusing under a real python -O child in the worktree while confirming the pre-task code on main builds WHERE TraceId = OR 1=1 -- under the same interpreter, which is what gives the committed tests teeth. The ac4 audit holds up on independent reading - trace_id is the only trust-boundary value interpolated into SQL or a URL, and require_assertions() correctly addresses the LARGER problem that the script other 33 asserts are its entire gate.",
+          "timestamp": "2026-09-15T10:23:59-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 2,
+        "touched": 2,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:24:01-04:00"
+      },
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 3,
+        "recorded_at": "2026-09-15T10:24:01-04:00"
+      }
     },
     {
       "id": "5",
       "title": "Restrict ingress to the agent with a NetworkPolicy",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "The agent's /message endpoint has no authentication while holding a live model API key, so anything in the namespace can spend it.",
       "files": [
         "deploy/eks/k8s/network-policy.yaml",
@@ -261,13 +361,14 @@
         "launcher/eks/lifecycle.py",
         "tests/test_eks_deploy.py",
         "README.md",
-        "deploy/eks/README.md"
+        "deploy/eks/README.md",
+        "deploy/eks/tofu/eks.tf"
       ],
       "depends_on": [],
       "origin": "remediation",
       "worktree": "",
       "branch": "",
-      "notes": "From security finding sec4 (low/medium). Defense-in-depth: the laptop Compose target has the same posture, so this hardens one target rather than closing a live hole. Note the cluster's WORKLOADS are private but its API server is not - the user accepted that separately (d17), so do not rely on 'the cluster is private' as a reason to weaken this.",
+      "notes": "From security finding sec4 (low/medium). Defense-in-depth: the laptop Compose target has the same posture, so this hardens one target rather than closing a live hole. Note the cluster's WORKLOADS are private but its API server is not - the user accepted that separately (d17), so do not rely on 'the cluster is private' as a reason to weaken this. CODEX FINDING pr1/f1 (high) and the USER DECISION on it: as originally authored this task added a NetworkPolicy while forbidding the Tofu edit that makes NetworkPolicy enforceable, so its security outcome would have been nil - EKS VPC CNI does not enforce policy resources unless the add-on carries enableNetworkPolicy, and eks.tf:52-59 sets only before_compute = true (verified: a grep for enableNetworkPolicy/ENABLE_NETWORK_POLICY/configuration_values across deploy/ returns nothing). The user authorised exactly one add-on edit on 2026-09-15 and constraint 4 now records it. Blast radius to keep in mind while choosing the label selector: a NetworkPolicy restricts only the pods it selects, so a wrong selector breaks frontend->agent visibly rather than affecting unrelated traffic, but it WILL break the demo until corrected - verify the selector against what the chart actually renders for the frontend pod, do not assume a label name.",
       "acceptance_criteria": [
         {
           "id": "ac1",
@@ -301,20 +402,49 @@
         },
         {
           "id": "ac7",
-          "text": "Plan constraint 3 holds: no Tofu identifier, state bucket or state key changes. This task adds a Kubernetes manifest, it does not touch deploy/eks/tofu/",
+          "text": "Configure the existing vpc-cni add-on in deploy/eks/tofu/eks.tf with enableNetworkPolicy: \"true\" so Kubernetes NetworkPolicy resources are enforced - without it the policy this task adds is INERT. This add-on configuration is the ONLY allowed deploy/eks/tofu edit: var.name, the state bucket and the state key stay byte-identical, and `tofu fmt -check`, `tofu init -backend=false` and `tofu validate` must all pass.",
           "critical": true
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac7: NOTHING ASSERTS THE ADD-ON SETTING. No test or check greps enableNetworkPolicy/configuration_values (a grep over tests/ and launcher/ returns only a prose mention in lifecycle.py:150), so a future eks.tf edit that drops it would silently make the policy INERT with the suite still green - the exact failure mode codex pr1/f1 raised. ac7 does not require a guard, so this is a note; note also that eks check runs tofu validate, which would not catch it either.",
+            "ac7: tofu validate does not validate the add-on configuration_values payload against AWS vpc-cni schema, so the true-as-string typing is only provable at apply time. It matches AWS documented schema and a comment explains the choice, but it is not verifiable offline. Relatedly the add-on pins no version, and EKS network-policy enforcement needs VPC CNI >= 1.14; the default is well past that, so non-blocking.",
+            "ac6: nit - the spend-exposure note sits immediately after the command table containing the eks tunnel row (README.md:139-149) rather than inside that row, so next-to-the-tunnel-instructions is satisfied by adjacency rather than colocation."
+          ],
+          "notes": "All four critical ACs verified ACTIVELY rather than from the handoff. ac2 two selectors and its port were checked against the PINNED RENDER POD TEMPLATES rather than Deployment labels - the distinction that matters, since app.kubernetes.io/part-of and managed-by are Deployment-only and a NetworkPolicy binds pod labels, so the implementer used opentelemetry.io/name. Cross-checked against the only real caller: the frontend, via the Envoy frontend-assistant cluster that resolves to the frontend (docker/envoy.tmpl.yaml routes /api/assistant/ to the frontend, not the agent), so the policy will not break frontend->agent or the svc/frontend-proxy tunnel. The evaluator also MUTATION-PROBED the new ac2 test and every wrong-label or wrong-port variant fails it. ac7 is confined to the authorised vpc-cni hunk with eks.tf the only tofu file in the diff, the state identifiers byte-identical, and tofu fmt -check, init -backend=false and validate all green plus a real demo.py eks check exit 0. The implementer self-reported a mid-session git checkout of lifecycle.py during mutation testing followed by re-applying three edits; the evaluator independently confirmed the committed file is whole and coherent (4 hunks, one def restrict_agent_ingress, called between ensure_namespace(NS_DEMO) and the first Secret) rather than a partial re-application. Test surface grew 443 to 446 with one test renamed and strengthened, no deletions, skips or relaxed assertions.",
+          "timestamp": "2026-09-15T10:58:24-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 10,
+        "touched": 9,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:58:25-04:00"
+      },
+      "self_review": {
+        "applied": 3,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T10:58:25-04:00"
+      }
     },
     {
       "id": "6",
       "title": "Regenerate the frontend patch set: pin input masking, correct the replay comment, harden the env interpolation",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "The replay patch inherits an undocumented SDK default that a minor version bump could silently flip, and its own comment now describes behaviour the repo no longer has.",
       "files": [
         "frontend/patches/0006-document-assistant-env.patch",
@@ -326,7 +456,7 @@
       "origin": "remediation",
       "worktree": "",
       "branch": "",
-      "notes": "From deferrals d19, d23 and d18. ac3 is a hard boundary, not a preference: the capture flags are a recorded user decision and ac5 of the earlier sec-3 task was verified by an empty diff on this file. d18 was dismissed as a live finding by the security auditor - the two values this repo adds are boolean- and URL-shaped - so ac5 is hardening, not a bug fix.",
+      "notes": "From deferrals d19, d23 and d18. ac3 is a hard boundary, not a preference: the capture flags are a recorded user decision and ac5 of the earlier sec-3 task was verified by an empty diff on this file. d18 was dismissed as a live finding by the security auditor - the two values this repo adds are boolean- and URL-shaped - so ac5 is hardening, not a bug fix. REGENERATION: the repo rule at frontend/patches/README.md:11-27 is regenerate-from-`demo.py stage`, never hand-edit - follow it. It is deliberately NOT an acceptance criterion: a hand-edited and a regenerated patch can be byte-identical, so no evaluator can grade the process from the diff. What IS graded is the observable consequence - every patch still applies cleanly to the 3.0.0 / 1755859a pin and its index pre-images still match the pristine upstream blobs. If regeneration is impossible in this environment, say so in the HANDOFF.",
       "acceptance_criteria": [
         {
           "id": "ac1",
@@ -355,25 +485,49 @@
         },
         {
           "id": "ac6",
-          "text": "The patches are REGENERATED via the repo's documented flow, not hand-edited: frontend/patches/README.md:11-27 states the rule. If regeneration is impossible in this environment, say so explicitly in the HANDOFF rather than hand-editing silently",
-          "critical": true
-        },
-        {
-          "id": "ac7",
           "text": "Every patch still applies cleanly to the 3.0.0 / 1755859a pin and the patch set's index pre-images still match the pristine upstream blobs",
           "critical": true
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "constraints: FLAGGED, NOT FAILED - tests/test_frontend_overlay.py:13 adds the repo first import subprocess outside launcher/core.py, which makes launcher/core.py:3 (This is the only module that imports subprocess) literally false. The evaluator read constraint 2 second clause as scoping the obligation to launcher modules, none of which this diff touches, and graded PASS. ORCHESTRATOR READING, recorded but NOT used to re-grade: clause one is unqualified and is currently true REPO-WIDE - launcher/core.py:9 is the only import subprocess in all tracked code - so the stricter reading is available and the docstring asserts it. tests/test_smoke_queries.py already spawns its python -O child through core.run(sys.executable, ...) with core.PIPE, so routing the node child the same way is a one-line fix that restores the claim. Sent to the end-of-cycle decision rather than re-graded, because reinterpreting a constraint after the fact to flip a passed verdict is the same move as adding one mid-cycle to justify a failure.",
+            "ac5: nit - the < escape and the String() wrapper both go beyond ac5 literal JSON.stringify(value) per key. Both justified: </script> closing the element early is exactly the failure ac5 names, and String() preserves patch 0001 IS_SYNTHETIC_REQUEST?: string typing, which bare JSON.stringify would have turned into a boolean literal.",
+            "ac6: the new tests verify patch-fits-upstream only for the two patches routed through patched_upstream(); the other nine have no committed check of their index pre-images. ac6 does not ask for one and the evaluator verified all eleven by hand this pass, so this is a note about future regressions."
+          ],
+          "notes": "All six critical ACs pass, each verified ACTIVELY rather than from the HANDOFF. Verification green end to end (448 passed, ruff clean, check-frontend restaged and typechecked). ac3 confirmed the prescribed way - an EMPTY DIFF on the two capture-flag lines, with maskAllInputs: true the only non-comment addition to patch 0009, so the user recorded capture decision is provably untouched. ac2 factual premise was re-derived from the installed SDK (maskAllInputs:p=!0 in HyperDX own init() against false in its README), so the line pins EXISTING behaviour rather than changing it. ac6 was proved BY HAND across all eleven patches - pre-images match pristine 3.0.0 blobs, every patch applies cleanly in order, post-images match. The green is not manufactured: five mutation probes each produced a failure (dropping the < escape, dropping JSON.stringify, reverting one key to single-quote wrapping, dropping maskAllInputs, restoring the stale comment), and the first two still failed with node hidden from PATH, so the always-running static test genuinely pins both halves of the escaping contract despite two tests being node-gated. Test surface grew 443 to 448 with no deletions, skips or relaxed assertions.",
+          "timestamp": "2026-09-15T11:01:24-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 4,
+        "touched": 5,
+        "unpredicted": 1,
+        "ratio": 0.2,
+        "recorded_at": "2026-09-15T11:01:25-04:00"
+      },
+      "self_review": {
+        "applied": 6,
+        "deferred": 1,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T11:01:25-04:00"
+      }
     },
     {
       "id": "7",
       "title": "Widen the two mechanical guards that only cover part of their surface",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "Both guards pass today for reasons that do not generalise, so each will stop catching what it was written to catch.",
       "files": [
         "tests/test_cli.py",
@@ -397,7 +551,7 @@
         },
         {
           "id": "ac3",
-          "text": "The no-process guard is effective with AWS_PROFILE UNSET as well as set. Today every implemented handler dies at the env precondition first on a bare machine, so the guard is vacuous in CI - prove the new version is not, by provoking it into failing",
+          "text": "A COMMITTED regression test leaves AWS_PROFILE unset, substitutes one EKS handler with a handler that calls core.run(), and asserts the per-invocation no-process guard raises for and names that specific subcommand; the same guard is exercised with AWS_PROFILE set. A guard that is only 'provoked' during the session leaves nothing the evaluator can observe in a normal green pytest run.",
           "critical": true
         },
         {
@@ -411,16 +565,46 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac4: SIDE EFFECT worth knowing - commands() now returns bare spans too, so test_the_eks_runbook_covers_the_first_run_and_the_everyday_cycle accepts a prose eks up where it previously required a fenced demo.py eks up. The evaluator verified this absorbed nothing today (the EKS section demo.py spans alone still cover all of FIRST_RUN + EVERYDAY), but a future edit that deleted a fenced block and left the prose would no longer be caught by that test.",
+            "ac5: nit - names_rather_than_runs and subparsers_action reach into argparse privates (parser._actions, argparse._SubParsersAction, action.nargs). The right call over the hand-kept exception list this task removes, but test-only coupling to a private API that would need revisiting on an argparse change.",
+            "ac5: nit - the group branch keys on group.required, so a future non-required subparser group would have its bare name read as a runnable command rather than prose. Not reachable today; every group in cli.build_parser() is required.",
+            "quality: nit - the docstrings are essay-length relative to the assertion bodies. Content is accurate; it is volume, not correctness."
+          ],
+          "notes": "All three critical ACs verified ACTIVELY rather than from the handoff, and the green is not manufactured - the diff is test-only and strictly additive (+9 tests, main 451 to 460, no deletions, skips, relaxed assertions, lint suppressions or config edits), with all five removed assert lines traced to their relocated equivalents. ac2 and ac3 hold under TWO independent mutation probes: deleting the per-invocation no-process limb, and MERELY REORDERING it behind the refusal checks, each fail 3 of the 4 committed guard params - so both the limb AND the anti-masking order are pinned by committed tests rather than a session-only provocation. ac4 is the strongest result: a renamed subcommand left in README prose fails on HEAD and is COMPLETELY INVISIBLE to main demo.py-only extractor. ac5 was checked by printing the 39-span set and eyeballing it against a grep of all four documents, and by proving the prose classifier load-bearing (neutering it breaks the parser gate on three READMEs).",
+          "timestamp": "2026-09-15T11:30:19-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 2,
+        "touched": 2,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T11:30:20-04:00"
+      },
+      "self_review": {
+        "applied": 3,
+        "deferred": 1,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T11:30:19-04:00"
+      }
     },
     {
       "id": "8",
       "title": "Consolidate the redirected fixture and the step recorder into tests/conftest.py",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "Six implementers each hand-rolled the same fixture and they have already drifted, so which test files are safe to run on a configured developer machine now varies per file.",
       "files": [
         "tests/conftest.py",
@@ -461,7 +645,7 @@
         },
         {
           "id": "ac5",
-          "text": "Prove the isolation works: run the suite with CLICKHOUSE_ENDPOINT, CLICKHOUSE_PASSWORD, AGENT_MODE and AWS_PROFILE exported to junk values and show it still passes. That is the regression the drift would have caused",
+          "text": "A COMMITTED regression test for the shared redirected fixture sets CLICKHOUSE_ENDPOINT, CLICKHOUSE_PASSWORD, AGENT_MODE and AWS_PROFILE to junk AFTER conftest import, exercises every migrated env-mapping/scrub-set combination, and asserts the requested file values win while every requested inherited key is absent. The test must FAIL if any former fixture's scrubbed key is omitted from the union. Note tests/conftest.py:7 unconditionally sets AGENT_MODE='scripted' before collection, so exporting junk AGENT_MODE into the whole suite proves nothing - the isolation must be asserted inside the fixture's own contract.",
           "critical": true
         },
         {
@@ -475,16 +659,48 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1: the literal clause the collected test count is UNCHANGED is not met (460 -> 488) and CANNOT BE, because ac5 requires a new committed regression test. Graded PASS on the criterion own stated rationale: the evaluator diffed sorted node ids and ZERO were removed, all 28 additions are the new tests/test_conftest.py, and per-file test/assert counts are identical in all ten migrated files. ORCHESTRATOR ACKNOWLEDGEMENT: this is an AC-authoring error, the third of its class this cycle-family. The wording should have read unchanged-or-higher-with-no-node-id-removed, exactly as task 2 ac7 does in this same plan.",
+            "ac2: partial literal deviation - the shared fixture takes the env mapping (via an overridable redirect_env fixture) but NOT the keys to scrub; the scrub set is a fixed shared union a module can only widen by naming a key in its own mapping. Deliberate and documented at conftest.py:223-226, and a per-module scrub parameter would REOPEN exactly the drift ac4 exists to close - so the implementer judgement beat the AC letter here.",
+            "ac5: soft spot for future regressions - 14 of the 21 former-scrub entries in test_conftest.MIGRATED are derived live (tuple(test_eks_deploy.ENV) etc.) rather than frozen, so a future edit dropping a key from BOTH deploy ENV and REDIRECT_KEYS would still pass. Only the AWS pair and the 5 config.CLICKSTACK_KEYS are hardcoded. All 21 are load-bearing today, verified by 21 individual mutation probes.",
+            "ac5: the delenv-leak pin surfaces as a teardown ERROR (an addfinalizer assertion) rather than a test failure. Exit code is still 1 so CI reddens, but the signal reads as infrastructure breakage rather than the fixture leaked AWS_REGION, which is a worse message for the next reader.",
+            "ac7: nit - Steps and Stubs survive as module-local aliases of a third name, Recorder. Both module contracts and both accessors are preserved so the non-goal is honoured, but a reader of test_eks_infra.py must follow Stubs = Recorder into conftest.py to find the body.",
+            "quality: two files outside the predicted set (tests/test_cli.py, tests/test_docs.py) absorb task 7 inherited subparsers_action deferral. Judged on merits it is a clean dedup: the argparse-private lookup moves to conftest.py:316 and BOTH callers keep their distinct contracts (test_cli still raises on a parser with no subcommands, test_docs still tolerates None), with assert counts unchanged at 50 and 15."
+          ],
+          "notes": "Verification green end to end and the green is not manufactured: the diff is test-only, strictly additive in coverage, zero node ids removed, identical per-file test and assert counts across all ten migrated files. Every critical AC verified ACTIVELY: the evaluator RECOMPUTED ac4 union from main eight former copies (deploy 21 keys ARE the union; every other copy a strict subset, matching REDIRECT_KEYS exactly) and mutation-probed ac5 by dropping each of the 21 keys in turn, all 21 of which redden the committed suite. It independently confirmed the implementer self-caught HIGH finding (reverting to monkeypatch.delenv fails TestTheEnvironmentComesBack with exit 1) and its import-form claim (tests.conftest is provably a second module with a second exporter and a rejected TracerProvider). STRONGEST EVIDENCE THE WHY WAS DELIVERED: with a configured developer shell exported, main FAILS tests/test_eks_config.py while HEAD is 488/488 green.",
+          "timestamp": "2026-09-15T12:11:29-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 9,
+        "touched": 12,
+        "unpredicted": 3,
+        "ratio": 0.25,
+        "recorded_at": "2026-09-15T12:11:30-04:00"
+      },
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 2,
+        "recorded_at": "2026-09-15T12:11:30-04:00"
+      }
     },
     {
       "id": "9",
       "title": "Date-stamp the superseded surface of the merge design document",
       "kind": "improve",
       "mode": "dev",
-      "status": "pending",
+      "status": "complete",
       "why": "The design document still lists a module surface that no longer exists, and a reader cannot tell it is a historical record rather than live documentation.",
       "files": [
         ".claude/plans/refactored-marinating-rain.md"
@@ -516,15 +732,110 @@
           "critical": false
         }
       ],
-      "verdicts": [],
-      "drift": null,
-      "self_review": null
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit - the header says aws.py is still credited with schedule-state and state-bucket helpers that were later dropped, but aws.py RETAINS state_bucket() (line 72) and scheduler_get() (line 312); only the duplicate setter and purge_state_bucket left. The plural could read as if the whole pair moved, so the header slightly overstates how stale the row is. Directionally correct and matches d30 own wording, so non-blocking.",
+            "LINE-REFERENCE DRIFT the header makes unavoidable, raised by the implementer and not disputed by the evaluator: a top-of-file header per ac2 shifts every stored location in this document, so the two refactored-marinating-rain.md:54 references in .claude/plans/feat-merge-ch-otel-demo.json (including deferral d30 own location field) and the line-54 citation inside this task own ac3 now point at the wrong row - the stale aws.py surface line is 67 post-commit. The implementer declined to fix them: one is a closed verdict/deferral record and rewriting it is the same falsification ac3 exists to prevent."
+          ],
+          "notes": "A 13-line header insertion and nothing else. Verification ran end to end in the worktree and is green (ruff clean, 443 passed, check-frontend ok), and because no test file, config or threshold appears in the diff at all the green is not manufactured; step 5 was run and found nothing, hence PASS rather than SKIP. ac3 - the criterion that matters in the OPPOSITE direction from usual - was proved by BYTE-COMPARISON rather than inspection: the body below the header is identical to main and the stale aws.py row is not edited, so nothing was helpfully corrected. ac2 tracks the eks-live-validation-2026-09-09.md precedent in form and content, ac4 names the module docstrings and both plan logs, and the header divergence claim was corroborated against commit e7afa9c and the current locations in infra.py. Both gates independently confirmed the moved-vs-deleted distinction, which the implementer step-7 review had caught and corrected in its first draft: the aws.py helpers were DELETED as unreachable, not relocated, so the header says dropped/diverged rather than moved.",
+          "timestamp": "2026-09-15T10:46:40-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 1,
+        "touched": 1,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:46:42-04:00"
+      },
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 3,
+        "recorded_at": "2026-09-15T10:46:41-04:00"
+      }
+    },
+    {
+      "id": "10",
+      "title": "Un-shadow ASSISTANT_PATH in launcher/eks/ops.py",
+      "kind": "improve",
+      "mode": "dev",
+      "status": "complete",
+      "why": "ops.py imports collector and then shadows the imported name with a different meaning, so ASSISTANT_PATH is a prefix on one line and a full route two lines later.",
+      "files": [
+        "launcher/eks/ops.py",
+        "scripts/smoke.py",
+        "tests/test_eks_ops.py",
+        "tests/test_smoke_queries.py"
+      ],
+      "depends_on": [],
+      "origin": "remediation",
+      "worktree": "",
+      "branch": "",
+      "notes": "Carries task 3's ac5 and ac6 verbatim after the orchestrator re-scoped task 3 mid-wave. This task exists because the rename crosses a module boundary the Phase 4.5 analysis missed: scripts/smoke.py:379,383 read ops.ASSISTANT_PATH (and smoke.py:278-279 carries a comment explaining the prefix-vs-route distinction), so the rename must own scripts/smoke.py and tests/test_smoke_queries.py as well as ops.py and its test. Those two files were task 4's in wave 1; this task runs in wave 2, after wave 1 has merged, so all four files are uncontended. The task-3 implementer measured the blast radius for you: renaming without updating smoke.py produces 13 failures in tests/test_smoke_queries.py through smoke.eks_trace_failures. Fix those call sites as part of the rename - they are the point, not collateral.",
+      "acceptance_criteria": [
+        {
+          "id": "ac1",
+          "text": "The full verification command passes",
+          "critical": true
+        },
+        {
+          "id": "ac2",
+          "text": "ops.py:52's ASSISTANT_PATH is renamed to ASSISTANT_MESSAGE_PATH with its callers and test assertions updated; launcher/collector.py:9's ASSISTANT_PATH keeps its name as the canonical prefix",
+          "critical": true
+        },
+        {
+          "id": "ac3",
+          "text": "The renamed constant is still DERIVED from collector.ASSISTANT_PATH rather than restating the literal route, so the two cannot drift apart",
+          "critical": true
+        }
+      ],
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac2: nit - the new `assert not hasattr(ops, \"ASSISTANT_PATH\")` guard lives inside the multi-purpose test_verify_issues_the_bash_queries_and_the_two_the_merge_made_possible, so a future re-shadowing would surface under a test name describing the SQL reports rather than the naming rule. Its own one-line case would point a maintainer straight at the cause.",
+            "ac2: nit - three stale ops.ASSISTANT_PATH mentions remain in .claude/plans/feat-merge-ch-otel-demo.json. Correctly left alone: that is the prior cycle historical record and this plan own task-9 principle says not to falsify dated records. Flagged only so nobody fixes them later."
+          ],
+          "notes": "Verification green end to end in the worktree (ruff clean, 443 passed, check-frontend ok). All three critical ACs verified ACTIVELY rather than from the handoff. The implementer report that only three of four predicted files changed is CORRECT and the evaluator PROVED the reason instead of accepting it: tests/test_smoke_queries.py asserts on route literals and never names the constant, so it needed no edit - yet it still exercises the renamed value through smoke.eks_trace_failures, which the evaluator demonstrated by re-running that file with the old attribute name restored and the new one deleted, REPRODUCING EXACTLY THE 13 FAILURES task 3 had measured. So the green comes from scripts/smoke.py genuinely being updated, not from a test abandoning the path. ac3 holds: ops.py:52 still derives from collector.ASSISTANT_PATH with the value byte-identical to main, and launcher/collector.py is absent from the diff with its prefix intact. Test surface grew by one strengthening assertion with the collected count unchanged at 443 on both main and HEAD, which is the right signature for a rename.",
+          "timestamp": "2026-09-15T10:44:18-04:00"
+        }
+      ],
+      "drift": {
+        "predicted": 4,
+        "touched": 3,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T10:44:21-04:00"
+      },
+      "self_review": {
+        "applied": 0,
+        "deferred": 0,
+        "rejected": 2,
+        "recorded_at": "2026-09-15T10:44:19-04:00"
+      }
     }
   ],
   "parallel_plan": {
     "computed_at": "2026-09-15T09:40:00-04:00",
     "base_branch": "main",
-    "cycle_base_sha": null,
+    "cycle_base_sha": "e3c7942",
     "post_merge_build": [],
     "waves": [
       {
@@ -542,7 +853,8 @@
         "tasks": [
           "5",
           "6",
-          "9"
+          "9",
+          "10"
         ],
         "state": null
       },
@@ -583,9 +895,7 @@
       ],
       "3": [
         "launcher/eks/values.py",
-        "launcher/eks/ops.py",
-        "tests/test_eks_values.py",
-        "tests/test_eks_ops.py"
+        "tests/test_eks_values.py"
       ],
       "4": [
         "scripts/smoke.py",
@@ -600,7 +910,8 @@
         "tests/test_eks_check.py",
         "README.md",
         "deploy/eks/README.md",
-        ".env.example"
+        ".env.example",
+        "deploy/eks/tofu/eks.tf"
       ],
       "6": [
         "frontend/patches/0006-document-assistant-env.patch",
@@ -625,6 +936,12 @@
       ],
       "9": [
         ".claude/plans/refactored-marinating-rain.md"
+      ],
+      "10": [
+        "launcher/eks/ops.py",
+        "scripts/smoke.py",
+        "tests/test_eks_ops.py",
+        "tests/test_smoke_queries.py"
       ]
     }
   },
@@ -636,12 +953,243 @@
     {
       "timestamp": "2026-09-15T09:39:59-04:00",
       "note": "Phase 4.5: colored 9 tasks into 4 waves (4/3/1/1). Conflict edges were VERIFIED by grep rather than assumed, and the evidence changed the layout three times. (1) 1-5 is real: launcher/eks/check.py:125 already parses config.COLLECTOR_MANIFEST, so task 5's ac5 would edit the file task 1 owns - separated into waves 1 and 2, which also means task 5 MAY touch check.py freely. (2) 5-7 is real: tests/test_docs.py reads all four READMEs and diffs a Configuration table against .env.example, while task 5 edits README.md, deploy/eks/README.md and possibly .env.example - task 7 moved to wave 3. (3) 2-7 DISSOLVED on inspection: tests/test_cli.py:247 asserts pytest.raises(SystemExit, match='bootstrap first'), and match= is a regex SEARCH, so it survives core.die's 'error: ' prefix and task 2 needs no edit to that file - recorded in task 2's ac notes so an implementer does not 'helpfully' edit it and manufacture the conflict. (4) Task 8 runs ALONE in wave 4 because tests/conftest.py is shared infrastructure for every test file in the repo, so refactoring it conflicts with all of tasks 1-7 regardless of which test files it edits. That is the wave-4 lesson from the prior cycle applied in reverse: rather than reserving the shared file from everyone and breaking their critical ACs, the task that owns it runs when nothing else is in flight. No post_merge_build is needed - the image manifest lives under gitignored .runtime/, so nothing on the base branch goes stale."
+    },
+    {
+      "timestamp": "2026-09-15T09:55:22-04:00",
+      "note": "Codex plan review round 2 completed in 583s with --timeout 900 (round 1 had died at 482s against the default 480s limit, so the whole fix was headroom - and 583s confirms round 1 would have timed out again). Verdict revise, 5 findings (3 high, 2 medium), 4 applied and 1 left open for the user. THE MOST VALUABLE FINDING IS pr1/f1, which no Claude gate in this session would plausibly have caught: task 5 adds a NetworkPolicy to restrict ingress to the agent, but EKS VPC CNI does NOT enforce NetworkPolicy resources unless the add-on carries enableNetworkPolicy: 'true', and deploy/eks/tofu/eks.tf:52-59 configures vpc-cni with only before_compute = true. The orchestrator verified this independently: a grep for enableNetworkPolicy/ENABLE_NETWORK_POLICY/configuration_values across deploy/ returns nothing. So task 5 as authored would have shipped a security control that does nothing, and its own ac7 explicitly forbade the Tofu edit that would make it work - the task was self-defeating by construction. Codex reached this by reading the actual add-on block and citing the AWS documentation, which is exactly the value of a different model family with repo access. FOUR OF THE FIVE FINDINGS ARE ONE AUTHORING DEFECT, worth recording as a lesson: pr2/pr3/pr4/pr5 all say the same thing in different tasks - the orchestrator wrote acceptance criteria demanding DEMONSTRATIONS (show the check failing before regenerating, provoke the guard, run the suite with junk env exported, regenerate rather than hand-edit) whose evidence does not survive into the committed diff or the verification command the evaluator actually grades. An AC must be checkable from the artifact, not from the implementer's narration of a moment. pr5 was the sharpest instance: the proof was not merely unobservable but VACUOUS, since conftest.py:7 presets AGENT_MODE before collection, and the verification command exports none of the named junk values so the evaluator would never have run it. All four were converted into committed regression tests."
+    },
+    {
+      "timestamp": "2026-09-15T10:05:48-04:00",
+      "note": "Codex finding pr1 applied by USER DECISION: constraint 4 now authorises exactly one deploy/eks/tofu edit - enableNetworkPolicy on the existing vpc-cni add-on - so task 5's NetworkPolicy is actually enforced rather than inert. All five round-2 findings are now applied (4 orchestrator, 1 user). Go gate confirmed; dispatching wave 1 (tasks 1, 2, 3, 4)."
+    },
+    {
+      "timestamp": "2026-09-15T10:09:06-04:00",
+      "note": "Task 1 claimed by implementer; baseline verification green at 437 passed on the worktree base."
+    },
+    {
+      "timestamp": "2026-09-15T10:11:48-04:00",
+      "note": "Claimed task 4: Make the smoke trace-id guard survive python -O"
+    },
+    {
+      "timestamp": "2026-09-15T10:18:27-04:00",
+      "note": "Task 4 (sec1): require_trace_id now refuses through core.die instead of assert, mirroring ops.require_identifier, and the trace-id guard is proven under a real 'python -O' child interpreter rather than by inspecting the source - __debug__ is a compile-time constant, so a subprocess is the only seam, and each child program opens with an 'assert False' control line so a non-optimised child cannot pass the test silently. Verified the teeth: the pre-task smoke.py from main, run under -O, builds \"WHERE TraceId = '' OR 1=1 --'\". THE AUDIT (ac4) found no second trust-boundary validation assert - trace_id is the only value smoke.py interpolates that it did not produce itself, and the database name at smoke.py:479 already goes through ops.require_identifier - but it did find that the other ~40 asserts ARE the run's gate (trace whole, one turn, scores right), so under -O the script would have printed its progress and exited 0 whatever the demo did. Converting forty assertions to ifs would hide that behind more code, so main() now refuses the optimised interpreter outright via require_assertions(); the two SQL-interpolated values stay guarded unconditionally for importers that bypass main(). Code review: 1 applied (the test module docstring said 'Offline throughout' before the subprocess tests existed - staleness this diff caused), 3 rejected - require_assertions guarding only main() is deliberate so tests can import the functions, the combined 'from launcher import RUNTIME, core, ...' line is ruff-clean and 'from launcher.core import die' would break the repo's patch-by-attribute convention, and the -O child's fall-through path only exists in the guard-removed failure case."
+    },
+    {
+      "timestamp": "2026-09-15T10:21:43-04:00",
+      "note": "Task 1: check.environment_problems now compares the generated half by value (value_problems/entry_value), and both tests/renders/*.yaml were regenerated with the command in their own header - the delta is exactly PUBLIC_HYPERDX_ENABLED moving from the static half into the generated half, which is sec-3's drift and nothing else, so the prune reproduced the rest byte-for-byte. Worth recording: the VALUE check would NOT have caught this particular drift, because the derived value coincidentally equals the 'true' it replaced; the drift is positional, and rendered env order is chart-controlled so it is deliberately not asserted. What the value check buys is the next change - SESSION_REPLAY=false now renders a value the check reads. Two committed regression tests (LLM_MODEL text change plus valueFrom substitution, and the derived PUBLIC_HYPERDX_ENABLED flag) were written first and both failed against the pre-task implementation. test_a_rendered_credential_is_refused's third case had its expected count edited 1 -> 2: overwriting 'example-project' corrupts LANGFUSE_PROJECT_ID, which IS a generated value, so the stronger check legitimately reports a second problem - both are now asserted by name rather than one relaxed away (session-protocol step 5, second exception; authorised by ac3). check.py's zero-arg cluster_reachable is now api_server_answers with its one caller updated; infra.py untouched. Code review found and fixed a self-inflicted instance of the very defect ac5 removes: the new helper was first called env_overrides, colliding with values.env_overrides (3 args, builds these lists) which check.py cites twice in its own docstrings - renamed component_overrides."
+    },
+    {
+      "timestamp": "2026-09-15T10:22:10-04:00",
+      "note": "Task 1 code-review triage: 3 applied, 0 deferred (sweep - ledger closed), 4 rejected with reasons. Rejected (1) the test-integrity flag on test_a_rendered_credential_is_refused's 1 -> 2 count edit and (2) the flag on regenerating tests/renders/*.yaml in the same commit as the check that reads them: both are patterns dimension 7 requires reporting, both are authorised by ac3 and ac2 respectively, and the fixture delta was verified independent of the code change (4 lines, the PUBLIC_HYPERDX_ENABLED relocation, nothing else). Rejected (3) the pre-existing nameless-envOverrides-entry TypeError in environment_problems as unreachable - both values documents are committed and every entry has a name, so the guard would defend an input that cannot occur. Rejected (4) turning the fixture header's hand-prune into a script: it is a second deliverable outside this task's file set and would change a documented repo workflow, so it is raised in the HANDOFF for one end-of-cycle decision instead."
+    },
+    {
+      "timestamp": "2026-09-15T10:22:27-04:00",
+      "note": "ORCHESTRATOR ERROR AND RESOLUTION, wave 1. Task 3 returned blocked on a conflict edge the Phase 4.5 analysis MISSED: it verified shared FILES but never shared IDENTIFIERS, and scripts/smoke.py:379,383 read ops.ASSISTANT_PATH while scripts/smoke.py is task 4's reserved file - so task 3's ac5/ac6 (the rename, both critical) had no green path from its worktree. This is the second time this cycle-family that an orchestrator ownership decision made a critical AC unreachable; the prior instance was the wave-4 tests/test_cli.py reservation. The implementer handled it about as well as it could be handled: it committed the completable half (517391d), verified ac3 AFFIRMATIVELY and twice over (lifecycle.py:90 runs images.require_published() before line 134's values.eks_values(), and tests/test_eks_deploy.py already pins the order with steps.at('require_published') == [0], so the deletion's premise rests on the committed suite rather than a source read), PROVED the conflict rather than inferring it (applied the rename, got 13 failures in tests/test_smoke_queries.py via smoke.eks_trace_failures, reverted ops.py to pristine so the commit carries no half-rename), and reported blocked rather than spending two evaluator FAILs to reach the same orchestrator decision - citing this plan's own context, which records that waste as the prior cycle's lesson. RESOLUTION: took the implementer's option 2, not option 1. ac5 and ac6 move VERBATIM to a new task 10 which owns all four affected files (ops.py, smoke.py and both tests) and runs in wave 2 once wave 1 has merged and they are uncontended. Task 3 is re-scoped to its completed half and re-titled. This is a RE-SCOPE, NOT AN AC WEAKENING: both critical ACs survive with identical text under a new owner. Option 1 (authorising a 3-line edit to task 4's reserved smoke.py mid-wave) was rejected because it bets on hunks not colliding, which is the bet the reservation exists to avoid. FOLLOW-UP DONE: re-ran the missing symbolic-conflict grep across the remaining tasks - check.cluster_reachable has no readers outside check.py/infra.py so task 1's rename is safe, no wave-1 sibling test asserts a message task 2 rewrites, and PUBLISHED_FIELDS is read across tasks but renamed by none. No other edge found."
+    },
+    {
+      "timestamp": "2026-09-15T10:24:02-04:00",
+      "note": "Task 2 PASS first attempt (transcribed on the implementer's behalf - it deliberately did not append, since three wave-mates shared the plan file). Converted all 15 bare SystemExit message sites in launcher/ to core.die; its own enumeration came to 15 (cli 1, collector 1, images 7, stack 2, upstream 4), confirming the orchestrator's ~15 over the source finding's estimate of 11. It stated the convention in core.die's docstring AND backed it with a committed AST guard in tests/test_core.py - and the evaluator checked that guard is not a tautology by re-running its logic against the pre-task tree, where it collects 16 message sites across 6 files. The four hint strings are normalised and both must-not-touch sites (tunnel.py:208's real path, __init__.py:1's docstring) are absent from the diff, which the evaluator confirmed is correct rather than an omission. Deferral d1 is closed here: stack.environment() now delegates to config.langfuse_auth_header via a FUNCTION-LOCAL import, because launcher.eks.flags imports stack back at module level - a real cycle, documented in a comment. HAZARD FOR FUTURE TASKS: the new AST guard asserts exactly TWO int SystemExit exits remain under launcher/, both in launcher/eks/tunnel.py, so any later task legitimately adding an int exit must update that count. It keys on paths and counts rather than line numbers, so wave-mates editing core.py or tunnel.py will not trip it."
+    },
+    {
+      "timestamp": "2026-09-15T10:24:02-04:00",
+      "note": "Task 4 PASS first attempt, and its ac4 audit found something materially bigger than the finding it was dispatched to fix. sec1's named site is closed - require_trace_id refuses via core.die instead of assert, mirroring ops.require_identifier, proven by tests that run a real 'python -O' child (each child program opens with 'assert False' as a control, so an unoptimised child fails the helper rather than silently passing the test). But the audit established that trace_id was the ONLY trust-boundary value interpolated into SQL or a URL, while the script's other ~33 asserts constitute its ENTIRE run gate - so under -O 'smoke --target eks' would have exited 0 regardless of what the demo actually did. A FALSE GREEN on the demo's central claim, which no one had noticed and which is strictly worse than the injection path sec1 described. Rather than convert 33 assertions into ifs, main() now refuses the optimised interpreter outright via a new require_assertions(), while both SQL-interpolated values stay guarded unconditionally for importers that bypass main(). The evaluator independently re-derived the same audit conclusion and confirmed the pre-task code on main builds \"WHERE TraceId = '' OR 1=1 --'\" under -O. This is what an audit-shaped AC is for: the named fix was one line, the finding was the audit."
+    },
+    {
+      "timestamp": "2026-09-15T10:27:49-04:00",
+      "note": "Task 3 (re-scoped half) PASS on an orchestrator-dispatched evaluator, since the implementer's blocked HANDOFF was never graded. The evaluator did three things worth recording. (1) It CONFIRMED rather than assumed the pristine-revert: it diffed launcher/eks/lifecycle.py and launcher/eks/ops.py against main individually and got empty output, so no half-rename leaked into 517391d. (2) It went BEYOND ac3: the AC only named the deploy path, but the deletion's safety also depends on the other eks_values caller, check.py:189 via example_images(), which the evaluator enumerated itself and confirmed synthesises repository and tag for all four of core.IMAGES - so neither call site can reach the removed branch. That is the anti-assumption rule applied to an AC that was written too narrowly. (3) It CORRECTED the implementer's framing honestly: the stronger gate's two distinctive refusals (missing digest, stale build tag) are NOT exercised in tests/test_eks_values.py because the fixture pins build_tag, and they live instead in the untouched tests/test_publish.py:428 and :451. Repo coverage is real, the file's own comment delegates explicitly, and ac4 does not require it - but the implementer's claim that those cases were reachable by its migrated tests was slightly overstated, and the evaluator said so rather than nodding it through. It also verified the migrated refusals are not vacuous: the fixture patches only read_manifest and build_tag so require_published runs unpatched, and in the partial case frontend-proxy is left with only a repository, so removing the gate's absent-check would raise KeyError rather than let pytest.raises(SystemExit) pass."
+    },
+    {
+      "timestamp": "2026-09-15T10:29:05-04:00",
+      "note": "Task 1 PASS first attempt. Two items for the sweep's end-of-cycle decision, both RAISED BY THE IMPLEMENTER rather than found by the gate, which is the behaviour a closed ledger is supposed to produce. (1) A RESIDUAL GAP ac3 does not close: the value comparison would not by itself have caught the very drift ac2 fixed, because sec-3's relocation was POSITIONAL and the derived value coincidentally equalled the literal it replaced. The implementer deliberately did not assert rendered env ORDER - it is chart-controlled and first-definition-wins makes order semantically inert, so asserting it would break on the next chart bump for no safety gain - and the evaluator corroborated the reasoning. So nothing now detects a purely positional fixture staleness; the value check catches the larger class, not this instance. (2) THE REGENERATION PROCEDURE ITSELF is the root cause and is still manual: the fixture header documents a one-line command plus a hand-prune written in prose ('then keep the otel-collector-agent ConfigMap and the four Deployments'), and that manual half is the mechanism by which these recordings went stale in the first place. The implementer scripted the prune in the scratchpad and verified it reproduces the committed bytes exactly, then deliberately did NOT commit it, because it falls outside the task's file set and would change a documented repo workflow. That script is a small, well-understood follow-up if wanted. Also worth noting as evidence the cycle's own theme is real: one of the implementer's three applied self-review findings was a FRESH instance of the exact defect ac5 exists to remove - its first draft named the new helper env_overrides, colliding with values.env_overrides, which check.py cites by name twice in its own docstrings; renamed to component_overrides."
+    },
+    {
+      "timestamp": "2026-09-15T10:33:32-04:00",
+      "note": "Claimed task 10: Un-shadow ASSISTANT_PATH in launcher/eks/ops.py"
+    },
+    {
+      "timestamp": "2026-09-15T10:38:24-04:00",
+      "note": "Task 10: renamed ops.py's ASSISTANT_PATH to ASSISTANT_MESSAGE_PATH, kept it derived as f'{collector.ASSISTANT_PATH}/message', and updated all five consumers (ops.py:272,276; smoke.py:404,408) plus six test call sites and the smoke.py:277-279 comment that contrasts the two names. Added a negative assertion (not hasattr(ops, 'ASSISTANT_PATH')) beside the existing derivation assertion so a future re-shadow fails the suite rather than reading as two meanings of one name; verified it is non-vacuous by re-binding the attribute in a throwaway interpreter. Code-review triage: applied 0, deferred 0, rejected 2, both pre-existing duplications of the route literal in smoke.py's LOCAL half. Rejected smoke.py:121 because deriving the local POST URL from launcher.eks.ops would give the local smoke path an EKS-module dependency for one interpolation, and rejected smoke.py:167,169 because that is a pinned test assertion - deriving it from the module it observes would loosen the check, which is the drift protection running backwards."
+    },
+    {
+      "timestamp": "2026-09-15T10:44:22-04:00",
+      "note": "Task 10 PASS first attempt, closing the ASSISTANT_PATH rename that the orchestrator's Phase 4.5 miss had withheld from task 3. The evaluator did the check that matters for a rename: it REPRODUCED task 3's exact 13 failures by restoring the old attribute name and deleting the new one, proving the 443 green comes from scripts/smoke.py genuinely being updated rather than from a test quietly abandoning the path. ac3 holds - ops.py:52 still DERIVES from collector.ASSISTANT_PATH with the value byte-identical to main, so the OTTL statements and the verify query still cannot drift apart. The implementer respected TDD order (flipped the derivation assertion to the new name, watched it fail, then renamed) and used a negative-lookbehind substitution so collector.ASSISTANT_PATH was never touched. It also added a non-vacuous 'not hasattr(ops, ASSISTANT_PATH)' guard against a future re-shadow. Only three of four predicted files changed, correctly: tests/test_smoke_queries.py asserts route literals and never names the constant. It REJECTED rather than deferred both code-review findings, both pre-existing duplications of the route literal in smoke.py's LOCAL half, with reasoning worth keeping: deriving smoke.py:121's POST URL would give the local path a launcher.eks.ops dependency for one interpolation, and deriving smoke.py:167,169 would turn a PINNED test assertion into one that follows the module it observes - drift protection running backwards. OPERATIONAL NOTE for future dispatches: the line numbers in this task's brief (smoke.py:379,383) had already drifted to :404,408 by the time it ran, because wave 1's merge shifted the file. Cite symbols rather than line numbers when briefing across a wave boundary."
+    },
+    {
+      "timestamp": "2026-09-15T10:46:43-04:00",
+      "note": "Task 9 PASS first attempt (log transcribed by the orchestrator - the implementer deliberately did NOT append, because the worktree carries its own checked-in copy of this plan JSON and writing there would have raced the live version; that is the correct read of the write-disjointness rule). A 13-line dated header, zero deletions, body byte-identical below it, and the stale eks/aws.py surface row deliberately unedited. ac3 ran in the OPPOSITE direction from a normal criterion - it required NOT fixing something - and the evaluator proved it mechanically by byte-comparing the body against main rather than eyeballing it, so nothing was 'helpfully' corrected. The implementer's step-7 review also caught a factual error in its own first draft: the aws.py helpers were DELETED as unreachable by qual-1, not relocated, so the header now says dropped/diverged rather than moved - both gates independently corroborated that against commit e7afa9c. TWO RECORD-KEEPING CONSEQUENCES, both accepted rather than fixed. (1) LINE DRIFT: a top-of-file header shifts every stored location in this document, so the stale row moved 54 -> 67 and three references now point at the wrong line: two refactored-marinating-rain.md:54 locations in feat-merge-ch-otel-demo.json (one of them deferral d30's own location field) and the line-54 citation inside task 9's ac3. The implementer declined to edit the first two because they are a closed deferral/verdict record and rewriting them is exactly the falsification ac3 exists to prevent, and the orchestrator declines to edit ac3 for the same reason - it was accurate when written and when graded, and retro-editing a graded criterion is AC-rewriting. The drift is recorded here instead, which is the same principle the task itself embodies: annotate the record, do not rewrite it. (2) The evaluator sharpened one factual claim: aws.py RETAINS state_bucket() and scheduler_get(); only the duplicate setter and purge_state_bucket were dropped, so the header's plural slightly overstates how stale the row is."
+    },
+    {
+      "timestamp": "2026-09-15T10:49:11-04:00",
+      "note": "Task 5: added deploy/eks/k8s/network-policy.yaml (agent ingress limited to the frontend pod on 8010, ingress-only so the agent's model/MCP/collector egress is untouched), centralised it as config.NETWORK_POLICY_MANIFEST/STATIC_MANIFESTS, applied it in deploy between the namespaces and the Secrets so it precedes the pod it selects, generalised eks check's offline parse to both static manifests in one kustomize build, and configured the vpc-cni add-on with enableNetworkPolicy (the only authorised deploy/eks/tofu edit) without which the policy is inert. Selectors are opentelemetry.io/name, verified against the recorded 0.41.0 render rather than assumed: the app.kubernetes.io/* labels are on the Deployments, and only the pod-template labels bind a NetworkPolicy. tofu fmt -check/init -backend=false/validate pass."
+    },
+    {
+      "timestamp": "2026-09-15T10:58:44-04:00",
+      "note": "Task 5 PASS first attempt, and the selector question that made this the riskiest task in the plan was answered correctly rather than guessed. The implementer read the selectors out of the PINNED 0.41.0 render's POD TEMPLATE labels and used opentelemetry.io/name, recognising that app.kubernetes.io/part-of and managed-by are DEPLOYMENT-only labels while a NetworkPolicy binds POD labels - the precise distinction that would have produced a policy selecting nothing. The evaluator then cross-checked the blast radius independently: the only real caller of agent:8010 is the frontend, and docker/envoy.tmpl.yaml routes /api/assistant/ to the frontend rather than the agent, so neither the demo path nor the svc/frontend-proxy tunnel is affected. It also MUTATION-PROBED the new test - every wrong-label and wrong-port variant fails it - so the test has teeth rather than merely passing. The authorised Tofu edit is correctly confined: eks.tf is the only file under deploy/eks/tofu/ in the diff, the hunk is inside the existing vpc-cni block, and var.name, STATE_BUCKET_PREFIX and STATE_KEY are byte-identical, with tofu fmt -check / init -backend=false / validate all green. One self-reported hazard was independently cleared: the implementer ran 'git checkout launcher/eks/lifecycle.py' mid-session while mutation-testing and re-applied three edits, and the evaluator confirmed the committed file is whole and coherent rather than a partial re-application - exactly the kind of disclosure that is worth more than a clean-looking report. RESIDUAL GAP FOR THE END-OF-CYCLE DECISION, and it is the important one: NOTHING IN THE SUITE ASSERTS enableNetworkPolicy EXISTS. A future eks.tf edit that drops it would silently render the NetworkPolicy inert with every test still green - which is precisely the pr1/f1 failure mode this task was created to fix. ac7 did not require a guard so the evaluator logged it rather than failing the task, and 'demo.py eks check' runs tofu validate, which would not catch it either. Recommendation: close it with a small test that greps the add-on configuration. Two lesser notes: tofu validate cannot check the configuration_values payload against AWS's vpc-cni schema so the string typing is only provable at apply time, and the policy takes effect on a live cluster only after another 'demo.py eks apply' pushes the add-on setting (stated in both READMEs and in restrict_agent_ingress's docstring)."
+    },
+    {
+      "timestamp": "2026-09-15T11:01:45-04:00",
+      "note": "Task 6 PASS first attempt, and it CORRECTED A FACTUAL ERROR THE ORCHESTRATOR PROPAGATED. Its dispatch brief said ASSISTANT_DEMO_DETAILS is 'free prose' and is 'the realistic case' for an apostrophe breaking the inline script; that is WRONG, and the orchestrator repeated it to the user. It is a boolean opt-in: .env.example:26 sets ASSISTANT_DEMO_DETAILS=false and frontend/overlay/gateways/Assistant.gateway.ts:27 tests /^(1|true|on|yes)$/i. The evaluator verified this independently and the orchestrator confirmed it by grep. The error traces back to prior-cycle deferral d18, which described it the same way, and to a one-word comment in deploy/eks/k8s/demo-values.yaml - which the implementer also fixed AT THE SOURCE so the misconception could not re-seed the next cycle. That file was outside predicted_files and reserved by nobody (task 5 reserved network-policy.yaml, not demo-values.yaml), and is the task's one unpredicted touch. CONSEQUENCE for the record: ac5's hardening is still correct and still worth having - no window.ENV value is prose-shaped TODAY, so it is defence against a future one, and the added < escape addresses a real failure (</script> closing the element early) that ac5 explicitly names. But the justification the orchestrator gave for it was false, and the evaluator ruled both the < escape and the String() wrapper inside ac5's own words rather than churn - String() being load-bearing because bare JSON.stringify would emit IS_SYNTHETIC_REQUEST as a boolean literal against patch 0001's  typing. ac3 held exactly as specified: an EMPTY DIFF on the two capture-flag lines, so the user's recorded capture posture is provably untouched, with maskAllInputs: true the only non-comment addition to patch 0009. Both patches were REGENERATED from .runtime/build per the repo rule rather than hand-edited, and the evaluator proved the observable consequence by hand across all eleven patches. Five mutation probes confirm the green is real, and the two node-gated tests are genuinely compensated - dropping either escaping half still fails the always-running static test with node hidden from PATH."
+    },
+    {
+      "timestamp": "2026-09-15T11:02:55-04:00",
+      "note": "Correction to the preceding task-6 entry: one fragment was lost to shell backtick substitution when it was written. The missing detail is the type that makes the String() wrapper load-bearing - patch 0001 declares IS_SYNTHETIC_REQUEST as an OPTIONAL STRING on window.ENV (IS_SYNTHETIC_REQUEST?: string), so a bare JSON.stringify would have emitted it as a boolean literal and broken that typing. Recorded separately because plan.log is append-only through plan-edit.sh and rewriting the original entry is not the write path."
+    },
+    "2026-09-15T00:00:00Z: task 7: widened both mechanical guards and proved each with a committed provocation -- the fake_sh no-process check now fires per invocation and names the subcommand, with four regression tests that fail against the old end-of-body shape under AWS_PROFILE both unset and set; the README extractor now reads bare command spans (39, of them README's 24) behind a parser-driven invocation-vs-mention classifier and a pinned BARE_SPANS inventory. Deferred only the subparser-walk duplication with tests/test_cli.py, which needs the reserved tests/conftest.py.",
+    {
+      "timestamp": "2026-09-15T11:30:43-04:00",
+      "note": "Task 7 PASS first attempt, and its own code review caught a subtle inversion worth recording: making the no-process assertion PER-INVOCATION had accidentally NARROWED the guard, because a call recorded outside a handler invocation went unasserted where the old end-of-body check had covered it. The implementer noticed, moved the window to open at the top of the loop, and closed the helper with a total assertion so the new checks are a STRICT SUPERSET of the old one. That is the failure mode of every widening change and it was caught by the author rather than the gate. The evaluator then pinned both properties with two independent mutation probes: deleting the per-invocation limb, and MERELY REORDERING it behind the refusal checks, each fail 3 of the 4 committed guard params - so the anti-masking ORDER is pinned by a committed test, not just the limb. ac4 produced the clearest result in the plan: a renamed subcommand left in README prose FAILS on HEAD and is completely INVISIBLE to main-s demo.py-only extractor, which is exactly the drift the narrow gate allowed. The extractor now reads 39 bare spans across four documents behind a parser-driven invocation-vs-mention classifier, and the evaluator proved that classifier load-bearing by neutering it (which breaks the parser gate on three READMEs). TWO ITEMS FOR CONSOLIDATION AND THE END-OF-CYCLE DECISION. (1) A REAL IF NARROW LOOSENING: commands() now returns bare spans, so test_the_eks_runbook_covers_the_first_run_and_the_everyday_cycle accepts a prose eks up where it previously demanded a fenced demo.py eks up. The evaluator verified nothing is absorbed today, but a future edit that deleted a fenced block and left prose behind would no longer be caught by that test. (2) BARE_SPANS pins the extracted bare-span set per document, so any future README-touching task that adds a new bare command spelling will fail with the gained and lost sets printed. Deliberate - a newly gated span is a judgement call, not a side effect - but it is a maintenance obligation on every later README change. The single deferral is genuinely [contended] and lands where it can be absorbed: subparsers_action() duplicates test_cli.py-s subcommands(), and their one shared home is tests/conftest.py, which task 8 owns in the final wave."
+    },
+    {
+      "timestamp": "2026-09-15T11:59:18-04:00",
+      "note": "Task 8: consolidated the six drifted redirected fixtures and the two recorder bodies into tests/conftest.py. The union REDIRECT_KEYS is test_eks_deploy's 21 keys (every other copy was a subset, which was the drift); the fixture scrubs the union plus the keys of whatever .env mapping a module asks for, so a module can only widen it. Scrubbed by save/restore rather than monkeypatch.delenv on purpose: delenv records no undo entry for a key that was unset, so AWS_REGION exported inside a test by aws_login() would outlive it -- a regression the code-review probe caught and tests/test_conftest.py::TestTheEnvironmentComesBack now pins. Collected count 460 -> 488 with zero node ids removed (28 added, all in the new regression file). Also absorbed task 7's contended deferral: the argparse _actions lookup duplicated by test_docs.subparsers_action and test_cli.subcommands now lives in conftest, with both call-site contracts (None vs raise) left where they were."
+    },
+    {
+      "timestamp": "2026-09-15T12:11:30-04:00",
+      "note": "Task 8 PASS first attempt, closing the plan. The implementer SELF-CAUGHT A HIGH FINDING that would have made the consolidation actively harmful, and the evaluator reproduced it independently: the first draft scrubbed via monkeypatch.delenv, which records NO undo entry for a key that was already unset - so AWS_REGION, exported inside a test by aws.aws_login(), leaked into every later test. That would have made the shared fixture WEAKER than the four copies that hand-rolled save/restore, which is the exact opposite of ac4 purpose. Fixed to save/restore and pinned by TestTheEnvironmentComesBack. The strongest evidence the task why was delivered rather than merely its letter: with a configured developer shell exported, MAIN FAILS tests/test_eks_config.py while HEAD IS 488/488 GREEN. The evaluator also recomputed the ac4 union itself from main eight former copies (test_eks_deploy 21 keys are the union, every other copy a strict subset) and mutation-probed all 21 keys individually. ORCHESTRATOR ERROR TO OWN: ac1 demanded the collected count be UNCHANGED while ac5 mandated a new committed test - self-contradictory, and the evaluator correctly graded on the stated rationale after proving zero node ids removed. That is the THIRD AC-authoring defect of the same class this cycle-family, after the wave-4 reserved-file reservation that made a critical AC unreachable and the four demonstration-shaped ACs Codex caught. The lesson is consistent: an AC must be checkable from the committed artifact, and its literal wording must not fight another AC in the same task. Task 2 ac7 in this same plan had the correct form - unchanged or higher, with no node id removed. THREE ITEMS FOR THE END-OF-CYCLE DECISION, none absorbable by a closed ledger: fixture DATA is still duplicated (the same five ClickStack credential literals in test_eks_deploy, test_eks_infra, test_eks_k8s and test_eks_config - per-module data with per-module values, so not forced); 14 of 21 former-scrub entries are derived live rather than frozen, so dropping a key from both places would pass; and the delenv-leak pin surfaces as a teardown ERROR rather than a named test failure, which is a worse message for the next reader. It ABSORBED task 7 inherited deferral as authorised, and recorded one durable warning at the definition site: the eight modules import as from-conftest not from-tests.conftest, because the latter provably re-executes conftest as a second module with a second span exporter and a rejected TracerProvider."
+    },
+    {
+      "timestamp": "2026-09-15T12:22:45-04:00",
+      "note": "SWEEP CLOSE-OUT (the decision that replaces Phase 7.65, since plan.sweep is true and the deferral ledger is closed). Eight findings across the two end-of-cycle gates - security sec1/sec2 both low, quality q1/q2/q3 medium, q4/q5 low, q6 info - and NONE clears either auto-remediate bar (7.5 wants severity >= medium with confidence >= medium; 7.6 wants >= high with confidence high). Under managed policy they are therefore ACCEPTED AS KNOWN DEBT, recorded here by name rather than rolled into a ledger that would make this sweep the next sweep intake. That is the loop terminator working as designed. THE HONEST CHARACTERISATION, because severity understates these: five of the eight are one line to one small test, and FOUR OF THEM MAKE WORK THIS CYCLE ALREADY SHIPPED ACTUALLY DURABLE rather than adding anything new. sec1 - enableNetworkPolicy appears in five places (two README rows, a manifest comment, a docstring, one line of code) and is ASSERTED ZERO TIMES, so the cycle headline security fix is one careless eks.tf edit from silently reverting, and lifecycle.py:154 logs the restriction unconditionally either way. q3 - task 5 NetworkPolicy selector guard reads labels from the COMMITTED RECORDINGS, whose freshness task 1 established in this same cycle rests on a manual hand-prune that has ALREADY gone stale once; nothing compares those recordings to config.CHART_VERSION, so one assertion makes both task 1 value comparison and task 5 selector guard real instead of contingent. sec2 - the two new python -O child tests inherit the developer full environment with sys.path at the live core.ROOT (neither requests the redirected fixture), and one calls smoke.main([--target,eks]), so a plain pytest run is one refactor of main first two lines from a live paid model turn and a real ClickHouse query. q1 IS THE SHARPEST FINDING OF EITHER CYCLE and no per-task gate could have seen it: task 7 hand-rolled AWS env isolation with monkeypatch.delenv - the exact mechanism task 8 proved unsound and replaced IN THE SAME CYCLE - and task 7 own docstring says a leaked AWS_REGION would decide what a later test sees while using the one mechanism that cannot prevent it (delenv records no undo entry for an already-absent key, and aws.py:38 writes AWS_REGION into the real environment). Nothing reddens today ONLY because task 8 REDIRECT_KEYS union contains the leak - one sibling task is silently compensating for another. q2 - task 4 established core.run for test child processes in wave 1 and task 6 imported subprocess directly in wave 2, which is the cross-task half of the constraint flag the orchestrator recorded but could not see from one diff. q5 - the refusal-convention AST guard scans only launcher/ while task 4 extended core.die into scripts/ in the same wave; widening costs nothing today. q4 - only half the argparse-private coupling actually moved into conftest. q6 (info) - four pinned inventories by four authors and nothing indexes them, so a future README, launcher, .env-mapping or chart-pin edit fails a test in a file the editor is not touching. ALSO WORTH RECORDING, raised by the quality reviewer outside its own findings: config.STATIC_MANIFESTS is described as every manifest eks deploy applies as-is, but the deploy path applies the two INDIVIDUALLY at lifecycle.py:154 and :167 rather than iterating the tuple - so a third entry would be parsed by eks check and never applied. That is a latent bug, not debt. RECOMMENDATION to the user: sec1, sec2, q1, q3 and q5 are worth one small follow-up sweep; q2 and q4 are judgement calls on whether the convention or the docstring should move; q6 needs prose, not code."
+    },
+    {
+      "timestamp": "2026-09-15T12:23:03-04:00",
+      "note": "Bookkeeping correction: the plan status was left at \"planned\" through the whole run because the orchestrator flipped task statuses at each dispatch but never flipped the PLAN status to in_progress, so the close-out transition to complete was refused by the validator (planned->complete is not an allowed edge). Corrected by transitioning planned->in_progress->complete. Caught by the transition validator rather than slipping through, which is what that script is for - but the miss is worth recording next to the three AC-authoring errors as the same class of orchestrator slip: the state machine was respected per task and forgotten at the plan level."
     }
   ],
   "verdicts": [],
   "deferrals": [],
-  "security_findings": [],
-  "quality_findings": [],
+  "security_findings": [
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:20:21-04:00",
+      "id": "sec1",
+      "severity": "low",
+      "category": "access-control",
+      "confidence": "high",
+      "location": "deploy/eks/tofu/eks.tf:66-68",
+      "evidence": "configuration_values = jsonencode({ enableNetworkPolicy = \"true\" })",
+      "description": "The new agent NetworkPolicy is correct and its selectors are pinned by a committed test, but its ENFORCEMENT rests entirely on this one unasserted line - the VPC CNI accepts NetworkPolicy objects and filters nothing without it. A grep over tests/ and launcher/ finds enableNetworkPolicy only in four prose mentions and this single code site, so a future eks.tf edit that drops or renames it leaves the suite fully green, tofu validate green (it does not check add-on configuration_values payloads) and eks check green, while every pod in otel-demo silently regains access to the unauthenticated agent and its live API_KEY. lifecycle.restrict_agent_ingress COMPOUNDS this by logging 'restricting ingress to the agent' UNCONDITIONALLY at launcher/eks/lifecycle.py:154 after a kubectl apply that succeeds whether or not enforcement exists, so an operator's console reports a restriction that may not be in force.",
+      "remediation": "Add a committed guard beside test_the_agent_network_policy_selects_the_pods_the_chart_actually_renders in tests/test_eks_check.py: read deploy/eks/tofu/eks.tf and assert the vpc-cni add-on's configuration_values block contains enableNetworkPolicy = \"true\", with a message naming deploy/eks/k8s/network-policy.yaml as the thing it makes real (a regex over the file text suffices; no HCL parser needed). Optionally also have restrict_agent_ingress confirm enforcement before claiming it, via aws eks describe-addon --addon-name vpc-cni --query addon.configurationValues through core.capture, warning rather than refusing when absent - which is exactly the needs-one-more-eks-apply case both READMEs already document.",
+      "wave": "7.5"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:20:21-04:00",
+      "id": "sec2",
+      "severity": "low",
+      "category": "misc",
+      "confidence": "high",
+      "location": "tests/test_smoke_queries.py:275-285,314-316",
+      "evidence": "finished = core.run(sys.executable, \"-O\", \"-c\", f\"import sys; sys.path.insert(0, {str(core.ROOT)!r})\\n\" ... + program,)",
+      "description": "The two new -O child-interpreter tests spawn a real Python process with the developer's FULL inherited environment and sys.path pointed at the REAL core.ROOT - neither test requests the redirected fixture, so core.ROOT is the live checkout and the child's config.load_env() reads the operator's actual root .env. One of them then calls smoke.main(['--target','eks']), and the only thing standing between pytest and a live paid model turn plus a real ClickHouse Cloud query against the operator's cluster is require_assertions() - the guard the test exists to exercise. In a public reference implementation where every operator points this at their own ClickHouse Cloud, Langfuse Cloud and AWS credentials, a plain pytest run should not be one refactor of main()'s first two lines away from spending money.",
+      "remediation": "Pass a scrubbed environment to the child in optimised(): build env = {k: v for k, v in os.environ.items() if k not in conftest.REDIRECT_KEYS} (keeping PATH, HOME and PYTHONPATH) and hand it to core.run(..., env=env) - core.run forwards **kwargs straight to subprocess.run, so this is a one-line addition. Point the child at a redirected root as well by passing cwd= or inserting a tmp_path on its sys.path instead of the live core.ROOT, so it cannot read the real .env even if the guard regresses.",
+      "wave": "7.5"
+    }
+  ],
+  "quality_findings": [
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:52-04:00",
+      "id": "q1",
+      "severity": "medium",
+      "category": "inconsistency",
+      "confidence": "high",
+      "location": "tests/test_cli.py:273-283 (task 7) and tests/conftest.py:296-310 (task 8)",
+      "evidence": "tests/test_cli.py:280 (task 7): for key in ('AWS_PROFILE','AWS_REGION'): monkeypatch.delenv(key, raising=False)  |  tests/conftest.py:305 (task 8): scrubbed = {key: os.environ.pop(key, None) for key in (*REDIRECT_KEYS, *redirect_env)}",
+      "description": "Task 7 hand-rolls AWS env isolation with monkeypatch.delenv - THE EXACT MECHANISM TASK 8 PROVED UNSOUND AND REPLACED in the same cycle (monkeypatch's delitem records no undo entry when the key is absent). In test_the_dispatch_guard_catches_a_landed_body_whatever_the_profile_holds[profile-set] at tests/test_cli.py:311, aws.aws_login() writes os.environ['AWS_REGION'] directly (launcher/eks/aws.py:38) before it dies, so on a machine with AWS_REGION unset - bare CI, the case the test parametrizes - that export OUTLIVES THE TEST and the docstring's restoration claim is false. Nothing reddens today ONLY because task 8's REDIRECT_KEYS includes AWS_REGION, so a sibling task's union scrub is what contains the leak.",
+      "remediation": "Replace the monkeypatch.delenv pair in use_profile (tests/test_cli.py:280-281) with the same save/restore shape redirected uses at tests/conftest.py:305-310, or convert the two guard tests to request the shared redirected fixture with AWS_PROFILE from a redirect_env override (note the teardown-ordering trap tests/test_conftest.py:70-78 documents: the setter must be set up BEFORE redirected). Correct the use_profile docstring either way.",
+      "wave": "7.6"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:52-04:00",
+      "id": "q2",
+      "severity": "medium",
+      "category": "inconsistency",
+      "confidence": "high",
+      "location": "tests/test_smoke_queries.py:267-287 (task 4) and tests/test_frontend_overlay.py:13,30,324 (task 6)",
+      "evidence": "task 4 wave 1: core.run(sys.executable, '-O', '-c', ..., stdout=core.PIPE, ...)  |  task 6 wave 2: import subprocess; subprocess.run([NODE,'-e',program], capture_output=True, ...)",
+      "description": "Both tasks needed to spawn a child process from a test and each chose a different spelling. Task 4 (wave 1) ESTABLISHED THE IN-CYCLE PRECEDENT by routing its python -O child through core.run with core.PIPE; task 6 (wave 2, separate worktree) imported subprocess directly, which makes launcher/core.py:3 - 'This is the only module that imports subprocess' - literally false repo-wide. The orchestrator flagged the constraint half in task 6's verdict; the CROSS-TASK half it could not see from one diff is that a sibling task had already shipped the other spelling, making this a convention divergence in a public reference implementation rather than only a stale docstring.",
+      "remediation": "Route the node child at tests/test_frontend_overlay.py:324 through core.run(NODE,'-e',program, stdout=core.PIPE, stderr=core.PIPE, text=True) and drop the import at line 13, matching tests/test_smoke_queries.py:268 - note this test does not use fake_sh, so core.run is unpatched and the call goes through unchanged. If the direct import is kept instead, amend launcher/core.py:3 to say 'the only module in launcher/'.",
+      "wave": "7.6"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:53-04:00",
+      "id": "q3",
+      "severity": "medium",
+      "category": "test-gap",
+      "confidence": "high",
+      "location": "tests/test_eks_check.py:105-111 and :514-545 (task 5) against tests/renders/langfuse-configured.yaml:449,451 (task 1)",
+      "evidence": "tests/test_eks_check.py:107: documents = check.load_documents(recorded(CONFIGURED))  |  network-policy.yaml:19 claims 'a chart bump that renames the label fails the suite instead of quietly admitting the whole namespace again'  |  render:449 helm.sh/chart: opentelemetry-demo-0.41.0, compared to nothing",
+      "description": "Task 5's NetworkPolicy label guard reads the agent and frontend pod labels out of the COMMITTED RECORDINGS, not a live render - and task 1 established IN THIS SAME CYCLE that those recordings' freshness rests on a manual hand-prune documented in prose, that they had already gone stale silently once (sec-3), and that nothing detects positional staleness. So a config.CHART_VERSION bump without regeneration leaves the selector test passing against the OLD label set while the cluster renders the new one: the podSelector matches nothing and the policy both READMEs advertise filters nothing, with the suite green. The manifest's own comment asserts a protection that is conditional on a manual step this repo has ALREADY MISSED ONCE.",
+      "remediation": "Add one assertion in tests/test_eks_check.py pinning the recordings to the chart pin: for each of CONFIGURED and PLAIN, assert f'opentelemetry-demo-{config.CHART_VERSION}' appears as a helm.sh/chart label in recorded(name) (present today at renders:449 and :583). A bump then fails with a message telling the editor to re-run the regeneration command in the fixture header - which is what makes task 5's selector guard AND task 1's value comparison both real rather than contingent.",
+      "wave": "7.6"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:53-04:00",
+      "id": "q4",
+      "severity": "low",
+      "category": "duplication",
+      "confidence": "high",
+      "location": "tests/conftest.py:316-327 (task 8) and tests/test_docs.py:193-196 (task 7)",
+      "evidence": "conftest.py:319 claims '_actions and _SubParsersAction are argparse internals ... which is the reason this is in one place: an upgrade that moves them breaks one line rather than one per test module.'  |  test_docs.py:195 still: last in action.option_strings and action.nargs != 0 for action in parser._actions",
+      "description": "Task 8 absorbed task 7's deferred subparser-walk duplication into conftest.subparsers_action, but ONLY THE _SubParsersAction HALF MOVED: names_rather_than_runs in tests/test_docs.py still walks parser._actions and reads option_strings/nargs itself. The consolidation's own justification - one line to fix on an argparse change - is therefore only partly delivered, and a reader of conftest.py is told the internals live in one place when they live in two.",
+      "remediation": "Add a sibling helper beside subparsers_action in tests/conftest.py (e.g. takes_a_value(parser, flag) wrapping the parser._actions walk) and call it from tests/test_docs.py:194-196, so both argparse internals are reached from one file. Alternatively narrow conftest.py:319's docstring to claim only the subparser lookup.",
+      "wave": "7.6"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:53-04:00",
+      "id": "q5",
+      "severity": "low",
+      "category": "inconsistency",
+      "confidence": "high",
+      "location": "tests/test_core.py:49 (task 2) and scripts/smoke.py:311,327 (task 4)",
+      "evidence": "tests/test_core.py:49: for source in sorted((core.ROOT / 'launcher').rglob('*.py')):  |  scripts/smoke.py:311,327: core.die(...)",
+      "description": "Task 2 gave the refusal convention a machine guard scoped to launcher/ while task 4, IN THE SAME WAVE, extended core.die into scripts/smoke.py - the repo's other operator-facing entry point. scripts/ currently holds zero bare message SystemExit sites, so widening the guard costs nothing today and closes the one place where the next refusal is most likely to be written without a reviewer noticing.",
+      "remediation": "Change the scan root at tests/test_core.py:49 to iterate both core.ROOT/'launcher' and core.ROOT/'scripts' (scripts/demo.py and scripts/smoke.py add no message sites, so the existing assertions hold unchanged), and update core.die's docstring at launcher/core.py:48 so the stated scope matches the guarded one.",
+      "wave": "7.6"
+    },
+    {
+      "status": "risk-accepted",
+      "justification": "",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T12:21:54-04:00",
+      "id": "q6",
+      "severity": "info",
+      "category": "complexity",
+      "confidence": "medium",
+      "location": "tests/test_docs.py:61-112, tests/test_core.py:65-70, tests/conftest.py:207-266 with tests/test_conftest.py:41-56, tests/renders/langfuse-configured.yaml:1-15",
+      "evidence": "BARE_SPANS per README; assert sorted(codes) == ['launcher/eks/tunnel.py']*2; REDIRECT_KEYS + MIGRATED; the hand-pruned render recordings",
+      "description": "The cycle added FOUR pinned inventories by four authors - per-README bare command spans, the refusal guard's file/count pair, the redirect key union plus its MIGRATED enumeration, and the hand-pruned render recordings. They neither overlap nor contradict, and each prints a useful diff on failure, but collectively a future edit to a README, a launcher module, a test module's .env mapping or the chart pin fails a test in a file the editor is not touching, and NOTHING INDEXES THEM. This cycle only avoided proving the point because task 7 (wave 3) pinned BARE_SPANS after task 5 (wave 2) had already edited both READMEs.",
+      "remediation": "Not worth a code change on its own. If you want it closed, add a short 'mechanical guards and what each pins' list at the tests' entry point (a comment block atop tests/conftest.py) naming the four inventories and the edit that obliges each, so the obligation is discoverable before the failure rather than after it.",
+      "wave": "7.6"
+    }
+  ],
   "gap_notes": [],
   "plan_review_state": {
     "rounds": [
@@ -657,17 +1205,204 @@
         "rejected": 0,
         "exit": "timeout",
         "recorded_at": "2026-09-15T09:38:21-04:00"
+      },
+      {
+        "round": 2,
+        "started_at": "2026-09-15T09:44:00-04:00",
+        "duration_s": 583,
+        "model_resolved": null,
+        "verdict": "revise",
+        "findings": 5,
+        "applied": 4,
+        "deferred": 0,
+        "rejected": 0,
+        "exit": "ok",
+        "recorded_at": "2026-09-15T09:55:21-04:00"
       }
     ],
     "threshold": "medium"
   },
   "managed_run": {
     "started_at": "2026-09-15T09:40:00-04:00",
-    "go_confirmed_at": null,
+    "go_confirmed_at": "2026-09-15T10:05:47-04:00",
     "paused_at": null,
     "pause_reason": "",
     "resumes": [],
-    "completed_at": null,
-    "auto_decisions": []
-  }
+    "completed_at": "2026-09-15T12:22:46-04:00",
+    "auto_decisions": [
+      {
+        "id": "ad1",
+        "timestamp": "2026-09-15T10:05:47-04:00",
+        "phase": "4.7b",
+        "decision": "go gate confirmed after a Codex review round the user requested: 5 findings, 5 applied (4 by the orchestrator, pr1 by user decision); running managed",
+        "reason": "user selected 'Run, but Codex-review first' then 'Run managed'; pr1's constraint amendment was the user's own call because constraints are user-owned"
+      },
+      {
+        "id": "ad2",
+        "timestamp": "2026-09-15T10:22:27-04:00",
+        "phase": "5/7",
+        "decision": "task 3 re-scoped mid-wave: ac5/ac6 moved verbatim to a new task 10 owning all four ASSISTANT_PATH files, scheduled in wave 2; task 3 keeps its committed half and gets an evaluator pass on it",
+        "reason": "the blocking edge was an orchestrator Phase 4.5 miss (shared identifiers unchecked), so the task as scoped was unachievable rather than the work being wrong. Chose the implementer's option 2 over option 1 because authorising a mid-wave edit to another task's reserved file bets on non-colliding hunks. No AC was weakened - both critical ACs moved with identical text."
+      },
+      {
+        "id": "ad3",
+        "timestamp": "2026-09-15T10:30:59-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 1: tasks 1, 2, 3, 4 → main; verified green at 443 passed; pushed",
+        "reason": "merge-and-push pre-authorized at the go gate. All four held transcribed PASS verdicts and all four merges applied clean - including task 3, whose blocked half was re-scoped to task 10 and whose remaining half earned its own evaluator PASS, so nothing merged on a waived AC"
+      },
+      {
+        "id": "ad4",
+        "timestamp": "2026-09-15T11:04:11-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 2: tasks 5, 6, 9, 10 → main; verified green at 451 passed; pushed",
+        "reason": "merge-and-push pre-authorized at the go gate; all four held transcribed PASS verdicts, no gap_capture, and all four merges applied clean including task 6's unpredicted demo-values.yaml touch, which collided with nothing"
+      },
+      {
+        "id": "ad5",
+        "timestamp": "2026-09-15T11:31:34-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 3: task 7 → main; verified green at 460 passed; pushed",
+        "reason": "merge-and-push pre-authorized at the go gate; task 7 held a transcribed PASS verdict on first attempt and the merge was clean"
+      },
+      {
+        "id": "ad6",
+        "timestamp": "2026-09-15T12:12:18-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 4: task 8 → main; verified green at 488 passed; pushed. All 4 waves consolidated.",
+        "reason": "merge-and-push pre-authorized at the go gate; task 8 held a transcribed PASS verdict on first attempt and the merge was clean"
+      },
+      {
+        "id": "ad7",
+        "timestamp": "2026-09-15T12:22:46-04:00",
+        "phase": "7.5/7.6/close-out",
+        "decision": "security 2 findings (both low) and quality 6 findings (3 medium, 2 low, 1 info) all ACCEPTED AS KNOWN DEBT at the sweep close-out; none cleared either auto-remediate threshold",
+        "reason": "7.5 policy auto-remediates severity >= medium with confidence >= medium; 7.6 wants >= high with confidence high. Nothing qualified. The sweep ledger is closed by design so there is no deferral to carry, and the close-out records each item by name in plan.log and the final report instead. Applied the thresholds literally rather than re-scoring - four of the eight would make already-shipped work durable and are one line each, which is a strong case for a follow-up but not a reason to reinterpret a stated bar."
+      },
+      {
+        "id": "ad8",
+        "timestamp": "2026-09-15T12:22:46-04:00",
+        "phase": "7.65/7.7",
+        "decision": "Phase 7.65 skipped (sweep plan: ledger closed, deferrals[] empty by design); Phase 7.7 skipped (no CHARTER.md)",
+        "reason": "plan.sweep is true so append-deferral refuses and deferred_review does not run - the designed loop terminator. No charter exists in this project, so there is nothing to reconcile."
+      }
+    ]
+  },
+  "plan_review_findings": [
+    {
+      "id": "pr1",
+      "reviewer_ref": "f1",
+      "status": "applied",
+      "disposition_reason": "USER DECISION 2026-09-15: allow the one add-on edit. Constraint 4 amended to authorise exactly one deploy/eks/tofu change - enableNetworkPolicy on the existing vpc-cni add-on - with identifier pinning otherwise intact; task 5 ac7 rewritten to Codex's proposed text and deploy/eks/tofu/eks.tf added to its file set. Without this the task would have shipped an unenforced control",
+      "dispositioned_at": "2026-09-15T10:05:46-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-15T09:54:44-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "hidden-dependency",
+      "target": "tasks[4].acceptance_criteria[6]",
+      "title": "The EKS CNI is not configured to enforce NetworkPolicies",
+      "description": "Adding and applying a NetworkPolicy does not restrict traffic on this cluster unless VPC CNI network-policy support is enabled. The task explicitly forbids the necessary Tofu edit, so its security outcome would be inert.",
+      "evidence": "deploy/eks/tofu/eks.tf:52-59 configures the vpc-cni add-on only with before_compute=true. `rg -n 'configuration_values|enableNetworkPolicy|ENABLE_NETWORK_POLICY|NetworkPolicy' .` found no enforcement configuration. AWS documents that EKS VPC CNI policy enforcement is disabled by default and requires `enableNetworkPolicy: \"true\"` ([Amazon EKS user guide](https://docs.aws.amazon.com/eks/latest/userguide/cni-network-policy-configure.html)).",
+      "recommendation": "Add deploy/eks/tofu/eks.tf to task 5 and replace ac7 so it permits only the VPC CNI enforcement setting while still prohibiting identifier, bucket, and state-key changes.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[4].acceptance_criteria[6]",
+        "proposed": "Plan constraint 4 holds: no Tofu identifier, state bucket or state key changes. Configure the existing vpc-cni add-on in deploy/eks/tofu/eks.tf with `enableNetworkPolicy: \"true\"` so Kubernetes NetworkPolicy resources are enforced; this add-on configuration is the only allowed deploy/eks/tofu edit, and Tofu validation must pass."
+      },
+      "round": 2
+    },
+    {
+      "id": "pr2",
+      "reviewer_ref": "f2",
+      "status": "applied",
+      "disposition_reason": "applied as a MODIFY rather than Codex's suggested remove: the ungradeable provenance AC is deleted from task 6 (ACs renumbered 1-6) but the regenerate-never-hand-edit rule is preserved as implementer guidance in the task notes. Codex is right that no evaluator can grade the editing process from a diff - a hand-edited and a regenerated patch can be byte-identical - and that ac7 already covers the observable consequence. Deleting the rule outright would have lost a real repo convention, so it moved rather than vanished",
+      "dispositioned_at": "2026-09-15T09:55:00-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-15T09:54:44-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "untestable-ac",
+      "target": "tasks[5].acceptance_criteria[5]",
+      "title": "Patch-regeneration provenance cannot be graded from the final diff",
+      "description": "A hand-edited patch and a regenerated patch can produce identical bytes. Neither the verification result nor the git diff can prove which editing process was used, and the HANDOFF exception is unavailable to the evaluator.",
+      "evidence": "frontend/patches/README.md:11-24 documents the regeneration workflow, while scripts/check-frontend.sh:12-30 only stages, applies, type-checks, and lints the resulting patches. No verification step records how the patch bytes were produced. Acceptance criterion ac7 already checks the observable pre-image and clean-application properties.",
+      "recommendation": "Move the regeneration instruction to task notes and remove it as a critical acceptance criterion; grade the observable patch integrity through ac7 and check-frontend.sh.",
+      "suggested_change": {
+        "op": "remove",
+        "target": "tasks[5].acceptance_criteria[5]",
+        "proposed": ""
+      },
+      "round": 2
+    },
+    {
+      "id": "pr3",
+      "reviewer_ref": "f3",
+      "status": "applied",
+      "disposition_reason": "applied as suggested: task 1 ac3 now requires a COMMITTED regression test that corrupts one generated env value in a recording and asserts the check names service, key, expected and rendered value, and must fail against the pre-task implementation - replacing a run-it-and-report-it demonstration whose evidence did not survive into the graded diff",
+      "dispositioned_at": "2026-09-15T09:55:01-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-15T09:54:44-04:00",
+      "severity": "medium",
+      "confidence": 0.97,
+      "category": "untestable-ac",
+      "target": "tasks[0].acceptance_criteria[2]",
+      "title": "The required failing demonstration may exist only transiently",
+      "description": "The criterion permits the implementer to run a failure before regenerating the fixtures and merely report it. That failure disappears from the final diff and the successful verification command, leaving the evaluator unable to distinguish real regression coverage from an unsupported claim.",
+      "evidence": "tests/test_eks_check.py:54-69 provides recorded() and edited() helpers suitable for permanent corruption tests, and tests/test_eks_check.py:136-139 only proves the final recordings are clean. The plan verification command retains no output from a pre-regeneration failing run.",
+      "recommendation": "Require a committed regression test that corrupts a generated value and asserts the new diagnostic.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[0].acceptance_criteria[2]",
+        "proposed": "check.environment_problems compares the generated half's values as well as its names. tests/test_eks_check.py includes a committed regression test that changes one generated env value in a recording and asserts the check reports the service, key, expected value and rendered value; the test must fail against the pre-task implementation."
+      },
+      "round": 2
+    },
+    {
+      "id": "pr4",
+      "reviewer_ref": "f4",
+      "status": "applied",
+      "disposition_reason": "applied as suggested: task 7 ac3 now requires a COMMITTED regression test that substitutes an EKS handler with one calling core.run() and asserts the per-invocation guard names that subcommand, with AWS_PROFILE both unset and set, instead of asking the implementer to provoke the guard during the session",
+      "dispositioned_at": "2026-09-15T09:55:01-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-15T09:54:44-04:00",
+      "severity": "medium",
+      "confidence": 0.97,
+      "category": "untestable-ac",
+      "target": "tasks[6].acceptance_criteria[2]",
+      "title": "Provoking the CLI guard outside the committed tests is not evaluator-visible",
+      "description": "The criterion asks the implementer to provoke a failure but does not require that proof to remain in the diff. A normal green pytest run cannot show that the new guard itself was ever made to fail.",
+      "evidence": "tests/test_cli.py:209-218 skips every implemented handler and performs one no-process assertion only after the loop. tests/test_cli.py:149-172 and 221-250 show the same end-of-body pattern. The verification command runs pytest normally and preserves no deliberate-failure transcript.",
+      "recommendation": "Require a committed meta-regression test that injects a process call and asserts the per-invocation guard catches and identifies it with AWS_PROFILE absent.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[6].acceptance_criteria[2]",
+        "proposed": "A committed regression test leaves AWS_PROFILE unset, substitutes one EKS handler with a handler that calls core.run(), and asserts the per-invocation no-process guard raises for and names that specific subcommand. The same guard is exercised with AWS_PROFILE set."
+      },
+      "round": 2
+    },
+    {
+      "id": "pr5",
+      "reviewer_ref": "f5",
+      "status": "applied",
+      "disposition_reason": "applied as suggested, and the orchestrator verified the vacuity claim directly: tests/conftest.py:7 unconditionally sets AGENT_MODE='scripted' before collection, so exporting junk AGENT_MODE into the whole suite proves nothing, and the plan verification command exports none of the named values so the evaluator would never have run the claimed proof. Task 8 ac5 now requires a committed test that sets the junk AFTER conftest import and asserts the fixture's own contract per migrated combination, failing if any former fixture's scrubbed key is missing from the union",
+      "dispositioned_at": "2026-09-15T09:55:02-04:00",
+      "supersedes": null,
+      "discovered_at": "2026-09-15T09:54:44-04:00",
+      "severity": "high",
+      "confidence": 0.99,
+      "category": "wrong-verification",
+      "target": "tasks[7].acceptance_criteria[4]",
+      "title": "The exported AGENT_MODE proof is vacuous and absent from verification",
+      "description": "The proposed whole-suite environment run cannot prove AGENT_MODE isolation because conftest overwrites that variable during import. The plan verification also does not export any of the named junk values, so the evaluator will not execute the claimed proof at all.",
+      "evidence": "tests/conftest.py:5-8 unconditionally assigns AGENT_MODE=\"scripted\" before test collection. Existing redirected fixtures scrub environment after import, for example tests/test_eks_deploy.py:270-300 and tests/test_eks_ops.py:169-198. The verification string invokes plain `.venv/bin/pytest -q` without CLICKHOUSE_ENDPOINT, CLICKHOUSE_PASSWORD, AGENT_MODE, or AWS_PROFILE assignments.",
+      "recommendation": "Replace the external-shell demonstration with a committed regression test that sets the variables after conftest import and directly exercises the shared fixture's union scrub behavior.",
+      "suggested_change": {
+        "op": "modify",
+        "target": "tasks[7].acceptance_criteria[4]",
+        "proposed": "Add a committed regression test for the shared redirected fixture that sets CLICKHOUSE_ENDPOINT, CLICKHOUSE_PASSWORD, AGENT_MODE and AWS_PROFILE to junk after conftest import, exercises every migrated env-mapping/scrub-set combination, and asserts requested file values win while every requested inherited key is absent. The test must fail if any former fixture's scrubbed key is omitted from the union."
+      },
+      "round": 2
+    }
+  ]
 }
