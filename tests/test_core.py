@@ -1,10 +1,77 @@
 """launcher.core: the reporting helpers and the three subprocess chokepoints."""
 
+import ast
 import sys
 
 import pytest
 
 from launcher import core
+
+# The trees the two conventions below are enforced over. launcher/ is the CLI and scripts/ is
+# the other operator-facing entry point, so a refusal can be written in either. The process
+# surface is a claim about the whole repository, so its scan covers tests/ and concierge/ too.
+REFUSAL_TREES = ("launcher", "scripts")
+IMPORT_TREES = ("launcher", "scripts", "tests", "concierge")
+
+
+def python_sources(base, *trees):
+    """Every .py file under `trees`, sorted, paired with its path relative to `base`.
+
+    A tree that is not there is refused rather than skipped: `rglob` over a missing directory
+    yields nothing, which is how a scan whose tree was renamed stays green while covering
+    none of it -- the exact way the guards below would go silent.
+    """
+    for tree in trees:
+        root = base / tree
+        assert root.is_dir(), f"{tree}/ is not a directory under {base}: the scan would be empty"
+        for source in sorted(root.rglob("*.py")):
+            yield source, str(source.relative_to(base))
+
+
+def refusal_sites(base, *trees):
+    """The files under `trees` that raise SystemExit, split into messages and bare exit codes.
+
+    Paths come back relative to `base`, sorted and keyed by file. `base` is a parameter rather
+    than core.ROOT so that the same walk the real trees are scanned with can be pointed at a
+    synthetic tree: a guard nothing has ever run against a failing input is not a guard.
+    """
+    messages, codes = [], []
+    for source, where in python_sources(base, *trees):
+        for node in ast.walk(ast.parse(source.read_text())):
+            raised = node.exc if isinstance(node, ast.Raise) else None
+            if not isinstance(raised, ast.Call):
+                continue
+            if getattr(raised.func, "id", None) != "SystemExit":
+                continue
+            texts = [
+                child
+                for arg in raised.args
+                for child in ast.walk(arg)
+                if isinstance(child, ast.JoinedStr)
+                or (isinstance(child, ast.Constant) and isinstance(child.value, str))
+            ]
+            (messages if texts else codes).append(where)
+    return sorted(messages), sorted(codes)
+
+
+def subprocess_importers(base, *trees):
+    """The files under `trees` that import `subprocess`, relative to `base` and sorted.
+
+    Both spellings count -- `import subprocess`, aliased or not, and `from subprocess import
+    ...` -- because either one puts a second process surface in the repository.
+    """
+    importers = []
+    for source, where in python_sources(base, *trees):
+        for node in ast.walk(ast.parse(source.read_text())):
+            if isinstance(node, ast.Import):
+                found = any(alias.name.split(".")[0] == "subprocess" for alias in node.names)
+            elif isinstance(node, ast.ImportFrom):
+                found = (node.module or "").split(".")[0] == "subprocess"
+            else:
+                continue
+            if found:
+                importers.append(where)
+    return sorted(set(importers))
 
 
 def test_log_reports_progress_on_stdout(capsys):
@@ -33,34 +100,20 @@ def test_die_reports_on_stderr_and_exits_non_zero():
     assert "no cluster" not in failed.stdout
 
 
-def test_every_launcher_refusal_goes_through_die_and_int_exits_are_left_alone():
-    """The refusal convention core.die's docstring states, enforced over launcher/.
+def test_every_refusal_goes_through_die_and_int_exits_are_left_alone():
+    """The refusal convention core.die's docstring states, enforced over launcher/ and scripts/.
 
     A second spelling of failure is the thing being prevented, and it comes back one
     `raise SystemExit("...")` at a time, so the rule is a test rather than a review habit.
+    scripts/ is scanned alongside launcher/ because it holds the other operator-facing entry
+    points -- smoke.py already refuses through core.die -- so it is where the next stray
+    refusal is most likely to be written.
     `raise SystemExit(<int>)` is deliberately still allowed: that form sets an exit CODE and
     prints nothing, which is how `eks tunnel status` answers the shell.
     """
-    import ast
-
     # Keyed by file rather than by line, so that editing any of these modules for an
     # unrelated reason cannot fail this test with an accusation about refusal style.
-    messages, codes = [], []
-    for source in sorted((core.ROOT / "launcher").rglob("*.py")):
-        tree = ast.parse(source.read_text())
-        for node in ast.walk(tree):
-            raised = node.exc if isinstance(node, ast.Raise) else None
-            if not isinstance(raised, ast.Call) or getattr(raised.func, "id", None) != "SystemExit":
-                continue
-            where = str(source.relative_to(core.ROOT))
-            texts = [
-                child
-                for arg in raised.args
-                for child in ast.walk(arg)
-                if isinstance(child, ast.JoinedStr)
-                or (isinstance(child, ast.Constant) and isinstance(child.value, str))
-            ]
-            (messages if texts else codes).append(where)
+    messages, codes = refusal_sites(core.ROOT, *REFUSAL_TREES)
 
     assert messages == ["launcher/core.py"], (
         "an operator-facing refusal outside core.die: use core.die(...) instead"
@@ -68,6 +121,68 @@ def test_every_launcher_refusal_goes_through_die_and_int_exits_are_left_alone():
     assert sorted(codes) == ["launcher/eks/tunnel.py"] * 2, (
         "the tunnel's integer exits are exit codes, not messages, and must stay as they are"
     )
+
+
+def test_the_refusal_scan_reaches_a_stray_systemexit_under_scripts(tmp_path):
+    """The negative half of the guard above: prove the widened scan bites on scripts/.
+
+    The real tree holds no stray refusal, so a scan that silently skipped scripts/ would pass
+    the test above exactly as a working one does. This one feeds the same walk a synthetic
+    scripts/-shaped tree that does hold one.
+    """
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "stray.py").write_text('raise SystemExit("no cluster: run `eks deploy` first")\n')
+    (scripts / "answers_the_shell.py").write_text("raise SystemExit(2)\n")
+    (scripts / "well_behaved.py").write_text("from launcher import core\n\ncore.die('gone')\n")
+
+    messages, codes = refusal_sites(tmp_path, "scripts")
+
+    assert messages == ["scripts/stray.py"], "a message refusal under scripts/ must be reported"
+    assert codes == ["scripts/answers_the_shell.py"], "an integer exit is a code, not a refusal"
+
+
+def test_both_scans_refuse_a_tree_that_is_not_there(tmp_path):
+    """A renamed or misspelled tree must fail loudly rather than quietly scan nothing."""
+    (tmp_path / "launcher").mkdir()
+
+    with pytest.raises(AssertionError, match="scripts/"):
+        refusal_sites(tmp_path, "launcher", "scripts")
+    with pytest.raises(AssertionError, match="scripts/"):
+        subprocess_importers(tmp_path, "launcher", "scripts")
+
+
+def test_subprocess_is_imported_in_core_alone_so_the_process_surface_stays_one_place():
+    """The claim in core.py's own module docstring, enforced rather than asserted in prose.
+
+    Every command the CLI runs goes through core.run(), core.capture() or core.popen(), which
+    is what lets the tests fake the whole process surface in one fixture. A second module
+    importing subprocess spawns a child nothing can record, and the last one arrived from a
+    test rather than from the launcher, so tests/ and concierge/ are scanned too.
+    """
+    importers = subprocess_importers(core.ROOT, *IMPORT_TREES)
+    strays = ", ".join(where for where in importers if where != "launcher/core.py")
+
+    assert importers == ["launcher/core.py"], (
+        "subprocess is imported outside launcher/core.py -- go through core.run(), "
+        f"core.capture() or core.popen() instead: {strays or 'core.py stopped importing it'}"
+    )
+
+
+def test_the_subprocess_scan_reports_both_import_spellings(tmp_path):
+    """The negative half of the guard above, over a synthetic tree holding both spellings."""
+    tree = tmp_path / "launcher"
+    (tree / "eks").mkdir(parents=True)
+    (tree / "plain.py").write_text("import subprocess\n")
+    (tree / "eks" / "aliased.py").write_text("import subprocess as sp\n")
+    (tree / "eks" / "from_import.py").write_text("from subprocess import run\n")
+    (tree / "innocent.py").write_text("from launcher import core\n\ncore.log('no child here')\n")
+
+    assert subprocess_importers(tmp_path, "launcher") == [
+        "launcher/eks/aliased.py",
+        "launcher/eks/from_import.py",
+        "launcher/plain.py",
+    ], "both import spellings are reported, and an innocent module is not"
 
 
 def test_need_names_every_missing_command_in_one_message():
