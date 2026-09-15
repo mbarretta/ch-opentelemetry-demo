@@ -45,12 +45,12 @@ def log(message):
 def die(message):
     """Fail with a message on stderr and a non-zero exit status.
 
-    THE REFUSAL CONVENTION FOR THIS PACKAGE: every operator-facing refusal in `launcher/`
-    raises through here, never through a bare `raise SystemExit("some message")`. One CLI
-    should answer failure one way -- an `error: ` prefix on stderr, exit status 1 -- and a
-    second spelling is how it stops doing that. Messages read as the continuation of that
-    prefix: lowercase first word unless it is a proper noun or an identifier, and `: ` before
-    a fix-it hint.
+    THE REFUSAL CONVENTION FOR THIS CLI: every operator-facing refusal under `launcher/` and
+    `scripts/` -- both trees a test enforces this over -- raises through here, never through a
+    bare `raise SystemExit("some message")`. One CLI should answer failure one way -- an
+    `error: ` prefix on stderr, exit status 1 -- and a second spelling is how it stops doing
+    that. Messages read as the continuation of that prefix: lowercase first word unless it is
+    a proper noun or an identifier, and `: ` before a fix-it hint.
 
     SystemExit carries the text, so callers and tests read it off the exception; the
     interpreter prints it to stderr and exits 1. `raise SystemExit(<int>)` is a different
