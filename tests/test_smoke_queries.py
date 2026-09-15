@@ -11,17 +11,21 @@ Both HTTP seams are patched separately because the two clients are built in two 
 ClickHouse's in `launcher.eks.ops` (reused rather than reimplemented) and Langfuse's in
 `scripts.smoke`.
 
-Two checks do start a process, and only these two: `__debug__` is a compile-time constant, so
-what `python -O` does to the guards can only be seen from a child interpreter started that way.
-They reach no backend -- both refuse before anything is driven.
+Three checks do start a process, and only these three: `__debug__` is a compile-time constant,
+so what `python -O` does to the guards can only be seen from a child interpreter started that
+way. Two of them read a refusal back, and neither reaches a backend -- both refuse before
+anything is driven. The third asserts what the child was handed, because a real process does
+not get the `redirected` fixture's isolation for free (see `optimised`).
 """
 
 import base64
 import json
+import os
 import sys
 
 import httpx
 import pytest
+from conftest import REDIRECT_KEYS
 
 import scripts.smoke as smoke
 from launcher import cli, core
@@ -264,30 +268,54 @@ def test_a_trace_id_that_is_not_thirty_two_hex_digits_never_reaches_the_statemen
             smoke.eks_span_sql(DATABASE, bad)
 
 
-def optimised(program):
+def optimised(program, checkout):
     """`program` in a child interpreter with asserts compiled out, the way `python -O` runs it.
 
     A real child rather than a patched flag: `__debug__` is a compile-time constant, so whether
     a guard survives optimisation can only be seen from an interpreter that was started that
-    way. The first line of every program is the control -- it disappears under -O, so a child
-    that reports it was not optimised after all and everything asserted about it means nothing.
+    way. The control is the first line of the preamble every program runs behind -- it
+    disappears under -O, so a child that reports it was not optimised after all, and everything
+    asserted about that child, means nothing.
+
+    A child is a real process, so the isolation `redirected` gives an in-process test has to be
+    built for it here, and in two halves. Every `conftest.REDIRECT_KEYS` entry is dropped from
+    the environment it inherits -- by reference, so a key added to the union is covered here
+    without a second edit -- and `core.ROOT` and `core.RUNTIME` are pointed at `checkout`, a
+    throwaway directory, before anything that reads the root `.env` is imported. Otherwise a
+    plain `pytest` run hands the child the operator's own credentials and live checkout, and the
+    only thing between it and a paid model turn against their cluster is the guard under test.
+
+    The paths are overridden in the child's own program text, not from out here: `core.ROOT` is
+    derived from `__file__`, so the child recomputes the live checkout whatever its `sys.path`
+    holds -- and the real root has to stay on that path for `import scripts.smoke` to resolve at
+    all. `launcher.RUNTIME` is reassigned with them for the reason the `redirected` fixture
+    above patches `smoke.RUNTIME`: the package binds that name once, at import.
+
+    What the child keeps is a working interpreter -- PATH, HOME and PYTHONPATH among it -- so a
+    refusal read back off one of these is the guard firing, not a process that could not start.
     """
+    scrubbed = {key: value for key, value in os.environ.items() if key not in REDIRECT_KEYS}
     finished = core.run(
         sys.executable,
         "-O",
         "-c",
         f"import sys; sys.path.insert(0, {str(core.ROOT)!r})\n"
-        "assert False, 'the child interpreter still has asserts enabled'\n" + program,
+        "assert False, 'the child interpreter still has asserts enabled'\n"
+        "import pathlib, launcher, launcher.core\n"
+        f"launcher.core.ROOT = pathlib.Path({str(checkout)!r})\n"
+        "launcher.core.RUNTIME = launcher.core.ROOT / '.runtime'\n"
+        "launcher.RUNTIME = launcher.core.RUNTIME\n" + program,
         check=False,
         stdout=core.PIPE,
         stderr=core.PIPE,
         text=True,
+        env=scrubbed,
     )
     assert "still has asserts enabled" not in finished.stderr, finished.stderr
     return finished
 
 
-def test_the_trace_id_guard_still_refuses_with_asserts_compiled_out():
+def test_the_trace_id_guard_still_refuses_with_asserts_compiled_out(tmp_path):
     """The id crosses a trust boundary, so `python -O` may not be what turns the guard off.
 
     It arrives in the storefront's JSON from inside the cluster and is interpolated into a
@@ -296,7 +324,8 @@ def test_the_trace_id_guard_still_refuses_with_asserts_compiled_out():
     """
     refused = optimised(
         "import scripts.smoke as smoke\n"
-        "print(smoke.eks_span_sql('otel', \"' OR 1=1 --\"))\n"
+        "print(smoke.eks_span_sql('otel', \"' OR 1=1 --\"))\n",
+        tmp_path,
     )
 
     assert refused.returncode != 0, refused.stdout
@@ -304,20 +333,56 @@ def test_the_trace_id_guard_still_refuses_with_asserts_compiled_out():
     assert "otel_traces" not in refused.stdout, "the statement was never built"
 
     passed = optimised(
-        f"import scripts.smoke as smoke\nprint(smoke.require_trace_id({TRACE_ID!r}))\n"
+        f"import scripts.smoke as smoke\nprint(smoke.require_trace_id({TRACE_ID!r}))\n",
+        tmp_path,
     )
 
     assert passed.returncode == 0, passed.stderr
     assert TRACE_ID in passed.stdout, "a real id still goes through"
 
 
-def test_the_run_refuses_to_start_when_asserts_are_compiled_out():
+def test_the_run_refuses_to_start_when_asserts_are_compiled_out(tmp_path):
     """Every other check in the script is an assert, so an optimised run would pass vacuously."""
-    refused = optimised("import scripts.smoke as smoke\nsmoke.main(['--target', 'eks'])\n")
+    refused = optimised(
+        "import scripts.smoke as smoke\nsmoke.main(['--target', 'eks'])\n", tmp_path
+    )
 
     assert refused.returncode != 0
     assert "will not run with asserts compiled out" in refused.stderr
     assert "polling" not in refused.stdout, "it refuses before it drives a turn or a query"
+
+
+def test_the_optimised_child_inherits_neither_the_credentials_nor_the_real_checkout(
+    tmp_path, monkeypatch
+):
+    """What the two checks above would cost if the refusal they exercise ever regressed.
+
+    `require_assertions()` is the second line of `main()`, so it fires before any `.env` is
+    read -- and that ordering is one refactor away from being the only thing between a plain
+    `pytest` run and a paid model turn plus a live query against whatever ClickHouse Cloud
+    cluster the operator's own `.env` names. Both halves of the isolation are pinned from the
+    child's own report of what it got, so removing either one fails here.
+    """
+    sentinel = "sk-operator-key-that-must-not-reach-a-child"
+    monkeypatch.setenv("API_KEY", sentinel)
+
+    finished = optimised(
+        "import json, os\n"
+        "from launcher import core\n"
+        "print(json.dumps({'keys': sorted(os.environ), 'api_key': os.environ.get('API_KEY'),"
+        " 'root': str(core.ROOT), 'runtime': str(core.RUNTIME)}))\n",
+        tmp_path,
+    )
+
+    assert finished.returncode == 0, finished.stderr
+    assert sentinel not in finished.stdout and sentinel not in finished.stderr
+    reported = json.loads(finished.stdout)
+    assert reported["api_key"] is None, "the operator's own API_KEY reached the child"
+    inherited = [key for key in REDIRECT_KEYS if key in reported["keys"]]
+    assert inherited == [], f"the child inherited {inherited} from the shell"
+    assert "PATH" in reported["keys"], "a child with no PATH would refuse for the wrong reason"
+    assert reported["root"] == str(tmp_path) != str(core.ROOT), "the real `.env` was in reach"
+    assert reported["runtime"] == str(tmp_path / ".runtime")
 
 
 def test_a_missing_clickstack_credential_is_reported_by_the_config_helper(redirected):
