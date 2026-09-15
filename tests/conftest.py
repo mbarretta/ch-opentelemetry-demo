@@ -25,7 +25,11 @@
 # - `config.CHART_VERSION` bumped: both recordings in `tests/renders/` have to be regenerated,
 #   because every assertion read out of them is a stale render until they are.
 #   `chart_pin_problems` in `tests/test_eks_check.py` compares each recording's `helm.sh/chart`
-#   label against the pin and names the regeneration command.
+#   label against the pin and names the regeneration command. The same bump also obliges
+#   `CHART_RECEIVERS`, `CHART_PROCESSORS` and `CHART_EXPORTERS` in `tests/test_eks_values.py`,
+#   which name the collector components the chart itself defines and say so against this same
+#   pin -- and unlike the recordings, NOTHING PROVES THEY ARE STILL ACCURATE FOR IT. A bump
+#   that added or renamed a chart-defined component would leave them silently wrong.
 # - The `vpc-cni` add-on in `deploy/eks/tofu/eks.tf`: `enforcement_problems` in
 #   `tests/test_eks_check.py` pins the one setting, `enableNetworkPolicy = "true"` in that
 #   add-on's own `configuration_values`, that makes the agent NetworkPolicy enforceable on the
@@ -36,14 +40,27 @@
 #   `eks deploy` really applies, so an entry nothing applies is named rather than trusted.
 # - An `eks` subcommand implemented: `IMPLEMENTED` in `tests/test_cli.py` names the test file
 #   that owns each landed handler, and the dispatch guard calls every subcommand outside it.
+# - An entry added to `frontend/patches/`: `EXPECTED_PATCH_TARGETS` in
+#   `tests/test_frontend_overlay.py` maps every patch to the file it rewrites, and a new patch
+#   no entry names is a patch nothing checks applied cleanly.
+# - A `docker/*.Dockerfile` added: `DOCKERFILES` in `tests/test_build.py` maps each service to
+#   its Dockerfile, and the build assertions iterate it -- so an image nothing lists is an
+#   image nothing builds under test.
 #
 # Six of these are paired with a committed negative test that provokes the guard with the
 # failure it exists to catch -- the two scans in `tests/test_core.py`, the chart pin and the
 # add-on setting in `tests/test_eks_check.py`, the manifest tuple in `tests/test_eks_deploy.py`
 # and the dispatch guard in `tests/test_cli.py` -- and each of those sits directly below the
-# guard it feeds. The README lists and the `REDIRECT_KEYS` union are pinned by assertion only.
+# guard it feeds. The rest are pinned by assertion only: the README lists, the `REDIRECT_KEYS`
+# union, the two chart-component tuples, `EXPECTED_PATCH_TARGETS` and `DOCKERFILES`.
+#
+# This list is itself the kind of hand-kept inventory it catalogues, and nothing guards it.
+# Three of the entries above were missing when it was first written; they were found by the
+# cycle's own review gates rather than by a failing test. If you add a mechanical guard, add
+# its line here in the same edit.
 
 import argparse
+import contextlib
 import io
 import os
 import shlex
@@ -326,6 +343,32 @@ def redirect_env():
     return {}
 
 
+@contextlib.contextmanager
+def restored(*keys):
+    """Every key removed for the duration of the block and put back as it was, unset included.
+
+    Saved and restored rather than handed to `monkeypatch.delenv`, deliberately: `delenv`
+    records no undo entry for a key that was not set to begin with, so a key the test then
+    exports itself would outlive the test. `aws.aws_login()` exports AWS_PROFILE and AWS_REGION
+    into the real environment on purpose -- that is how kubectl's exec-auth plugin sees them --
+    which makes that the normal case rather than a corner of one.
+
+    Both callers of this are here and in `tests/test_cli.py`: the `redirected` fixture below
+    scrubs `REDIRECT_KEYS` plus the module's own `redirect_env` for a whole test, and
+    `test_cli.py` wraps the two keys a provoked login exports mid-test. They shared the shape
+    and duplicated the body until the loop was hoisted here.
+    """
+    before = {key: os.environ.pop(key, None) for key in keys}
+    try:
+        yield
+    finally:
+        for key, value in before.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 @pytest.fixture
 def redirected(tmp_path, monkeypatch, redirect_env):
     """A checkout of our own, with the `.env` the module asked for and nothing from the shell.
@@ -336,30 +379,19 @@ def redirected(tmp_path, monkeypatch, redirect_env):
     `REDIRECT_KEYS` and every key of `redirect_env` is removed for the duration of the test and
     put back afterwards.
 
-    Saved and restored rather than `monkeypatch.delenv`-ed, deliberately: `delenv` records no
-    undo entry for a key that was not set to begin with, so a key the test then exports itself
-    would outlive it. `aws.aws_login()` exports AWS_PROFILE and AWS_REGION into the real
-    environment on purpose -- that is how kubectl's exec-auth plugin sees them -- which makes
-    that the normal case here rather than a corner of one. `tests/test_cli.py` spells that same
-    save-and-restore as a `restored(*keys)` context manager, for the two keys a provoked login
-    exports mid-test; the shape is shared deliberately and the code is not, because the body of
-    this fixture is what every test module requests by name and moving it is a refactor rather
-    than a guard.
+    The save-and-restore itself is `restored()` above, which `tests/test_cli.py` also uses for
+    the two keys a provoked login exports mid-test. The reason it is saved rather than
+    `monkeypatch.delenv`-ed is documented there.
 
     Modules that need more than a checkout and an `.env` override this fixture and request it,
     adding their own patches on top (see `tests/test_eks_deploy.py`).
     """
     monkeypatch.setattr(core, "ROOT", tmp_path)
     monkeypatch.setattr(core, "RUNTIME", tmp_path / ".runtime")
-    scrubbed = {key: os.environ.pop(key, None) for key in (*REDIRECT_KEYS, *redirect_env)}
-    if redirect_env:
-        write_env(tmp_path, redirect_env)
-    yield tmp_path
-    for key, value in scrubbed.items():
-        if value is None:
-            os.environ.pop(key, None)
-        else:
-            os.environ[key] = value
+    with restored(*REDIRECT_KEYS, *redirect_env):
+        if redirect_env:
+            write_env(tmp_path, redirect_env)
+        yield tmp_path
 
 
 def subparsers_action(parser):

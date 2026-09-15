@@ -4,7 +4,7 @@ import contextlib
 import os
 
 import pytest
-from conftest import subparsers_action
+from conftest import restored, subparsers_action
 
 from launcher import cli, core, images, stack
 from launcher.eks import aws, check, ops, tunnel
@@ -279,23 +279,12 @@ def spawn_a_process(*_arguments, **_keywords):
 EXPORTED_BY_A_LOGIN = ("AWS_PROFILE", "AWS_REGION")
 
 
-@contextlib.contextmanager
-def restored(*keys):
-    """Every key removed for the duration of the block and put back as it was, unset included.
-
-    The shape `tests/conftest.py`'s `redirected` uses at :305-313, for the reason it documents:
-    `monkeypatch.delenv` records no undo entry for a key that was unset to begin with, so a key
-    the test then exports itself is never taken back out.
-    """
-    before = {key: os.environ.pop(key, None) for key in keys}
-    try:
-        yield
-    finally:
-        for key, value in before.items():
-            if value is None:
-                os.environ.pop(key, None)
-            else:
-                os.environ[key] = value
+# The save-and-restore for those two keys is `restored`, imported from `tests/conftest.py`
+# above: it is the same one the `redirected` fixture performs for a whole test, so the body
+# lives in one place and both call it. `monkeypatch.delenv` records no undo entry for a key
+# that was unset to begin with, so a key the test then exports itself is never taken back out.
+# Cited by name rather than by line number on purpose -- the reference this replaced named a
+# range in conftest.py that an insertion above the fixture had already staled.
 
 
 @contextlib.contextmanager

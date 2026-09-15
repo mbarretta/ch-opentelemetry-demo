@@ -26,7 +26,7 @@ import test_eks_infra
 import test_eks_ops
 import test_eks_tunnel
 import test_smoke_queries
-from conftest import REDIRECT_KEYS, Recorder
+from conftest import REDIRECT_KEYS, Recorder, restored
 
 from launcher import core
 from launcher.eks import config
@@ -223,3 +223,32 @@ class TestTheEnvironmentComesBack:
             os.environ[key] = value  # verbatim what aws.aws_login() does
 
         assert config.load_env()["AWS_REGION"] == "us-east-1", "the login is visible in the test"
+
+
+def test_restored_puts_a_set_key_back_and_leaves_an_unset_one_unset():
+    """`restored`'s own contract, watched failing -- it is now the body `redirected` runs.
+
+    The loop this pins used to be written out twice, here in the fixture and again in
+    `tests/test_cli.py`; hoisting it into one helper means one regression can now reach both
+    callers, so the helper needs a guard of its own rather than inheriting the fixture's.
+
+    Both limbs are asserted separately because they fail separately, and the second is the one
+    `monkeypatch.delenv` gets wrong: a key that was unset before the block must be unset after
+    even though the code inside set it, which is exactly what happens when a test provokes
+    `aws.aws_login()`.
+    """
+    was_set, was_unset = "HARNESS_PROBE_SET", "HARNESS_PROBE_UNSET"
+    os.environ[was_set] = "before"
+    os.environ.pop(was_unset, None)
+    try:
+        with restored(was_set, was_unset):
+            assert was_set not in os.environ, "a set key is removed for the block"
+            assert was_unset not in os.environ
+            os.environ[was_set] = "during"
+            os.environ[was_unset] = "exported by the code under test"
+
+        assert os.environ[was_set] == "before", "a set key comes back with its own value"
+        assert was_unset not in os.environ, "a key unset beforehand does not outlive the block"
+    finally:
+        os.environ.pop(was_set, None)
+        os.environ.pop(was_unset, None)

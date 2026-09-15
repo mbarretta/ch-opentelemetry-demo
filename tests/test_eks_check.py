@@ -143,13 +143,29 @@ def tofu_main():
     return (config.tofu_dir() / TOFU_MAIN).read_text()
 
 
+def uncommented(tofu_text):
+    """The OpenTofu with its comment lines dropped, so a disabled setting reads as disabled.
+
+    Commenting a line out is how an editor turns a Tofu setting off, and it leaves the text
+    the setting was written in behind -- so a guard that matches the raw file credits a
+    setting that is no longer in effect. Only whole-line comments go: an inline comment after
+    a live setting documents it rather than disabling it, and must not stop it matching. Both
+    spellings HCL accepts are handled.
+    """
+    return "\n".join(
+        line
+        for line in tofu_text.splitlines()
+        if not line.lstrip().startswith(("#", "//"))
+    )
+
+
 def enforcement_problems(tofu_text):
     """Whatever stops the agent's NetworkPolicy from being enforced, given the OpenTofu text.
 
     Text in rather than a path, so the failing input can be held in a test instead of written
     over `deploy/eks/tofu/`.
     """
-    if VPC_CNI_ENFORCEMENT.search(tofu_text):
+    if VPC_CNI_ENFORCEMENT.search(uncommented(tofu_text)):
         return []
     return [
         f"the vpc-cni add-on in deploy/eks/tofu/{TOFU_MAIN} no longer carries"
@@ -651,6 +667,39 @@ def test_the_enforcement_guard_names_the_manifest_the_addon_setting_makes_real()
     # `configuration_values` the add-on does not own would report nothing here.
     elsewhere = edited(tofu_main(), "vpc-cni = {", "vpc-cni = {}\n    other-addon = {")
     named(enforcement_problems(elsewhere), config.NETWORK_POLICY_MANIFEST)
+
+    # Commenting the line out is the ordinary way to disable a Tofu setting, and it is the case
+    # this guard missed when it was first written: the text stays in the file, so a guard that
+    # searched the raw OpenTofu still matched and reported nothing while the CNI enforced
+    # nothing. One case per spelling HCL accepts, because a guard proven against a DELETED
+    # setting is not thereby proven against a DISABLED one.
+    for comment in ("# ", "// "):
+        disabled = edited(
+            tofu_main(),
+            'enableNetworkPolicy = "true"',
+            f'{comment}enableNetworkPolicy = "true"',
+        )
+        named(
+            enforcement_problems(disabled),
+            "enableNetworkPolicy",
+            config.NETWORK_POLICY_MANIFEST,
+            "vpc-cni",
+        )
+
+
+def test_an_inline_comment_after_the_setting_does_not_disable_it():
+    """The other edge of the same fix: only WHOLE-LINE comments are dropped.
+
+    Stripping from the first `#` anywhere on a line would make a documented setting read as an
+    absent one, so the guard would redden on an edit that changed nothing about the cluster --
+    and a guard that reddens on a legitimate edit is one the next editor loosens.
+    """
+    annotated = edited(
+        tofu_main(),
+        'enableNetworkPolicy = "true"',
+        'enableNetworkPolicy = "true" # the CNI agent filters; see deploy/eks/README.md',
+    )
+    assert enforcement_problems(annotated) == []
 
 
 @pytest.mark.parametrize("name", [CONFIGURED, PLAIN])
