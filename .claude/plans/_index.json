@@ -14,8 +14,25 @@
       "wave_tasks_in_flight": [],
       "paused_reason": "",
       "deferred_open": 0,
-      "updated": "2026-09-15T15:55:56-04:00",
+      "updated": "2026-09-15T16:07:26-04:00",
       "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/improve-conditional-guards-sweep.json"
+    },
+    {
+      "slug": "fix-guard-scope-gaps",
+      "title": "Close the four scope gaps the sweep's own gates found",
+      "status": "planned",
+      "mode": "dev",
+      "parallelism": "auto",
+      "autonomy": "managed",
+      "tasks_total": 2,
+      "tasks_complete": 2,
+      "wave_state": "idle",
+      "current_wave": null,
+      "wave_tasks_in_flight": [],
+      "paused_reason": "",
+      "deferred_open": 0,
+      "updated": "2026-09-15T16:07:25-04:00",
+      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/fix-guard-scope-gaps.json"
     },
     {
       "slug": "feat-otel-demo-eks",
