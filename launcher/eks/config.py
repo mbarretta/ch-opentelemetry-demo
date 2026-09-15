@@ -81,8 +81,12 @@ COLLECTOR_LOG_TAIL = 40
 # parses it, and a filename spelled in two modules is a filename that can drift in one.
 NETWORK_POLICY_MANIFEST = "network-policy.yaml"
 # Every manifest under `k8s_dir()` that is applied unchanged, which is exactly what `eks check`
-# has to be able to parse offline. The generated and static *values* are not here: those are
-# Helm input, and the check renders them instead.
+# has to be able to parse offline. `eks deploy` applies each of them at its own point in the
+# sequence rather than by iterating this tuple -- the policy before the release exists, the
+# collector with its own roll-out wait and log tail -- so an entry added here has to be given an
+# apply of its own in `launcher/eks/lifecycle.py`, and `tests/test_eks_deploy.py` fails until it
+# has one. The generated and static *values* are not here: those are Helm input, and the check
+# renders them instead.
 STATIC_MANIFESTS = (COLLECTOR_MANIFEST, NETWORK_POLICY_MANIFEST)
 
 

@@ -229,6 +229,32 @@ def network_policy():
     return ["kubectl", "apply", "-f", str(config.k8s_dir() / config.NETWORK_POLICY_MANIFEST)]
 
 
+def unapplied_static_manifests(shell):
+    """Every `config.STATIC_MANIFESTS` entry no recorded `kubectl apply -f <path>` named.
+
+    The tuple is what `eks check` parses offline, but the deploy applies its members one at a
+    time from two functions rather than by iterating it -- the policy before the release, the
+    collector with its own roll-out wait -- so the two sets are related by convention and
+    nothing else. Reading the applied set out of the recording rather than from a list kept
+    here is what makes a third entry added to the tuple show up as unapplied.
+
+    The piped `apply -f -` calls are not this: those carry the namespaces and Secrets that are
+    assembled in Python, and `applied()` above is the accessor for them. An apply is matched by
+    its verb rather than by a fixed argv prefix, because `k8s.apply_manifest` writes a namespace
+    flag ahead of `apply` and a manifest applied by path could be spelled the same way.
+    """
+    from_disk = {
+        path
+        for call in shell.calls
+        if call.argv[0] == "kubectl" and "apply" in call.argv
+        for flag, path in zip(call.argv, call.argv[1:])
+        if flag == "-f" and path != "-"
+    }
+    return [
+        name for name in config.STATIC_MANIFESTS if str(config.k8s_dir() / name) not in from_disk
+    ]
+
+
 def deletion(name):
     return ["kubectl", "-n", config.NS_DEMO, "delete", "secret", name, "--ignore-not-found"]
 
@@ -390,6 +416,41 @@ def test_deploy_restricts_ingress_to_the_agent_before_the_release_creates_it(clu
     policy = yaml.safe_load(Path(network_policy()[-1]).read_text())
     assert policy["kind"] == "NetworkPolicy"
     assert policy["metadata"]["namespace"] == config.NS_DEMO
+
+
+def test_every_manifest_eks_check_parses_is_one_the_deploy_actually_applies(cluster, steps):
+    """The set `eks check` validates and the files a deploy applies are the same set.
+
+    `eks check` iterates `config.STATIC_MANIFESTS` (launcher/eks/check.py), so an entry added
+    to the tuple is parsed, reported as checked and -- because the deploy applies its manifests
+    one at a time rather than by iterating the tuple -- never sent to the API server. Nothing
+    but this assertion connects the two, which is why it reads the applied set back out of the
+    recorded processes instead of naming the two manifests it expects.
+    """
+    lifecycle.deploy()
+
+    unapplied = unapplied_static_manifests(cluster)
+    assert unapplied == [], (
+        f"config.STATIC_MANIFESTS names {', '.join(unapplied)}, which `eks check` parses and "
+        "this deploy never applied: give it an apply in launcher/eks/lifecycle.py, or take it "
+        "out of the tuple so the check stops claiming it"
+    )
+
+
+def test_the_static_manifest_guard_names_an_entry_the_deploy_never_applies(
+    cluster, steps, monkeypatch
+):
+    """The guard above, fed the failure it exists to catch: a third entry nothing applies.
+
+    The tuple is patched rather than edited, so the real one keeps its two members; what is
+    asserted is the reported name, because a guard that went silent -- collecting the applied
+    paths in a shape that never matches, say -- would otherwise still look green.
+    """
+    never_applied = "ingress-allowlist.yaml"
+    lifecycle.deploy()
+    monkeypatch.setattr(config, "STATIC_MANIFESTS", (*config.STATIC_MANIFESTS, never_applied))
+
+    assert unapplied_static_manifests(cluster) == [never_applied]
 
 
 def test_deploy_refuses_a_node_group_at_zero_before_it_touches_the_cluster(cluster, steps):
