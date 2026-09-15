@@ -1,5 +1,18 @@
 # Merge plan: ch-opentelemetry-demo
 
+> **Pre-implementation design record, kept verbatim.** Written on 2026-09-14 from
+> decisions taken with the user in that session, before any of the merge was built. The
+> build then ran as the harness plan `.claude/plans/feat-merge-ch-otel-demo.json`, and
+> this document is superseded wherever it disagrees with the code. The module surfaces
+> in `### Target layout` are the clearest case: `launcher/eks/aws.py` is still credited
+> here with schedule-state and state-bucket helpers that were later dropped from it as
+> unreachable, the live ones being in `infra.py` next to the commands that own them.
+> Nothing below is edited, on purpose: the gap between what was planned here and what
+> shipped is part of the record. For what the code does now, read the module docstrings
+> under `launcher/`, which are kept current; for why it diverged, read the `log` arrays of
+> `.claude/plans/feat-merge-ch-otel-demo.json` and
+> `.claude/plans/improve-merge-cycle-cleanup.json`.
+
 ## Context
 
 Two sibling repos overlay the same OpenTelemetry Demo 3.0.0 release and cannot be deployed together without cross-repo coupling:
