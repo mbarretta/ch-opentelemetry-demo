@@ -146,8 +146,8 @@ def collector_config(env):
         for key in ("LANGFUSE_BASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY")
     ]
     if any(lf) and not all(lf):
-        raise SystemExit(
-            "Set all three LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, and LANGFUSE_SECRET_KEY."
+        core.die(
+            "set all three of LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, and LANGFUSE_SECRET_KEY"
         )
     if all(lf):
         exporters["otlp_http/langfuse"] = {

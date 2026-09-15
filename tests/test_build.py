@@ -119,7 +119,7 @@ def test_stage_streams_the_export_through_the_core_chokepoint(inputs, monkeypatc
 
 def test_stage_rejects_upstream_pin_mismatch(inputs, monkeypatch):
     monkeypatch.setattr(core, "COMMIT", "0" * 40)
-    with pytest.raises(SystemExit, match="Expected upstream 0{40}"):
+    with pytest.raises(SystemExit, match="error: expected upstream 0{40}"):
         images.stage()
     assert not (core.RUNTIME / "build").exists()
 
@@ -223,7 +223,7 @@ def test_manifest_round_trips_the_published_section(inputs):
 
 
 def test_up_refuses_to_start_without_built_images(inputs, monkeypatch):
-    with pytest.raises(SystemExit, match="scripts/demo.py build"):
+    with pytest.raises(SystemExit, match=r"run `demo\.py build` first"):
         images.require_images()
     images.write_manifest("abc123def456", "linux/arm64", {"frontend": "sha256:1111"})
     monkeypatch.setattr(images, "image_exists", lambda image: False)
@@ -233,7 +233,10 @@ def test_up_refuses_to_start_without_built_images(inputs, monkeypatch):
     assert "astronomy-concierge-frontend:abc123def456" in message
     for service in ("agent", "mcp", "frontend-proxy"):
         assert f"{service} (never built)" in message, message
-    assert "scripts/demo.py build" in message
+    assert "run `demo.py build` first" in message
+    assert "scripts/demo.py" not in message, (
+        "the hint names the command the way the other fifty do, not the shim's path"
+    )
     monkeypatch.setattr(images, "image_exists", lambda image: True)
     with pytest.raises(SystemExit, match="agent \\(never built\\)"):
         images.require_images()

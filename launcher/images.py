@@ -121,7 +121,7 @@ def stage():
     ):
         tar.extractall(build, filter="data")
     if archive.returncode != 0:
-        raise SystemExit(f"git archive of upstream {core.COMMIT} failed.")
+        core.die(f"git archive of upstream {core.COMMIT} failed")
     ignore = build / ".dockerignore"
     ignore.write_text(ignore.read_text() + STAGED_DOCKERIGNORE)
     core.run("git", "-c", "init.defaultBranch=main", "init", "-q", str(build))
@@ -140,8 +140,9 @@ def stage():
             "git", "-C", build, "apply", "--check", patch, check=False, stderr=core.PIPE
         )
         if check.returncode != 0:
-            raise SystemExit(
-                f"Patch {patch.name} does not apply to upstream {core.TAG}:\n{check.stderr.strip()}"
+            core.die(
+                f"patch {patch.name} does not apply to upstream {core.TAG}:\n"
+                f"{check.stderr.strip()}"
             )
         core.run("git", "-C", str(build), "apply", str(patch))
     print(
@@ -247,8 +248,8 @@ def require_known(services):
     """
     unknown = sorted(set(services) - set(core.IMAGES))
     if unknown:
-        raise SystemExit(
-            f"Unknown service(s) {', '.join(unknown)}; choose from {', '.join(core.IMAGES)}."
+        core.die(
+            f"unknown service(s) {', '.join(unknown)}: choose from {', '.join(core.IMAGES)}"
         )
 
 
@@ -383,10 +384,10 @@ def require_built(services):
     manifest = read_manifest()
     hint = "run `demo.py build` first."
     if manifest is None:
-        raise SystemExit(f"No build manifest at {manifest_path()}; {hint}")
+        core.die(f"no build manifest at {manifest_path()}: {hint}")
     missing = missing_images(manifest, services)
     if missing:
-        raise SystemExit(f"Missing local image(s): {', '.join(missing)}; {hint}")
+        core.die(f"missing local image(s): {', '.join(missing)}: {hint}")
     return manifest
 
 
@@ -445,16 +446,16 @@ def missing_images(manifest, services):
 def require_images():
     """The native stack runs only from images recorded by `build`."""
     manifest = read_manifest()
-    hint = "run `scripts/demo.py build` first."
+    hint = "run `demo.py build` first."
     if manifest is None:
-        raise SystemExit(f"No build manifest at {manifest_path()}; {hint}")
+        core.die(f"no build manifest at {manifest_path()}: {hint}")
     missing = missing_images(manifest, core.IMAGES)
     if missing:
-        raise SystemExit(f"Missing local image(s): {', '.join(missing)}; {hint}")
+        core.die(f"missing local image(s): {', '.join(missing)}: {hint}")
     current = build_tag()
     if manifest["tag"] != current:
         print(
             f"Warning: build inputs changed since the last build (tag {current}, manifest "
-            f"{manifest['tag']}); run `scripts/demo.py build` to refresh the images."
+            f"{manifest['tag']}); run `demo.py build` to refresh the images."
         )
     return manifest
