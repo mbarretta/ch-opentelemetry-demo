@@ -10,11 +10,16 @@ neither credential reaches a process or the console.
 Both HTTP seams are patched separately because the two clients are built in two modules:
 ClickHouse's in `launcher.eks.ops` (reused rather than reimplemented) and Langfuse's in
 `scripts.smoke`.
+
+Two checks do start a process, and only these two: `__debug__` is a compile-time constant, so
+what `python -O` does to the guards can only be seen from a child interpreter started that way.
+They reach no backend -- both refuse before anything is driven.
 """
 
 import base64
 import json
 import os
+import sys
 
 import httpx
 import pytest
@@ -264,8 +269,64 @@ def test_a_trace_id_that_is_not_thirty_two_hex_digits_never_reaches_the_statemen
     """The id is interpolated into a statement and a URL, so its shape is insisted on."""
     assert smoke.require_trace_id(TRACE_ID) == TRACE_ID
     for bad in (None, "", "4bf92f35", TRACE_ID.upper(), f"{TRACE_ID}' OR 1=1 --", TRACE_ID + "0"):
-        with pytest.raises(AssertionError, match="not a trace id"):
+        with pytest.raises(SystemExit, match="not a trace id"):
             smoke.eks_span_sql(DATABASE, bad)
+
+
+def optimised(program):
+    """`program` in a child interpreter with asserts compiled out, the way `python -O` runs it.
+
+    A real child rather than a patched flag: `__debug__` is a compile-time constant, so whether
+    a guard survives optimisation can only be seen from an interpreter that was started that
+    way. The first line of every program is the control -- it disappears under -O, so a child
+    that reports it was not optimised after all and everything asserted about it means nothing.
+    """
+    finished = core.run(
+        sys.executable,
+        "-O",
+        "-c",
+        f"import sys; sys.path.insert(0, {str(core.ROOT)!r})\n"
+        "assert False, 'the child interpreter still has asserts enabled'\n" + program,
+        check=False,
+        stdout=core.PIPE,
+        stderr=core.PIPE,
+        text=True,
+    )
+    assert "still has asserts enabled" not in finished.stderr, finished.stderr
+    return finished
+
+
+def test_the_trace_id_guard_still_refuses_with_asserts_compiled_out():
+    """The id crosses a trust boundary, so `python -O` may not be what turns the guard off.
+
+    It arrives in the storefront's JSON from inside the cluster and is interpolated into a
+    statement ClickHouse Cloud runs as the collector's write user, so an `assert` -- which the
+    interpreter is free to compile out -- was the wrong shape for it.
+    """
+    refused = optimised(
+        "import scripts.smoke as smoke\n"
+        "print(smoke.eks_span_sql('otel', \"' OR 1=1 --\"))\n"
+    )
+
+    assert refused.returncode != 0, refused.stdout
+    assert "not a trace id" in refused.stderr
+    assert "otel_traces" not in refused.stdout, "the statement was never built"
+
+    passed = optimised(
+        f"import scripts.smoke as smoke\nprint(smoke.require_trace_id({TRACE_ID!r}))\n"
+    )
+
+    assert passed.returncode == 0, passed.stderr
+    assert TRACE_ID in passed.stdout, "a real id still goes through"
+
+
+def test_the_run_refuses_to_start_when_asserts_are_compiled_out():
+    """Every other check in the script is an assert, so an optimised run would pass vacuously."""
+    refused = optimised("import scripts.smoke as smoke\nsmoke.main(['--target', 'eks'])\n")
+
+    assert refused.returncode != 0
+    assert "will not run with asserts compiled out" in refused.stderr
+    assert "polling" not in refused.stdout, "it refuses before it drives a turn or a query"
 
 
 def test_a_missing_clickstack_credential_is_reported_by_the_config_helper(redirected):

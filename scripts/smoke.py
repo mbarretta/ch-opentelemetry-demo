@@ -25,7 +25,7 @@ from uuid import uuid4
 import httpx
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from launcher import RUNTIME, environment, scenario  # noqa: E402
+from launcher import RUNTIME, core, environment, scenario  # noqa: E402
 from launcher.cli import TARGETS  # noqa: E402
 from launcher.eks import config, ops, tunnel  # noqa: E402
 
@@ -297,12 +297,37 @@ TRACE_ID = re.compile(r"[0-9a-f]{32}\Z")
 def require_trace_id(trace_id):
     """Refuse anything that is not a trace id before it reaches a SQL statement or a URL.
 
-    The id comes back from the storefront rather than from a person, so this is a guard on a
-    contract and not on an operator's typing -- but it is interpolated into both a query and a
-    path, and the one shape it may have is cheap to insist on.
+    The id comes back from the storefront inside the cluster rather than from a person, so it
+    crosses a trust boundary: it is interpolated into both a ClickHouse statement and a Langfuse
+    path, and the query runs as the collector's write user. The one shape it may have is cheap
+    to insist on.
+
+    An unconditional refusal rather than an `assert`, because `python -O` and PYTHONOPTIMIZE=1
+    compile asserts out, and the guard on the one value this script interpolates that it did not
+    produce itself has to survive that. `ops.require_identifier` refuses the database name the
+    same way, and `require_assertions` below keeps the checks that are still asserts honest.
     """
-    assert TRACE_ID.match(trace_id or ""), f"not a trace id: {trace_id!r}"
+    if not TRACE_ID.match(trace_id or ""):
+        core.die(f"not a trace id: {trace_id!r}")
     return trace_id
+
+
+def require_assertions():
+    """Refuse to run with asserts compiled out, because this script's gate *is* its asserts.
+
+    Every claim the run makes -- the trace is whole, the scores are what the scenario promises,
+    exactly one turn per request, no ancestor dropped -- is an `assert`, so under `python -O` or
+    PYTHONOPTIMIZE this would print its progress and exit 0 whatever the demo actually did. A
+    green gate with the checks removed is worse than no gate, and converting forty assertions
+    into `if` statements would only hide the same problem behind more code, so the run refuses
+    the interpreter instead. The guards that must hold even here -- `require_trace_id` and
+    `ops.require_identifier`, the two values interpolated into SQL -- refuse unconditionally.
+    """
+    if not __debug__:
+        core.die(
+            "smoke.py asserts the demo's claims, so it will not run with asserts compiled out: "
+            "re-run without python -O / PYTHONOPTIMIZE"
+        )
 
 
 def until(attempt):
@@ -509,6 +534,7 @@ def parse_args(argv=None):
 
 def main(argv=None):
     args = parse_args(argv)
+    require_assertions()
     if args.target == "eks":
         smoke_eks()
     else:
