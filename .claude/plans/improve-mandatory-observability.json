@@ -58,7 +58,8 @@
         "docs/LANGFUSE_INTEGRATION.md"
       ]
     },
-    "post_merge_build": []
+    "post_merge_build": [],
+    "cycle_base_sha": "04007191cce9ade4df88e6bcc3dd4fd0f61c92d2"
   },
   "security_audit": "auto",
   "quality_review": "auto",
@@ -69,7 +70,7 @@
     {
       "id": "1",
       "title": "Require ClickStack and Langfuse config on the EKS target",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [],
       "files": [
         "launcher/eks/config.py",
@@ -115,12 +116,41 @@
         }
       ],
       "notes": "ac2 is a deliberate, narrower exception to this plan's general 'CLI refuses when unconfigured' framing -- apply() only warns (never refuses) because it genuinely doesn't need ClickHouse/Langfuse credentials to succeed, and refusing there would regress the existing 'fill in .env while the control plane boots' UX. Flag this explicitly to the user in the plan echo before dispatching, since it narrows the coarser framing from the original clarify round.",
-      "verdicts": []
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [],
+          "notes": "All six ACs (four critical: ac1, ac3, ac4, ac5) verified directly against the diff and passing, purpose-built tests. Verification command passed clean (509 passed, 1 deselected, ruff clean). All four plan-level constraints hold: the runtime outage fallback, manifest-level optionality, and CLI-only enforcement boundary are all untouched by this diff.",
+          "timestamp": "2026-09-15T21:22:57-04:00"
+        }
+      ],
+      "worktree": "",
+      "branch": "",
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T21:22:57-04:00"
+      },
+      "drift": {
+        "predicted": 8,
+        "touched": 8,
+        "unpredicted": 1,
+        "ratio": 0.13,
+        "recorded_at": "2026-09-15T21:22:57-04:00"
+      }
     },
     {
       "id": "2",
       "title": "Require ClickStack and Langfuse config on the laptop/Compose target",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [],
       "files": [
         "launcher/cli.py",
@@ -157,7 +187,36 @@
         }
       ],
       "notes": "",
-      "verdicts": []
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [],
+          "notes": "All five critical ACs verified directly against the diff and a passing, task-specific test (die message naming all five missing keys before compose runs; passthrough commands still work credential-free; collector_config() and the runtime-level tests explicitly excluded from scope were left untouched). Verification command passed clean (512 passed, 1 deselected, ruff clean). All plan-level constraints hold.",
+          "timestamp": "2026-09-15T21:18:30-04:00"
+        }
+      ],
+      "worktree": "",
+      "branch": "",
+      "self_review": {
+        "applied": 1,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T21:18:30-04:00"
+      },
+      "drift": {
+        "predicted": 4,
+        "touched": 3,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T21:18:36-04:00"
+      }
     },
     {
       "id": "3",
@@ -219,6 +278,38 @@
     {
       "timestamp": "2026-09-15T20:57:38-04:00",
       "note": "Codex plan review: 3 rounds (max), 10 findings applied across rounds (task 2 redesigned from a collector_config()-level change to a dedicated cli.py-only preflight; task 1 gained launcher/eks/check.py handling and a warn-only apply() clarification; task 3 gained the Configuration-matrix scope and two dangling-reference fixes). No findings deferred or rejected. Ready for the plan echo."
+    },
+    {
+      "timestamp": "2026-09-15T21:09:05-04:00",
+      "note": "Dispatched task 1 to harness-task-runner in worktree .claude/worktrees/improve-mandatory-observability-task-1"
+    },
+    {
+      "timestamp": "2026-09-15T21:09:05-04:00",
+      "note": "Dispatched task 2 to harness-task-runner in worktree .claude/worktrees/improve-mandatory-observability-task-2"
+    },
+    {
+      "timestamp": "2026-09-15T21:09:05-04:00",
+      "note": "Wave dispatch mode: runner"
+    },
+    {
+      "timestamp": "2026-09-15T21:30:00-04:00",
+      "note": "Task 2 implemented: added stack.require_observability(), called from run_config()/run_up() before compose() runs; collector_config() and passthrough commands (down/ps/restart/logs) stay credential-tolerant. Tests added in tests/test_cli.py for the die and for credential-free passthrough. pytest and ruff green; committed on harness/improve-mandatory-observability/task-2."
+    },
+    {
+      "timestamp": "2026-09-15T21:45:00-04:00",
+      "note": "Task 1 implemented: launcher/eks/config.py's load_langfuse_env now dies naming every blank/missing key, including the all-blank case (shares a langfuse_secret() helper with check.py's new synthetic_langfuse_secret); launcher/eks/infra.py's warn_blank_keys extended to Langfuse and now also called from apply() (still warn-only); launcher/eks/check.py's offline 'langfuse not configured' render checks LANGFUSE_KEYS presence directly instead of calling the now-mandatory loader. lifecycle.py's deploy() already called load_langfuse_env before any Secret, so ac3's refusal fell out for free -- only test coverage was added. Updated tests/test_eks_config.py, tests/test_eks_deploy.py, tests/test_eks_infra.py, tests/test_eks_check.py for the new mandatory behavior, plus one message-text fix in tests/test_smoke_queries.py. pytest (509 passed, 1 pre-existing deselect) and ruff green; committed on harness/improve-mandatory-observability/task-1."
+    },
+    {
+      "timestamp": "2026-09-15T21:18:30-04:00",
+      "note": "[attempt 1] 2026-09-15T21:30:00-04:00: Task 2 implemented: added stack.require_observability(), called from run_config()/run_up() before compose() runs; collector_config() and passthrough commands (down/ps/restart/logs) stay credential-tolerant. Tests added in tests/test_cli.py for the die and for credential-free passthrough. pytest and ruff green; committed on harness/improve-mandatory-observability/task-2."
+    },
+    {
+      "timestamp": "2026-09-15T21:22:57-04:00",
+      "note": "[attempt 1] 2026-09-15T21:45:00-04:00: Task 1 implemented: launcher/eks/config.py's load_langfuse_env now dies naming every blank/missing key, including the all-blank case; launcher/eks/infra.py's warn_blank_keys extended to Langfuse and called from apply(); launcher/eks/check.py's offline render decoupled via a new synthetic_langfuse_secret helper. lifecycle.py's deploy() already refused before any Secret. Updated tests/test_eks_config.py, tests/test_eks_deploy.py, tests/test_eks_infra.py, tests/test_eks_check.py, plus a one-line message-text fix in tests/test_smoke_queries.py. pytest and ruff green; committed on harness/improve-mandatory-observability/task-1."
+    },
+    {
+      "timestamp": "2026-09-15T21:23:17-04:00",
+      "note": "Ran post-merge build: none configured; skipped."
     }
   ],
   "plan_review_state": {
@@ -505,5 +596,23 @@
         "proposed": "Also fix the two dangling references."
       }
     }
-  ]
+  ],
+  "autonomy": "managed",
+  "managed_run": {
+    "started_at": "2026-09-15T21:07:25-04:00",
+    "go_confirmed_at": "2026-09-15T21:08:19-04:00",
+    "paused_at": null,
+    "pause_reason": "",
+    "resumes": [],
+    "completed_at": null,
+    "auto_decisions": [
+      {
+        "id": "ad1",
+        "timestamp": "2026-09-15T21:23:17-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 1: tasks 1,2 -> main; pushed",
+        "reason": "managed run go-gate pre-authorized merge-and-push for every wave"
+      }
+    ]
+  }
 }
