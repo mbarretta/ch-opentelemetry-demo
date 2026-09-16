@@ -79,8 +79,13 @@ def recorded(name):
 
 
 def problems_for(rendered, env=check.CHECK_LANGFUSE_ENV):
-    """Everything `check` finds wrong with a render, given the `.env` it was rendered from."""
-    langfuse = config.load_langfuse_env(env)
+    """Everything `check` finds wrong with a render, given the `.env` it was rendered from.
+
+    `check.synthetic_langfuse_secret` rather than `config.load_langfuse_env`: the latter now
+    dies on a credential-free environment, and `check.CHECK_ENV` (the "langfuse not configured"
+    case) is deliberately one.
+    """
+    langfuse = check.synthetic_langfuse_secret(env)
     document = values.eks_values(env, check.example_images(), langfuse)
     return check.render_problems(rendered, document, langfuse)
 

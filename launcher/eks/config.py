@@ -54,7 +54,9 @@ CLICKSTACK_KEYS = (
 # The agent's LLM credential, and the whole content of the `llm-credentials` Secret: one
 # optional key, meaningful only in live mode (a scripted run calls no model).
 LLM_KEYS = ("API_KEY",)
-# Langfuse is optional on both targets, but all or nothing (see load_langfuse_env).
+# Langfuse is required on this target, the same way the five ClickStack keys above are: the
+# demo's whole point is correlated ClickStack + Langfuse telemetry, so load_langfuse_env dies
+# rather than silently degrading to none.
 LANGFUSE_KEYS = (
     "LANGFUSE_BASE_URL",
     "LANGFUSE_PUBLIC_KEY",
@@ -136,22 +138,31 @@ def load_clickstack_env(env=None):
 
 
 def load_langfuse_env(env=None):
-    """The `langfuse-credentials` Secret's four keys, or `{}` when Langfuse is not configured.
+    """The `langfuse-credentials` Secret's four keys, or die naming every blank and missing one.
 
-    All or nothing, the same rule `collector.collector_config()` applies on the laptop: a
-    partial set is a filled-in-half `.env`, not a request to deploy half a trace pipeline. The
-    empty result is what makes the deploy delete the Secret and leave the exporter out of the
-    generated values.
+    Mandatory now, the same way `load_clickstack_env` already is: a blank or missing key --
+    including all three at once, which used to return `{}` and let the deploy quietly leave
+    Langfuse out -- dies instead. Correlated ClickStack + Langfuse telemetry is the whole point
+    of this demo, so there is no valid "none of them" configuration left on this target.
     """
     values = load_env() if env is None else env
-    present = [key for key in LANGFUSE_KEYS if values.get(key)]
-    if not present:
-        return {}
-    if len(present) != len(LANGFUSE_KEYS):
+    missing = [key for key in LANGFUSE_KEYS if not values.get(key)]
+    if missing:
         core.die(
-            f"Langfuse is half configured: set all of {', '.join(LANGFUSE_KEYS)} in .env, "
-            f"or none of them (missing: {', '.join(k for k in LANGFUSE_KEYS if k not in present)})."
+            f"blank or missing in .env: {', '.join(missing)}. "
+            "The EKS section of .env.example describes all three."
         )
+    return langfuse_secret(values)
+
+
+def langfuse_secret(values):
+    """The `langfuse-credentials` Secret's shape, given a mapping that already carries every
+    `LANGFUSE_KEYS` entry -- the four keys plus the derived header.
+
+    Split out of `load_langfuse_env` so `launcher.eks.check`'s offline render, which validates
+    its own synthetic environments rather than a real `.env`, can build the same shape without
+    going through the die this function's caller performs.
+    """
     secret = {key: values[key] for key in LANGFUSE_KEYS}
     secret["LANGFUSE_AUTH_HEADER"] = langfuse_auth_header(
         values["LANGFUSE_PUBLIC_KEY"], values["LANGFUSE_SECRET_KEY"]

@@ -564,7 +564,7 @@ def test_a_half_configured_langfuse_is_refused_by_the_config_helper(redirected):
         )
     )
 
-    with pytest.raises(SystemExit, match="Langfuse is half configured"):
+    with pytest.raises(SystemExit, match="blank or missing in .env: LANGFUSE_SECRET_KEY"):
         smoke.smoke_eks()
 
 

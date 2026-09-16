@@ -58,6 +58,11 @@ FULL_CLICKSTACK = {
     "HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE": "otel",
     "OTLP_AUTH_TOKEN": "sensitive-token",
 }
+FULL_LANGFUSE = {
+    "LANGFUSE_BASE_URL": "https://lf.test",
+    "LANGFUSE_PUBLIC_KEY": "pk-test",
+    "LANGFUSE_SECRET_KEY": "sensitive-lf",
+}
 
 TF_OUTPUTS = {"cluster_name": CLUSTER, "scheduler_name": SCHEDULE["Name"]}
 
@@ -70,8 +75,13 @@ Stubs = Recorder
 
 @pytest.fixture
 def redirect_env():
-    """The `.env` the shared `redirected` fixture writes, so no real one is read."""
-    return FULL_CLICKSTACK
+    """The `.env` the shared `redirected` fixture writes, so no real one is read.
+
+    Full ClickStack and full Langfuse: `init` and `apply` need neither to succeed, but a fully
+    configured `.env` is the default state these tests are otherwise about, so a test that wants
+    a blank key writes its own `.env` with `write_env` instead of relying on this default.
+    """
+    return {**FULL_CLICKSTACK, **FULL_LANGFUSE}
 
 
 @pytest.fixture
@@ -241,7 +251,10 @@ def test_init_warns_about_blank_clickstack_keys_rather_than_exiting(
     fake_sh, stubbed, redirected, capsys
 ):
     """AC7: the collector keys are a deploy-time requirement, not an init-time one."""
-    write_env(redirected, {**FULL_CLICKSTACK, "CLICKHOUSE_PASSWORD": "", "OTLP_AUTH_TOKEN": ""})
+    write_env(
+        redirected,
+        {**FULL_CLICKSTACK, **FULL_LANGFUSE, "CLICKHOUSE_PASSWORD": "", "OTLP_AUTH_TOKEN": ""},
+    )
 
     infra.init()
 
@@ -287,9 +300,37 @@ def test_apply_runs_tofu_apply_interactively_and_reports_the_next_steps(
     assert find(fake_sh, "tofu", *chdir(), "output")
     assert not stubbed.called("ng_scale"), "a first apply has no idle node group to protect"
 
-    printed = capsys.readouterr().out
+    out = capsys.readouterr()
     for step in ("demo.py build", "demo.py publish", "demo.py eks deploy"):
-        assert step in printed, step
+        assert step in out.out, step
+    assert out.err == "", "a fully filled-in .env warns about nothing"
+
+
+def test_apply_warns_about_blank_clickstack_and_langfuse_keys_rather_than_exiting(
+    fake_sh, stubbed, redirected, capsys
+):
+    """AC2: `apply` calls the same `warn_blank_keys` `init` does, extended for Langfuse.
+
+    Still a warning, not a refusal: `apply` is infrastructure-only and genuinely does not need
+    either credential to succeed, unlike `eks deploy`.
+    """
+    initialised(redirected)
+    write_env(
+        redirected,
+        {
+            **FULL_CLICKSTACK,
+            **FULL_LANGFUSE,
+            "OTLP_AUTH_TOKEN": "",
+            "LANGFUSE_SECRET_KEY": "",
+        },
+    )
+
+    infra.apply()
+
+    out = capsys.readouterr()
+    assert "OTLP_AUTH_TOKEN" in out.err and "LANGFUSE_SECRET_KEY" in out.err
+    assert "CLICKHOUSE_USER" not in out.err, "a key that is filled in must not be reported"
+    assert find(fake_sh, "tofu", *chdir(), "apply"), "the warning must not stop apply"
 
 
 def test_apply_yes_skips_the_confirmation_prompt(fake_sh, stubbed, redirected):

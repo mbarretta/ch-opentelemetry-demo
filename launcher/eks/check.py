@@ -197,13 +197,37 @@ def render(env):
     images and synthetic environment here are not a deployment, and overwriting the document a
     real `eks deploy` wrote would be a surprising side effect of a read-only check.
     """
-    langfuse = config.load_langfuse_env(env)
+    langfuse = synthetic_langfuse_secret(env)
     document = values.eks_values(env, example_images(), langfuse)
     with tempfile.TemporaryDirectory() as directory:
         path = Path(directory) / "values.generated.yaml"
         path.write_text(dump(document))
         rendered = core.capture(*helm_template_args(release_values_files(path))).stdout
     return rendered, document, langfuse
+
+
+def synthetic_langfuse_secret(env):
+    """The `langfuse-credentials` Secret's shape for one of the two synthetic renders.
+
+    Checks `config.LANGFUSE_KEYS` presence directly rather than calling `config.load_langfuse_env`,
+    which now dies on a credential-free environment. That refusal is real `eks deploy` behaviour
+    and exactly what this offline render must not trip over: `CHECK_ENV` (the "langfuse not
+    configured" render) is deliberately credential-free, to validate the manifest's
+    `optional: true` secretKeyRef defense-in-depth on its own, without a live cluster or a live
+    loader refusal in the way.
+
+    Both of this module's own synthetic environments are all-or-nothing by construction
+    (`CHECK_ENV`, `CHECK_LANGFUSE_ENV`), but the assertion below still names a half-configured
+    one explicitly rather than letting `config.langfuse_secret` raise a bare `KeyError` on it, in
+    case a future synthetic environment here stops being.
+    """
+    present = [key for key in config.LANGFUSE_KEYS if env.get(key)]
+    if not present:
+        return {}
+    assert len(present) == len(config.LANGFUSE_KEYS), (
+        f"synthetic env is half-configured for Langfuse: {present}"
+    )
+    return config.langfuse_secret(env)
 
 
 def dump(document):
