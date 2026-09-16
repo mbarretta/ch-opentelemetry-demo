@@ -309,12 +309,12 @@
       "reason_code": "",
       "location": "launcher/eks/config.py:148-152, launcher/stack.py:136-140",
       "note": "Cross-task duplication: identical compute-missing-keys-and-die idiom independently written in tasks 1 and 2 (three call sites now, no shared helper). Remediation: extract core.require_keys() helper.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-15T21:39:45-04:00",
-      "resolved_at": null,
+      "resolved_at": "2026-09-16T10:35:19-04:00",
       "resolution_task_id": "",
       "resolved_by_plan": "",
-      "reason": ""
+      "reason": "User asked to fix directly rather than spawn a def-task: extracted core.require_keys() and updated load_clickstack_env, load_langfuse_env, and stack.require_observability to call it."
     },
     {
       "id": "d2",
@@ -325,12 +325,12 @@
       "reason_code": "",
       "location": "deploy/eks/README.md:80",
       "note": "deploy/eks/README.md still describes Langfuse as optional on EKS, now factually wrong after task 1's mandatory-config change; task 3's scope never reached this doc.",
-      "status": "carried",
+      "status": "converted",
       "deferred_at": "2026-09-15T21:39:45-04:00",
-      "resolved_at": null,
+      "resolved_at": "2026-09-16T10:35:19-04:00",
       "resolution_task_id": "",
       "resolved_by_plan": "",
-      "reason": ""
+      "reason": "User asked to fix directly rather than spawn a def-task: reworded deploy/eks/README.md's Langfuse-stays-external row to match the mandatory-config behavior."
     }
   ],
   "gap_notes": [],
@@ -394,6 +394,10 @@
     {
       "timestamp": "2026-09-15T21:40:05-04:00",
       "note": "Deferred-items review (7.65) skipped: no open entries (d1, d2 are carried, not open)."
+    },
+    {
+      "timestamp": "2026-09-16T10:35:19-04:00",
+      "note": "d1/d2 (quality findings q1/q2) fixed directly at the user's request, outside the harness task flow: extracted launcher/core.py's require_keys() helper (used by load_clickstack_env, load_langfuse_env, stack.require_observability) and reworded deploy/eks/README.md's Langfuse-stays-external row. Verification green (514 passed, 1 deselected, ruff clean)."
     }
   ],
   "plan_review_state": {
