@@ -1,6 +1,23 @@
 {
   "plans": [
     {
+      "slug": "improve-mandatory-observability",
+      "title": "Make ClickStack and Langfuse required, not optional, across docs and config",
+      "status": "planned",
+      "mode": "mixed",
+      "parallelism": "auto",
+      "autonomy": "interactive",
+      "tasks_total": 3,
+      "tasks_complete": 0,
+      "wave_state": "idle",
+      "current_wave": null,
+      "wave_tasks_in_flight": [],
+      "paused_reason": "",
+      "deferred_open": 0,
+      "updated": "2026-09-15T20:57:38-04:00",
+      "path": ".claude/plans/improve-mandatory-observability.json"
+    },
+    {
       "slug": "fix-guard-scope-gaps",
       "title": "Close the four scope gaps the sweep's own gates found",
       "status": "complete",
@@ -15,7 +32,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-15T16:07:37-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/fix-guard-scope-gaps.json"
+      "path": ".claude/plans/fix-guard-scope-gaps.json"
     },
     {
       "slug": "improve-conditional-guards-sweep",
@@ -32,7 +49,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-15T16:07:26-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/improve-conditional-guards-sweep.json"
+      "path": ".claude/plans/improve-conditional-guards-sweep.json"
     },
     {
       "slug": "feat-otel-demo-eks",
@@ -49,7 +66,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-15T14:09:21-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-otel-demo-eks.json"
+      "path": ".claude/plans/feat-otel-demo-eks.json"
     },
     {
       "slug": "feat-merge-ch-otel-demo",
@@ -66,7 +83,7 @@
       "paused_reason": "",
       "deferred_open": 4,
       "updated": "2026-09-15T14:09:21-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-merge-ch-otel-demo.json"
+      "path": ".claude/plans/feat-merge-ch-otel-demo.json"
     },
     {
       "slug": "improve-merge-cycle-cleanup",
@@ -83,7 +100,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-15T12:23:03-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/improve-merge-cycle-cleanup.json"
+      "path": ".claude/plans/improve-merge-cycle-cleanup.json"
     },
     {
       "slug": "feat-native-assistant-ui",
@@ -100,7 +117,7 @@
       "paused_reason": "",
       "deferred_open": 0,
       "updated": "2026-09-14T09:23:53-04:00",
-      "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/feat-native-assistant-ui.json"
+      "path": ".claude/plans/feat-native-assistant-ui.json"
     }
   ],
   "charter": {
