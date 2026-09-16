@@ -3,7 +3,7 @@
     {
       "slug": "improve-mandatory-observability",
       "title": "Make ClickStack and Langfuse required, not optional, across docs and config",
-      "status": "planned",
+      "status": "complete",
       "mode": "mixed",
       "parallelism": "auto",
       "autonomy": "managed",
@@ -13,8 +13,8 @@
       "current_wave": null,
       "wave_tasks_in_flight": [],
       "paused_reason": "",
-      "deferred_open": 0,
-      "updated": "2026-09-15T21:33:50-04:00",
+      "deferred_open": 2,
+      "updated": "2026-09-15T21:40:18-04:00",
       "path": "/Users/barretta/workspace/ch/langfuse-sample-agent-app/.claude/plans/improve-mandatory-observability.json"
     },
     {

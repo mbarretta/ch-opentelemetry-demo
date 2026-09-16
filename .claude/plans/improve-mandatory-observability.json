@@ -4,7 +4,7 @@
   "kind": "improvement",
   "mode": "mixed",
   "created": "2026-09-15",
-  "status": "planned",
+  "status": "complete",
   "context": "ClickStack and Langfuse are the whole point of this demo (correlated telemetry across both backends), but the repo currently treats both as optional add-ons: README.md says 'Both destinations are external and both are optional, on both targets'; the EKS target lets Langfuse silently degrade to none; the laptop/Compose target lets both ClickStack and Langfuse silently degrade to none; and .env.example calls the whole block 'Optional existing backends'. This plan flips the framing and the enforcement: config-time preflight refuses to run without both configured, on both targets, and the docs are reworded to match. Decided in clarify: (1) enforcement lives at the CLI/config layer (demo.py config/up/eks apply/eks deploy), not inside the running agent/collector processes; (2) Langfuse's existing outage-resilience fallback (60s cache, bundled-prompt fallback on a live API failure once configured) is a different concern from 'is it configured at all' and stays as-is.",
   "verification": ".venv/bin/python -m pytest -q --deselect=tests/test_docs.py::test_the_readme_keeps_its_outline && .venv/bin/ruff check",
   "constraints": [
@@ -299,7 +299,40 @@
       }
     }
   ],
-  "deferrals": [],
+  "deferrals": [
+    {
+      "id": "d1",
+      "task_id": "",
+      "source": "quality-finding",
+      "finding_id": "q1",
+      "severity": "medium",
+      "reason_code": "",
+      "location": "launcher/eks/config.py:148-152, launcher/stack.py:136-140",
+      "note": "Cross-task duplication: identical compute-missing-keys-and-die idiom independently written in tasks 1 and 2 (three call sites now, no shared helper). Remediation: extract core.require_keys() helper.",
+      "status": "carried",
+      "deferred_at": "2026-09-15T21:39:45-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    },
+    {
+      "id": "d2",
+      "task_id": "",
+      "source": "quality-finding",
+      "finding_id": "q2",
+      "severity": "medium",
+      "reason_code": "",
+      "location": "deploy/eks/README.md:80",
+      "note": "deploy/eks/README.md still describes Langfuse as optional on EKS, now factually wrong after task 1's mandatory-config change; task 3's scope never reached this doc.",
+      "status": "carried",
+      "deferred_at": "2026-09-15T21:39:45-04:00",
+      "resolved_at": null,
+      "resolution_task_id": "",
+      "resolved_by_plan": "",
+      "reason": ""
+    }
+  ],
   "gap_notes": [],
   "log": [
     {
@@ -349,6 +382,18 @@
     {
       "timestamp": "2026-09-15T21:33:36-04:00",
       "note": "[attempt 1] 2026-09-15T22:05:00-04:00: Task 3 implemented: reworded README.md's EKS prerequisites, Configuration table's Langfuse row, and Connect ClickStack and Langfuse intro from optional to required; reworded .env.example's ClickStack/Langfuse block comment naming the exact five enforced keys; reworded docs/LANGFUSE_INTEGRATION.md's minimal-configuration sentence and removed dangling references to a deleted README section. pytest and ruff green; committed on harness/improve-mandatory-observability/task-3."
+    },
+    {
+      "timestamp": "2026-09-15T21:35:01-04:00",
+      "note": "Security audit (7.5) clean: 0 findings across 14 audited files (range 0400719..b822c9d)."
+    },
+    {
+      "timestamp": "2026-09-15T21:39:52-04:00",
+      "note": "Quality review (7.6) found 2 findings, both severity medium (below the medium-confidence-high auto-remediate threshold): carried to deferral ledger as d1, d2."
+    },
+    {
+      "timestamp": "2026-09-15T21:40:05-04:00",
+      "note": "Deferred-items review (7.65) skipped: no open entries (d1, d2 are carried, not open)."
     }
   ],
   "plan_review_state": {
@@ -643,7 +688,7 @@
     "paused_at": null,
     "pause_reason": "",
     "resumes": [],
-    "completed_at": null,
+    "completed_at": "2026-09-15T21:40:18-04:00",
     "auto_decisions": [
       {
         "id": "ad1",
@@ -658,7 +703,46 @@
         "phase": "7.4",
         "decision": "merged wave 2: task 3 -> main; pushed",
         "reason": "managed run go-gate pre-authorized merge-and-push for every wave"
+      },
+      {
+        "id": "ad3",
+        "timestamp": "2026-09-15T21:39:52-04:00",
+        "phase": "7.6",
+        "decision": "quality findings q1, q2 (both severity medium) carried to deferral ledger d1, d2; none remediated",
+        "reason": "go-gate policy: auto-remediate quality findings only at severity>=high with confidence high"
       }
     ]
-  }
+  },
+  "quality_findings": [
+    {
+      "status": "deferred",
+      "justification": "Managed run: severity medium is below the 7.6 auto-remediate threshold (severity>=high, confidence high); carried to deferral ledger for interactive review.",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T21:39:10-04:00",
+      "id": "q1",
+      "severity": "medium",
+      "category": "duplication",
+      "location": "launcher/eks/config.py:148-152 (load_langfuse_env, task 1) and launcher/stack.py:136-140 (require_observability, task 2)",
+      "evidence": "config.py: missing = [key for key in LANGFUSE_KEYS if not values.get(key)]; if missing: core.die(...).  stack.py: missing = [key for key in LAPTOP_OBSERVABILITY_KEYS if not env.get(key)]; if missing: core.die(...) -- same shape, independently written.",
+      "description": "Tasks 1 and 2 independently reproduced the identical compute-missing-keys-and-die idiom in separate worktrees; including the pre-existing load_clickstack_env, this exact idiom now exists three times with no shared helper.",
+      "remediation": "Extract a small core.require_keys(values, keys, hint) helper and have load_clickstack_env, load_langfuse_env, and stack.require_observability all call it.",
+      "confidence": "high"
+    },
+    {
+      "status": "deferred",
+      "justification": "Managed run: severity medium is below the 7.6 auto-remediate threshold (severity>=high, confidence high); carried to deferral ledger for interactive review.",
+      "remediation_task_id": "",
+      "remediated_at": null,
+      "discovered_at": "2026-09-15T21:39:10-04:00",
+      "id": "q2",
+      "severity": "medium",
+      "category": "inconsistency",
+      "location": "deploy/eks/README.md:80 vs launcher/eks/config.py (task 1) and README.md (task 3)",
+      "evidence": "deploy/eks/README.md:80 still reads: The collector's Langfuse pipeline is only rendered when .env carries the keys; without them the demo still runs, ClickStack-only. This became false once task 1 made Langfuse mandatory on EKS.",
+      "description": "deploy/eks/README.md still says Langfuse is optional on EKS, which became factually false once task 1 made Langfuse mandatory there; task 3 reworded the top-level README.md but its scope never touched this separate doc.",
+      "remediation": "Reword deploy/eks/README.md's Langfuse-stays-external row to state Langfuse is required on this target and eks deploy refuses before creating any Secret if unconfigured, matching README.md wording.",
+      "confidence": "high"
+    }
+  ]
 }
