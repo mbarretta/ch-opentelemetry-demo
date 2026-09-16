@@ -109,6 +109,38 @@ def environment():
     }
 
 
+# The laptop target's own observability contract: the ClickStack and Langfuse keys that make
+# `up`/`config` refuse to start rather than silently run the demo without the correlated
+# telemetry that is the whole point of it. Distinct from `collector_config()`'s own
+# LANGFUSE_BASE_URL/LANGFUSE_PUBLIC_KEY/LANGFUSE_SECRET_KEY check, which stays
+# credential-tolerant because every `stack.compose()` call -- including
+# `down`/`ps`/`restart`/`logs` -- regenerates it.
+LAPTOP_OBSERVABILITY_KEYS = (
+    "CLICKSTACK_OTLP_ENDPOINT",
+    "CLICKSTACK_API_KEY",
+    "LANGFUSE_BASE_URL",
+    "LANGFUSE_PUBLIC_KEY",
+    "LANGFUSE_SECRET_KEY",
+)
+
+
+def require_observability(env):
+    """Die naming every missing ClickStack/Langfuse key, or return when all five are set.
+
+    Called only from `launcher.cli`'s `run_config()` and `run_up()`, before `stack.compose()`
+    runs: those are the two commands that actually start the demo, and this is what keeps
+    either of them from starting it without the telemetry the demo exists to show. Every other
+    command that reaches `compose()` -- `down`, `ps`, `restart`, `logs` -- calls no preflight at
+    all, so they keep working against a credential-free `.env`.
+    """
+    missing = [key for key in LAPTOP_OBSERVABILITY_KEYS if not env.get(key)]
+    if missing:
+        core.die(
+            f"blank or missing in .env: {', '.join(missing)}. "
+            "ClickStack and Langfuse are required for this demo; see .env.example."
+        )
+
+
 def generate_config(env):
     import yaml
 
