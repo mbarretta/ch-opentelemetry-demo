@@ -68,7 +68,7 @@ browser (assistant.turn span)
 - **No Langfuse SDK; OTel attributes instead.** The agent already keeps one OTel tracer provider per process with explicit model/tool spans (to avoid a second LLM auto-instrumentor emitting duplicate generations alongside the hand-written ones). Langfuse's own SDK is itself OTel-based and is its recommended Python integration path, so this is compatible with — not a workaround of — how Langfuse expects to be integrated; it just means the attributes are set by hand rather than by an SDK wrapper. It also means every `langfuse.*` attribute is an ordinary OTLP span attribute, so it's equally visible in ClickStack.
 - **Two things stay outside OTLP on purpose**: fetching a managed prompt and saving a score are Langfuse REST API operations with no OTLP equivalent — a generation span alone doesn't create a saved score, and there's no trace-ingestion REST API in use here at all. `concierge/langfuse_api.py` is intentionally the only file that makes those calls.
 - **The filter is a single source of truth.** `launcher/collector.py`'s `langfuse_span_filter()` and `assistant_route_statements()` are called by both the laptop collector config and `launcher/eks/values.py`'s generated Helm values, so the laptop and the cluster can never disagree about which spans reach Langfuse.
-- **Anonymous by design.** Baggage carries only conversation/session IDs and demo labels — no user identity — matching an internal self-review against Langfuse's trace-audit guidance (see `README.md`'s "Langfuse skill integration review" for the full list of findings and fixes, including recording usage as standard attributes instead of Langfuse-specific JSON, and excluding ASGI-internal spans as noise).
+- **Anonymous by design.** Baggage carries only conversation/session IDs and demo labels — no user identity — the product of an internal self-review against Langfuse's trace-audit guidance, including recording usage as standard attributes instead of Langfuse-specific JSON, and excluding ASGI-internal spans as noise.
 - **Capture is verbatim, deliberately, for a demo.** Shopper text and assistant replies are recorded in full on `langfuse.observation.input`/`output` with no masking — appropriate for synthetic demo data, explicitly called out in `README.md` as not appropriate for real shopper data without adding redaction.
 
 ## 6. Minimal configuration
@@ -83,11 +83,11 @@ The full configuration reference (every key, both targets) is in `README.md`'s [
 | `LANGFUSE_PUBLIC_URL` | Optional override when the browser-facing URL differs from `LANGFUSE_BASE_URL`. |
 | `LANGFUSE_PROMPT_LABEL` | Which prompt label the agent reads (`production` or `budget-check`). |
 
-Without any of these set, the agent still runs (scripted mode needs none of it) and traces still flow — just to the local preview file / `debug` exporter instead of Langfuse.
+`demo.py config`/`up` on the laptop refuse to start unless all three are set, alongside `CLICKSTACK_OTLP_ENDPOINT` and `CLICKSTACK_API_KEY`; `eks deploy` on the cluster refuses unless all three are set, alongside the five ClickStack keys in the EKS section of `.env`. See `README.md`'s [Configuration](../README.md#configuration) and [Connect ClickStack and Langfuse](../README.md#connect-clickstack-and-langfuse) sections. The agent process itself has no such check: `AGENT_MODE=scripted` still needs no model key, and the collector's own defensive fallback (traces going to the local preview file / `debug` exporter instead of Langfuse) is unchanged below that CLI-level gate.
 
 ## References
 
 - [Langfuse OpenTelemetry integration](https://langfuse.com/integrations/native/opentelemetry)
 - [Langfuse prompt management API](https://langfuse.com/docs/prompt-management/get-started)
 - [Langfuse scores via SDK/API](https://langfuse.com/docs/evaluation/evaluation-methods/scores-via-sdk)
-- `README.md` — the full repository reference, including the ClickStack/session-replay additions this document doesn't cover, and the "Langfuse skill integration review" self-audit.
+- `README.md` — the full repository reference, including the ClickStack/session-replay additions this document doesn't cover.
