@@ -55,6 +55,14 @@ TURN_LIMIT_MESSAGE = f"This conversation reached {MAX_TURNS} turns. Start a new 
 # (execute_turn's asyncio.timeout(90)) before any of them got a chance to retry.
 RECONNECT_TIMEOUT = 10
 
+# How long assistant_add_to_cart waits for the tool list -- including a possible reconnect --
+# before giving up. Its own scope, separate from add_to_cart.ainvoke's 30s budget below: sharing
+# one scope would shrink that budget and risk a timeout landing between the shop mutating the
+# cart and the turn being recorded, which is exactly what test_add_to_cart_action_awaits_nothing
+# _after_it_changes_the_cart guards against. The vendored ClientSession sets no read timeout, so
+# without a bound here a wedged (not dead) mcp service could hang this route indefinitely.
+ADD_TO_CART_TOOL_LIST_TIMEOUT = 15
+
 
 def conflict(reason: ConflictReason, message: str) -> HTTPException:
     """A 409 on the storefront routes: the reason lets the client classify it (contract.py)."""
@@ -469,13 +477,32 @@ class ConciergeAgent(Agent):
                     # changed the cart, recording the turn below cannot be interrupted, so the
                     # conversation never misses an action the shop performed.
                     prompt = await self.langfuse.prompt()
-                    add_to_cart = next(
-                        t
-                        for t in await self.scoped_tools(
-                            state.shop_session_id, calls, request.currency_code
-                        )
-                        if t.name == "add_to_cart"
-                    )
+                    try:
+                        async with asyncio.timeout(ADD_TO_CART_TOOL_LIST_TIMEOUT):
+                            tools = await self.scoped_tools(
+                                state.shop_session_id, calls, request.currency_code
+                            )
+                    except Exception:
+                        # Broad on purpose, same "external system misbehaved" boundary as
+                        # fetch_tools()'s own except Exception: a dead or wedged MCP session
+                        # surfaces here as a failed fetch, never a matched exception type. A
+                        # genuine outer cancellation (client disconnect, execute_turn's own
+                        # asyncio.timeout(90) if this route were ever called from there) is a
+                        # CancelledError, which derives from BaseException and is not caught
+                        # here -- widening this to except BaseException would swallow it and
+                        # break that handling, and task 2's fetch_tools()/_replace_mcp_session()
+                        # already own cancellation-safety for a reconnect caught mid-connect by
+                        # this same timeout (ac16): they retire the owner task themselves.
+                        logger.exception("Tool list fetch failed; trace_id=%s", current_trace)
+                        span.set_status(Status(StatusCode.ERROR, "Tool list fetch failed"))
+                        raise HTTPException(
+                            502,
+                            {
+                                "message": "The agent could not finish. Check the trace or start a new conversation.",
+                                "trace_id": current_trace,
+                            },
+                        ) from None
+                    add_to_cart = next(t for t in tools if t.name == "add_to_cart")
                     try:
                         async with asyncio.timeout(30):
                             await add_to_cart.ainvoke(

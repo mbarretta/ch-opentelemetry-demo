@@ -289,7 +289,7 @@ For a prompt comparison, switch `LANGFUSE_PROMPT_LABEL` from `production` to `bu
 
 ## Optional MCP transport
 
-Set `MCP_ENABLED=True` in `.env` and run `up` (laptop) or `eks deploy` (cluster). The agent exposes the same four scoped tools while delegating their execution to the released MCP service. MCP instrumentation carries trace context and W3C baggage in protocol messages across the persistent connection. An allowlist copies anonymous conversation context onto MCP spans. `/healthz` reports `tools_transport` as `http` or `mcp`.
+Set `MCP_ENABLED=True` in `.env` and run `up` (laptop) or `eks deploy` (cluster). The agent exposes the same four scoped tools while delegating their execution to the released MCP service. MCP instrumentation carries trace context and W3C baggage in protocol messages across the persistent connection. An allowlist copies anonymous conversation context onto MCP spans. `/healthz` reports `tools_transport` as `http` or `mcp`. If the MCP service evicts that session, the agent replaces it on its next tool call instead of failing every turn until the pod restarts.
 
 ## Test and develop
 

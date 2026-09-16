@@ -382,6 +382,34 @@ async def test_failed_add_to_cart_action_is_not_a_success_and_can_be_retried(age
     assert retried.json()["cart_changed"] is True
 
 
+async def test_add_to_cart_tool_list_fetch_failing_even_after_reconnect_is_a_502_not_a_500(
+    agent, client
+):
+    """A dead session that stays dead through the reconnect attempt must not leak a raw 500."""
+    shop_session = str(uuid4())
+    first = (await client.post("/assistant/message", json=message(shop_session))).json()
+    action = cart_action(shop_session, first["conversation_id"])
+
+    class DeadForever:
+        async def connect_to_mcp_server(self, url):
+            pass  # the reconnect itself succeeds; it is the *fetch* that never recovers
+
+        async def cleanup(self):
+            pass
+
+    agent.mcp_server = DeadForever()  # non-None: fetch_tools attempts a reconnect
+    agent.mcp_client_factory = DeadForever
+
+    async def always_fails():
+        raise RuntimeError("mcp service still down")
+
+    agent.get_tool_list = always_fails
+
+    response = await client.post("/assistant/actions/add-to-cart", json=action)
+    assert response.status_code == 502, response.text
+    assert len(response.json()["detail"]["trace_id"]) == 32
+
+
 async def test_add_to_cart_action_awaits_nothing_after_it_changes_the_cart(agent, client):
     """The prompt lookup runs before the cart call, so a failure there leaves both untouched."""
     shop_session = str(uuid4())
