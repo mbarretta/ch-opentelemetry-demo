@@ -79,7 +79,7 @@ The full configuration reference (every key, both targets) is in `README.md`'s [
 | --- | --- |
 | `LANGFUSE_BASE_URL` | Langfuse base URL (no `/api/public/otel`, no trailing slash). |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Project API keys — all three of these plus the base URL are all-or-nothing; a partial set is refused, not partially exported. |
-| `LANGFUSE_PROJECT_ID` | Used only to build the browser-facing trace link. |
+| `LANGFUSE_PROJECT_ID` | The project name shown in the Langfuse UI, used only to build the browser-facing trace link. `ConciergeAgent.links()` resolves it to Langfuse's opaque project id via `LangfuseAPI.project_id()` (`GET /api/public/projects`), since trace URLs are keyed by that id, not the name. |
 | `LANGFUSE_PUBLIC_URL` | Optional override when the browser-facing URL differs from `LANGFUSE_BASE_URL`. |
 | `LANGFUSE_PROMPT_LABEL` | Which prompt label the agent reads (`production` or `budget-check`). |
 

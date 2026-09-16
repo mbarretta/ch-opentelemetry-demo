@@ -218,7 +218,7 @@ Both destinations are external and both are required, on both targets: `demo.py 
 | `CLICKSTACK_API_KEY` | The ClickStack ingestion key, sent as the raw `authorization` header |
 | `LANGFUSE_BASE_URL` | The Langfuse base URL, without `/api/public/otel` and without a trailing slash |
 | `LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` | Project API keys. All Langfuse keys are all-or-nothing: a half-configured set is refused rather than half-exported |
-| `LANGFUSE_PROJECT_ID` | Project ID, used to build browser links |
+| `LANGFUSE_PROJECT_ID` | The project name shown in the Langfuse UI. The agent resolves it to Langfuse's opaque project id (`GET /api/public/projects`, scoped by `LANGFUSE_PUBLIC_KEY`/`LANGFUSE_SECRET_KEY`) to build the trace link, since Langfuse's trace URLs are keyed by that id, not the name |
 | `LANGFUSE_PUBLIC_URL` | Optional browser-facing URL when it differs from `LANGFUSE_BASE_URL` |
 | `CLICKSTACK_TRACE_URL_TEMPLATE` | Optional trace URL copied from your deployment, with its trace ID replaced by `{trace_id}` |
 | `CLICKHOUSE_ENDPOINT` | EKS only: the ClickHouse Cloud **HTTPS** interface, port included |

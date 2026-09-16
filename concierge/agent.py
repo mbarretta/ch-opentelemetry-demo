@@ -266,7 +266,7 @@ class ConciergeAgent(Agent):
                 "trace_id": result["trace_id"],
                 "session_id": key,
                 "mode": self.mode,
-                "links": self.links(result["trace_id"]),
+                "links": await self.links(result["trace_id"]),
             }
 
     # -- storefront contract ---------------------------------------------------------------
@@ -305,7 +305,7 @@ class ConciergeAgent(Agent):
                 request_id=str(request.request_id),
                 product_id=product_id,
             )
-            return self.remember(state, request.request_id, result, key)
+            return await self.remember(state, request.request_id, result, key)
 
     async def assistant_add_to_cart(self, request: AddToCartAction):
         key = str(request.conversation_id)
@@ -388,7 +388,7 @@ class ConciergeAgent(Agent):
                     state.traces.add(current_trace)
                     state.turns += 1
                     state.touched = time.monotonic()
-            return self.remember(state, request.request_id, result, key)
+            return await self.remember(state, request.request_id, result, key)
 
     async def assistant_conversation(self, conversation_id: UUID, shop_session_id: UUID):
         # The caller names its own session (a required query parameter); the bound one is never
@@ -401,7 +401,7 @@ class ConciergeAgent(Agent):
             expires_at=state.expires_at(),
         )
 
-    def remember(self, state, request_id, result, conversation_id):
+    async def remember(self, state, request_id, result, conversation_id):
         response = AssistantResponse(
             conversation_id=conversation_id,
             request_id=str(request_id),
@@ -416,7 +416,7 @@ class ConciergeAgent(Agent):
                 prompt_version=result["prompt_version"],
                 prompt_source=result["prompt_source"],
                 tools=demo_tools(result["calls"]),
-                links=self.links(result["trace_id"]),
+                links=await self.links(result["trace_id"]),
             ),
         )
         state.replies[str(request_id)] = response
@@ -617,10 +617,10 @@ class ConciergeAgent(Agent):
             ) from None
         return {"saved": True}
 
-    def links(self, current_trace):
+    async def links(self, current_trace):
         links = {}
         public_url = os.getenv("LANGFUSE_PUBLIC_URL") or os.getenv("LANGFUSE_BASE_URL", "")
-        project_id = os.getenv("LANGFUSE_PROJECT_ID", "")
+        project_id = await self.langfuse.project_id(os.getenv("LANGFUSE_PROJECT_ID", ""))
         if public_url and project_id:
             links["Langfuse"] = (
                 f"{public_url.rstrip('/')}/project/{quote(project_id, safe='')}/traces/{current_trace}"
