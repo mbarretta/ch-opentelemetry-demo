@@ -469,7 +469,13 @@ class ConciergeAgent(Agent):
         if self.mode == "scripted":
             model = ScriptedModel(scenario=state.scenario, product_id=product_id)
         else:
-            model = ChatLLM(timeout=30, max_retries=1)
+            llm_kwargs = {"timeout": 30, "max_retries": 1}
+            if os.getenv("LLM_MODEL", "").lower().startswith("gpt-5"):
+                # gpt-5 models default to reasoning enabled, which OpenAI's
+                # /v1/chat/completions rejects alongside function tools; "none"
+                # disables reasoning so the agent's tool calls go through.
+                llm_kwargs["reasoning_effort"] = "none"
+            model = ChatLLM(**llm_kwargs)
 
         @wrap_model_call
         async def observe_model(model_request, handler):
