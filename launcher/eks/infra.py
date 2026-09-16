@@ -226,18 +226,59 @@ def initialised():
     return (config.tofu_dir() / ".terraform/terraform.tfstate").exists()
 
 
+def _idle_nodegroup_exists():
+    """Whether a *previously applied* node group is sitting `ACTIVE` at `desiredSize=0`.
+
+    Read straight from `tofu output -json` rather than through `aws.tf_out` (which `die`s):
+    on the very first apply there is no state yet, and an empty/absent `nodegroup_name` output
+    just means "nothing to protect", not a refusal.
+    """
+    result = core.capture(
+        "tofu", f"-chdir={config.tofu_dir()}", "output", "-json", check=False, stderr=core.DEVNULL
+    )
+    if result.returncode:
+        return False
+    try:
+        parsed = json.loads(result.stdout or "{}")
+    except ValueError:
+        return False
+    if "nodegroup_name" not in parsed:
+        return False
+    return aws.ng_status() == "ACTIVE" and aws.ng_desired() == 0
+
+
 def apply(yes=False):
     """Run `tofu apply`, then write the kubeconfig and report the next steps.
 
     Refuses before `init`, because `tofu apply` on an uninitialised backend fails with a
     generic message whose fix is always the same. Interactive by default: tofu's own
     confirmation prompt reads the inherited stdin.
+
+    A node group that already exists and is idle (`desiredSize=0`) is scaled up to
+    `node_count` before the tofu apply and back down to 0 after it: EKS add-on version
+    updates (coredns, kube-proxy, vpc-cni all pick up whatever AWS currently publishes as
+    `most_recent`) have to reschedule pods to reach ACTIVE, and at zero nodes there is nowhere
+    to put them, so `tofu apply` blocks for the add-on's full 20-minute timeout and then fails.
+    `eks.tf`'s node group comment already names this failure for an add-on *create* on the very
+    first apply, where the node group is created at `node_count` alongside it; it recurs on any
+    later re-apply while idle, whenever AWS has shipped a newer add-on patch since the last one.
+    Restoring 0 afterwards keeps `apply` infra-only -- `eks deploy` still refuses at zero nodes
+    and points at `eks up`, exactly as before.
     """
     core.need("aws", "tofu", "kubectl")
     if not initialised():
         core.die("OpenTofu backend not initialised: run `demo.py eks init` first")
 
     aws.aws_login()
+
+    scaled_up_for_addons = _idle_nodegroup_exists()
+    if scaled_up_for_addons:
+        node_count = int(aws.tf_out("node_count"))
+        core.log(
+            f"node group is idle; scaling to {node_count} first, so add-on version updates "
+            "have somewhere to reschedule pods"
+        )
+        aws.ng_scale(node_count)
 
     core.log("tofu apply")
     tofu("apply", *(["-auto-approve"] if yes else []))
@@ -247,6 +288,10 @@ def apply(yes=False):
     # The node group starts at desiredSize = node_count, but kubelets can take a minute or two
     # to register after apply returns; an empty list here is normal.
     core.run("kubectl", "get", "nodes", "-o", "wide")
+
+    if scaled_up_for_addons:
+        core.log("scaling the node group back to 0 (only brought up for the add-on updates)")
+        aws.ng_scale(0)
 
     print()
     core.log("tofu output")

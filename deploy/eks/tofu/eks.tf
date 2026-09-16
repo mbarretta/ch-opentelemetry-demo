@@ -78,9 +78,13 @@ module "eks" {
   enable_irsa       = false
 
   # The initial apply brings nodes up at node_count so the addons reach ACTIVE
-  # (an addon create at zero nodes waits for its 20-minute timeout). The
-  # node-group submodule ignores desired_size drift, so the scripts and the
-  # nightly schedule can scale to 0 without a later `tofu apply` fighting them.
+  # (an addon create at zero nodes waits for its 20-minute timeout, and so does
+  # an addon *update* -- a later re-apply while idle hits the same wait
+  # whenever AWS has published a newer addon patch since the last apply;
+  # infra.py's apply() scales the node group up for the duration of a re-apply
+  # to cover that case). The node-group submodule ignores desired_size drift,
+  # so the scripts and the nightly schedule can scale to 0 without a later
+  # `tofu apply` fighting them.
   eks_managed_node_groups = {
     demo = {
       name            = local.nodegroup_name

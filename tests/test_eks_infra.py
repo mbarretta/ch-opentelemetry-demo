@@ -285,6 +285,7 @@ def test_apply_runs_tofu_apply_interactively_and_reports_the_next_steps(
     assert stubbed.called("kubeconfig")
     assert one(fake_sh, "kubectl", "get", "nodes").argv == ["kubectl", "get", "nodes", "-o", "wide"]
     assert find(fake_sh, "tofu", *chdir(), "output")
+    assert not stubbed.called("ng_scale"), "a first apply has no idle node group to protect"
 
     printed = capsys.readouterr().out
     for step in ("demo.py build", "demo.py publish", "demo.py eks deploy"):
@@ -297,6 +298,29 @@ def test_apply_yes_skips_the_confirmation_prompt(fake_sh, stubbed, redirected):
     infra.apply(yes=True)
 
     assert one(fake_sh, "tofu", *chdir(), "apply").argv[-1] == "-auto-approve"
+
+
+def test_apply_scales_an_idle_node_group_up_for_addon_updates_and_back_down_after(
+    fake_sh, stubbed, redirected, monkeypatch
+):
+    """A coredns/kube-proxy/vpc-cni version bump needs somewhere to reschedule pods: at
+    desiredSize=0 there is none, and `tofu apply` blocks for the add-on's 20-minute timeout and
+    then fails (this is what actually happened against a live idle cluster)."""
+    initialised(redirected)
+    fake_sh.reply(
+        shlex.join(["tofu", *chdir(), "output", "-json"]),
+        stdout=json.dumps({**TF_OUTPUTS, "nodegroup_name": "demo", "node_count": 2}),
+    )
+    stubbed.patch(monkeypatch, aws, "ng_status", result="ACTIVE")
+    stubbed.patch(monkeypatch, aws, "ng_desired", result=0)
+    stubbed.patch(monkeypatch, aws, "ng_scale")
+    stubbed.patch(
+        monkeypatch, aws, "tf_out", result=lambda name: {**TF_OUTPUTS, "node_count": 2}[name]
+    )
+
+    infra.apply()
+
+    assert stubbed.args("ng_scale") == [(2,), (0,)], "up to node_count first, back to 0 after"
 
 
 def test_apply_warns_that_the_ecr_consolidation_replaces_the_old_repository(
