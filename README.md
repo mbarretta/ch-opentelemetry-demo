@@ -113,8 +113,6 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 | `publish` | Logs in to ECR and pushes the four images, refusing a platform that does not match the node group's and skipping a tag the registry already holds unless you pass `--force`. |
 | `eks deploy` | Creates the namespaces, applies the NetworkPolicy that keeps everything but the storefront off the agent, creates the Secrets (assembled in Python and piped to `kubectl apply -f -`, never written to disk or to a command line), installs the ClickStack collector, writes the generated Helm values from `.env` and the build manifest, installs the demo release, and opens the tunnel. Safe to re-run. |
 
-> **The first `eks apply` after this merge destroys the old `otel-demo-frontend` ECR repository and every image in it.** This repository uses four repositories, `ch-opentelemetry-demo/{frontend,frontend-proxy,agent,mcp}`, where the pre-merge deployment used the single `otel-demo-frontend`; an ECR repository name forces replacement and there is no `moved` block, so tofu deletes the old repository and every image in it. That is intended — the old images are built from a different upstream pin and cannot serve this release — but it means **`eks apply` must be followed by `build` and `publish` before anything can be deployed.** `eks apply` prints the same warning, and `eks deploy` refuses rather than rolling out a partial set.
-
 `eks deploy` will not proceed until all four images are published at the current build tag. `publish --service frontend` on its own therefore never satisfies it: the gate wants the whole set, because a release that can only name three of four images deploys last week's demo perfectly happily. Re-run `publish` without `--service` after a partial push.
 
 ### The everyday cycle
@@ -332,25 +330,6 @@ npx cypress run --spec 'cypress/e2e/Home.cy.ts,cypress/e2e/ProductDetail.cy.ts,c
 
 The base URL comes from upstream's `.env` (`FRONTEND_PORT=8080`); set `CYPRESS_BASE_URL` when `SHOP_PORT` differs. `check-frontend.sh` must run after `build`, because staging removes the `node_modules` link.
 
-### Validated
-
-Results on September 11, 2026, on image set `28c8a6773491` (`linux/arm64`, Docker Desktop on Apple silicon), produced from a clean state (`down`, then `.runtime/build` and `.runtime/images` removed) by `bootstrap`, `build`, and `up`, with `AGENT_MODE=scripted`:
-
-| Check | Result |
-| --- | --- |
-| `Assistant.cy.ts` | 3 of 3 passing: the shopping flow, the desktop panel with the keyboard at 1440 px, and the mobile dialog with the keyboard at 390 px. |
-| `Home.cy.ts`, `ProductDetail.cy.ts`, `Checkout.cy.ts` | 4 of 7 passing. The same three tests fail the same way against the released `ghcr.io/open-telemetry/demo:3.0.0-frontend` image in this stack: Home `should recover corrupted stored session` (a localStorage race), ProductDetail `should not render product picture or request undefined image when picture is missing`, and Checkout `should create an order with two items` (the order completes after its 4 s assertion window). They are upstream 3.0.0 behavior, not regressions from the overlay. |
-| `scripts/smoke.py` | Passes over HTTP tools and, with `MCP_ENABLED=True`, over MCP. |
-| `ruff`, `pytest`, `check-frontend.sh` | Pass. `npm run lint` reports one pre-existing warning in upstream `utils/telemetry/SessionIdProcessor.ts`. |
-| Build hygiene | Both build contexts, listed with the probe in `docker/README.md`, contain no `.env`, `.venv`, credentials, telemetry captures, or `node_modules`. `docker image inspect` and `docker history` of the four images show no `LANGFUSE_*`, `API_KEY`, or secret values. The manifest records the tag, platform, image IDs, base digests, upstream commit, and `contract_version`; a test shows that editing `prompts/concierge-v1.txt` changes the tag. |
-| Platform | `linux/arm64` built and tested. `linux/amd64` untested; see `docker/README.md`. |
-
-The EKS target's own timings, measured on a real account and a real ClickHouse Cloud service, are in [deploy/eks/README.md](deploy/eks/README.md#measured-timings-why-scale-to-zero); the full record is under `docs/history/`. Those runs predate this merge — they were made from the EKS repository's shell scripts, at its own upstream pin — so they are evidence for the cluster's shape and timings, not for the current CLI.
-
-The agent and mcp images bake in the package, prompts, and corrected tools, so a Python change needs `demo.py build` and `up`. For faster iteration, `up --dev` bind-mounts `concierge/`, `prompts/`, and `.runtime/tools.py` read-only over those images; after editing, restart the containers, because changing mounted files alone does not reload their processes. The `up` command recreates containers when their configuration changes. Frontend changes always need `build` and `up`. For the cluster, a change needs `build`, `publish` and `eks deploy` — the tag is content-derived, so `publish` and the release both follow the build automatically.
-
-The Gradio interface (`up --debug-chatbot`) is served directly on port 7860; the proxy has no `/chatbot` route, and the cluster disables the component entirely.
-
 ## Source and integration notes
 
 - Upstream: [3.0.0](https://github.com/open-telemetry/opentelemetry-demo/releases/tag/3.0.0), commit `1755859a9de82c2e5e225be68abc401a5ebf2b4f`, for both targets. The demo Helm chart is `open-telemetry/opentelemetry-demo` 0.41.0, whose `appVersion` is the same 3.0.0.
@@ -359,33 +338,3 @@ The Gradio interface (`up --debug-chatbot`) is served directly on port 7860; the
 - ClickStack dashboards written for older `app.*` attributes may need the release's `demo.*` names.
 - This is a demo with in-memory conversations and unauthenticated chat and API listeners, not a production authentication or persistence design. On the laptop, keep those listeners local. In the cluster they are reachable only through your own `kubectl port-forward`; do not put a load balancer in front of them.
 - References: [Langfuse OpenTelemetry](https://langfuse.com/integrations/native/opentelemetry), [prompt API](https://langfuse.com/docs/prompt-management/get-started), [scores API](https://langfuse.com/docs/evaluation/evaluation-methods/scores-via-sdk), [ClickStack collector](https://clickhouse.com/docs/clickstack/ingesting-data/collector), [ClickStack browser SDK](https://clickhouse.com/docs/clickstack/sdks/browser).
-
-## Langfuse skill integration review
-
-Reviewed on September 11, 2026 using the agent skill from [langfuse/skills](https://github.com/langfuse/skills), the current [trace audit guidance](https://langfuse.com/docs/observability/best-practices), and [OTel attribute mapping](https://langfuse.com/integrations/native/opentelemetry).
-
-| Finding | Change |
-| --- | --- |
-| Usage was recorded only in Langfuse-specific JSON. | Record standard input/output token attributes, plus reported cache and reasoning counts. Omit missing counts. Langfuse maps these attributes on ingestion. |
-| MCP retained trace IDs but lost session attributes. | Propagate anonymous session/scenario/mode through OTel baggage and copy allowed keys onto MCP spans. Concurrent conversations have isolated context. |
-| Direct API requests had empty root input/output. | Populate the existing HTTP root observation. Keep the chat root's input/output for UI requests. |
-| Generations lacked the tools available to the model. | Capture the scoped tool definitions alongside the system prompt and message history. |
-| An evaluator output alone did not explain its result. | Capture the checked product and budget on the evaluator observation. |
-| Anonymous sessions were represented as users. | Keep session/conversation IDs; omit user IDs until the app has a distinct user identity. |
-| ASGI send/receive spans added noise. | Exclude these internal leaves while retaining the HTTP request and application hierarchy. |
-
-The application keeps one OTel tracing provider per process and one collector export path. Langfuse's SDK is also OTel-based and is its recommended Python integration; adopting it is compatible with this design. For this released-image overlay, explicit OTel spans preserve the existing dependencies and avoid a second LLM instrumentor emitting duplicate generations. Langfuse-specific attributes are carried in ordinary OTLP spans and remain available in ClickStack.
-
-Prompt retrieval/versioning and saved scores remain Langfuse API operations. The documented score creation endpoint is separate from OTLP trace ingestion; an evaluator span alone does not create a saved Langfuse score. No Langfuse trace-ingestion REST API is used.
-
-Use synthetic demo inputs: trace payloads contain chat messages, prompts, tool definitions, and tool results. Baggage contains only anonymous conversation IDs and demo labels; it may travel to downstream services and model endpoints. Shop services retain trace correlation but are not modified to copy baggage into their own span attributes.
-
-Validation covers unit tests and captured OTLP traces from real shop calls over HTTP and MCP. Project-side rendering, prompt linkage, pricing, and saved scores still require the existing Langfuse instance configuration. The skill's final audit step, “Fetch the trace(s) you just created from Langfuse,” remains pending until that access is available; local capture does not verify Langfuse ingestion.
-
-## History
-
-This repository is the merge of two siblings that overlaid the same OpenTelemetry Demo release and could not be deployed together: `langfuse-sample-agent-app`, which owned the Compose stack, the four custom images and the Langfuse-traced assistant, and `ch-otel-demo-eks`, which owned the OpenTofu and Helm EKS deployment, the in-cluster ClickStack collector and the session-replay frontend patch. Both patched the same three storefront files, and there can only be one frontend image.
-
-The merge, in September 2026, kept this repository's history as the trunk and imported the EKS repository with `git subtree add --prefix=deploy/eks`, so its commits survive here. It settled on one upstream pin (3.0.0), one patch set, one image set, one Python CLI with an `eks` half, and two targets. The EKS repository's shell CLI and its own env files are gone, ported into `launcher/`; its frontend pin, 99 commits past 3.0.0, was retired and its session-replay hunks rebased onto 3.0.0. Internal identifiers were deliberately left alone: the `astronomy-concierge` image prefix, the `concierge/` package, the Compose project name, the Langfuse prompt and trace names, and the OpenTofu cluster name and state key, which could not move without replacing the live cluster.
-
-Planning records for both halves are under `docs/history/` — the native assistant plan and the EKS live-validation transcript — and the completed harness plans, including this merge's, are in `.claude/plans/`.
