@@ -84,9 +84,28 @@ def subcommands(parser):
     return action.choices
 
 
+# A full set of laptop-target ClickStack/Langfuse credentials, for the tests below that need
+# `run_config()`/`run_up()`'s observability preflight (`stack.require_observability`) to pass so
+# they can exercise something past it.
+OBSERVABILITY_ENV = {
+    "CLICKSTACK_OTLP_ENDPOINT": "https://click.test",
+    "CLICKSTACK_API_KEY": "click-key",
+    "LANGFUSE_BASE_URL": "https://lf.test",
+    "LANGFUSE_PUBLIC_KEY": "lf-pub",
+    "LANGFUSE_SECRET_KEY": "lf-secret",
+}
+
+
 @pytest.fixture
 def bootstrapped(tmp_path, monkeypatch):
-    """A .runtime that looks bootstrapped, so the gate in main() lets a command through."""
+    """A .runtime that looks bootstrapped, so the gate in main() lets a command through.
+
+    The stubbed environment carries no ClickStack/Langfuse credentials, matching a fresh
+    checkout's `.env`: that is deliberate, since `logs`/`down`/`ps`/`restart` -- and the tests
+    proving those still work -- do not go through the observability preflight, only `config`
+    and `up` do. Tests that dispatch `config`/`up` down a live path override `stack.environment`
+    themselves with `OBSERVABILITY_ENV` mixed in.
+    """
     monkeypatch.setattr(core, "RUNTIME", tmp_path)
     (tmp_path / "tools.py").write_text("# corrected tools\n")
     monkeypatch.setattr(stack, "generate_config", lambda env: None)
@@ -445,6 +464,9 @@ def test_logs_reaches_compose_with_the_debug_profile(bootstrapped, fake_sh):
 
 def test_up_passes_its_flags_through_to_compose(bootstrapped, fake_sh, monkeypatch, capsys):
     monkeypatch.setattr(images, "require_images", lambda: None)
+    monkeypatch.setattr(
+        stack, "environment", lambda: {"SHOP_PORT": "8080", **OBSERVABILITY_ENV}
+    )
 
     cli.main(["up", "--dev", "--debug-chatbot"])
 
@@ -453,6 +475,38 @@ def test_up_passes_its_flags_through_to_compose(bootstrapped, fake_sh, monkeypat
     assert line.endswith("up -d --no-build")
     out = capsys.readouterr().out
     assert "http://localhost:8080" in out and "Chat (debug)" in out
+
+
+@pytest.mark.parametrize("line", ("config", "up"))
+def test_config_and_up_refuse_without_clickstack_and_langfuse(bootstrapped, fake_sh, line):
+    """The laptop's fast loop is not exempt from the telemetry the demo exists to show.
+
+    `bootstrapped`'s stubbed environment carries none of the five keys, so both commands hit
+    `stack.require_observability` before either reaches `compose()` -- asserted here by the
+    empty `fake_sh` recording, not just by the die.
+    """
+    with pytest.raises(SystemExit) as failure:
+        cli.main([line])
+
+    message = str(failure.value)
+    for key in stack.LAPTOP_OBSERVABILITY_KEYS:
+        assert key in message, key
+    assert fake_sh.lines() == [], "the preflight refuses before docker compose ever runs"
+
+
+@pytest.mark.parametrize("line", ("down", "ps", "restart agent"))
+def test_compose_passthrough_commands_work_without_clickstack_or_langfuse(
+    bootstrapped, fake_sh, line
+):
+    """`down`/`ps`/`restart` (and `logs`, covered above) do not go through the new preflight.
+
+    `bootstrapped`'s stubbed environment is credential-free, and every one of these still
+    reaches `docker compose` rather than dying -- the behaviour the laptop target keeps for
+    commands that have nothing to do with starting the stack.
+    """
+    cli.main(line.split())
+
+    assert fake_sh.last.argv[:2] == ["docker", "compose"]
 
 
 def test_scenario_targets_the_laptop_by_default_and_the_cluster_on_request(monkeypatch, fake_sh):

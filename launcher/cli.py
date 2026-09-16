@@ -144,8 +144,10 @@ def run_publish(args):
 
 
 def run_config(args):
+    env = stack.environment()
+    stack.require_observability(env)
     rendered = stack.compose(
-        stack.environment(),
+        env,
         ["config", "--format", "json"],
         dev=args.dev,
         debug_chatbot=args.debug_chatbot,
@@ -155,11 +157,12 @@ def run_config(args):
     services = json.loads(rendered.stdout)["services"]
     for name, service in sorted(services.items()):
         print(f"{name}: {service.get('image', '(no image)')}")
-    print("Compose configuration validated; collector config written without credentials.")
+    print("Compose configuration validated.")
 
 
 def run_up(args):
     env = stack.environment()
+    stack.require_observability(env)
     images.require_images()
     stack.compose(
         env,
