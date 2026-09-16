@@ -190,19 +190,23 @@ def ensure_state_bucket(bucket, bucket_region):
 
 
 def warn_blank_keys(env):
-    """Report, without failing, the ClickStack keys `eks deploy` will need, and return them.
+    """Report, without failing, the ClickStack and Langfuse keys `eks deploy` will need.
 
     `init` and `apply` are infrastructure: they need an AWS session and nothing else. Naming the
     blanks now means a presenter fills `.env` in during the ten minutes the control plane takes,
-    rather than discovering the first blank key at deploy time.
+    rather than discovering the first blank key at deploy time -- where `config.load_clickstack_env`
+    and `config.load_langfuse_env` both refuse outright rather than warning. This stays a warning
+    here on purpose: `init` and `apply` are infrastructure-only and genuinely need neither
+    ClickHouse nor Langfuse credentials to succeed.
     """
     blank = [key for key in config.CLICKSTACK_KEYS if not env.get(key)]
+    blank += [key for key in config.LANGFUSE_KEYS if not env.get(key)]
     if blank:
         print(
             f"warning: blank or missing in .env: {', '.join(blank)}. "
             "`demo.py eks init` and `apply` do not need them; `eks deploy` does. "
-            "The EKS section of .env.example describes all five; "
-            "deploy/eks/sql/create-user.sql creates the ClickHouse user.",
+            "The EKS section of .env.example describes all five ClickStack keys and all three "
+            "Langfuse keys; deploy/eks/sql/create-user.sql creates the ClickHouse user.",
             file=sys.stderr,
         )
     return blank
@@ -263,13 +267,17 @@ def apply(yes=False):
     first apply, where the node group is created at `node_count` alongside it; it recurs on any
     later re-apply while idle, whenever AWS has shipped a newer add-on patch since the last one.
     Restoring 0 afterwards keeps `apply` infra-only -- `eks deploy` still refuses at zero nodes
-    and points at `eks up`, exactly as before.
+    and points at `eks up`, exactly as before. `warn_blank_keys` runs here too, before the tofu
+    apply, for the same reason `init` runs it: a presenter reads the warning while the control
+    plane is still coming up rather than at `eks deploy`, which is where a blank key actually
+    refuses.
     """
     core.need("aws", "tofu", "kubectl")
     if not initialised():
         core.die("OpenTofu backend not initialised: run `demo.py eks init` first")
 
     aws.aws_login()
+    warn_blank_keys(config.load_env())
 
     scaled_up_for_addons = _idle_nodegroup_exists()
     if scaled_up_for_addons:

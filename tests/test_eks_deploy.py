@@ -551,24 +551,37 @@ def test_with_langfuse_configured_the_secret_is_applied_and_the_exporter_appears
     ), "the collector expands it from the Secret; the value is never rendered"
 
 
-def test_without_langfuse_the_secret_is_deleted_and_the_exporter_is_left_out(
+def test_deploy_refuses_before_any_secret_when_langfuse_is_unconfigured(
     cluster, steps, redirected
 ):
-    """AC4: an `otlphttp` exporter with an unset `${env:...}` endpoint CrashLoops the collector.
+    """AC1, AC3: Langfuse is mandatory now; the old "runs ClickStack-only" state is invalid.
 
-    Deleted rather than skipped: a Secret left from a run when `.env` did have the keys would
-    go on feeding credentials to the collector and the agent after they were taken out.
+    `config.load_langfuse_env` dies naming the missing keys, and it is read before the first
+    kubectl call the same way `load_clickstack_env` already is -- so nothing, not even the
+    namespaces, is created before the refusal.
     """
     write_env(redirected, {key: value for key, value in ENV.items() if key not in LANGFUSE})
 
-    lifecycle.deploy()
+    with pytest.raises(SystemExit) as failure:
+        lifecycle.deploy()
 
-    assert secret(cluster, config.SECRET_LANGFUSE) is None
-    assert deletion(config.SECRET_LANGFUSE) in argvs(cluster)
-    collector = generated()["opentelemetry-collector"]["config"]
-    assert "exporters" not in collector, "nothing references the credentials that are not there"
-    pipeline = collector["service"]["pipelines"][values.LANGFUSE_PIPELINE]
-    assert pipeline["exporters"] == [values.PREVIEW_EXPORTER], "still a valid pipeline"
+    message = str(failure.value)
+    for key in LANGFUSE:
+        assert key in message, key
+    assert argvs(cluster) == [], "no session, no state read, no cluster call"
+    assert not values.values_path().exists()
+
+
+def test_deploy_refuses_when_langfuse_is_half_configured(cluster, steps, redirected):
+    """AC1: a partial set is a filled-in-half `.env`, not a request to deploy half a pipeline."""
+    half = {key: value for key, value in ENV.items() if key != "LANGFUSE_SECRET_KEY"}
+    write_env(redirected, half)
+
+    with pytest.raises(SystemExit) as failure:
+        lifecycle.deploy()
+
+    assert "LANGFUSE_SECRET_KEY" in str(failure.value)
+    assert argvs(cluster) == [], "no session, no state read, no cluster call"
 
 
 def test_llm_credentials_are_applied_only_when_an_api_key_is_set(cluster, steps):

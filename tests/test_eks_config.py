@@ -67,13 +67,19 @@ def test_load_clickstack_env_returns_exactly_the_five_collector_keys():
     assert set(loaded) == set(config.CLICKSTACK_KEYS)
 
 
-def test_load_langfuse_env_is_all_or_nothing():
-    assert config.load_langfuse_env({"SHOP_PORT": "8080"}) == {}, "Langfuse stays optional"
+def test_load_langfuse_env_dies_naming_every_blank_or_missing_key_at_once():
+    """AC1: Langfuse is mandatory now, including the all-blank case that used to return `{}`."""
+    with pytest.raises(SystemExit) as unconfigured:
+        config.load_langfuse_env({"SHOP_PORT": "8080"})
+    message = str(unconfigured.value)
+    for key in config.LANGFUSE_KEYS:
+        assert key in message, key
 
     with pytest.raises(SystemExit) as failure:
         config.load_langfuse_env({"LANGFUSE_BASE_URL": "https://lf.test"})
     message = str(failure.value)
     assert "LANGFUSE_PUBLIC_KEY" in message and "LANGFUSE_SECRET_KEY" in message
+    assert "LANGFUSE_BASE_URL" not in message, "a key that is filled in must not be reported"
 
     secret = config.load_langfuse_env(FULL_LANGFUSE)
     assert set(secret) == set(config.LANGFUSE_SECRET_KEYS)
