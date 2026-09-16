@@ -133,12 +133,11 @@ def require_observability(env):
     command that reaches `compose()` -- `down`, `ps`, `restart`, `logs` -- calls no preflight at
     all, so they keep working against a credential-free `.env`.
     """
-    missing = [key for key in LAPTOP_OBSERVABILITY_KEYS if not env.get(key)]
-    if missing:
-        core.die(
-            f"blank or missing in .env: {', '.join(missing)}. "
-            "ClickStack and Langfuse are required for this demo; see .env.example."
-        )
+    core.require_keys(
+        env,
+        LAPTOP_OBSERVABILITY_KEYS,
+        "ClickStack and Langfuse are required for this demo; see .env.example.",
+    )
 
 
 def generate_config(env):

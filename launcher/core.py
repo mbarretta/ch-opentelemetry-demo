@@ -67,6 +67,18 @@ def need(*commands):
         die(f"missing required command(s): {', '.join(missing)}")
 
 
+def require_keys(values, keys, hint):
+    """Die naming every blank or missing key among `keys`, or return silently when all are set.
+
+    One message rather than one per run: filling these in is the first thing a new presenter
+    does, and finding out about the fourth blank key on the fourth attempt is not a workflow.
+    `hint` is appended after the key list to point at where the keys are documented.
+    """
+    missing = [key for key in keys if not values.get(key)]
+    if missing:
+        die(f"blank or missing in .env: {', '.join(missing)}. {hint}")
+
+
 def dotenv(path):
     """The KEY=VALUE pairs of an env file as a mapping; a missing file reads as empty."""
     from dotenv import dotenv_values

@@ -127,13 +127,12 @@ def load_clickstack_env(env=None):
     does, and finding out about the fourth blank key on the fourth attempt is not a workflow.
     """
     values = load_env() if env is None else env
-    missing = [key for key in CLICKSTACK_KEYS if not values.get(key)]
-    if missing:
-        core.die(
-            f"blank or missing in .env: {', '.join(missing)}. "
-            "The EKS section of .env.example describes all five; "
-            "deploy/eks/sql/create-user.sql creates the ClickHouse user."
-        )
+    core.require_keys(
+        values,
+        CLICKSTACK_KEYS,
+        "The EKS section of .env.example describes all five; "
+        "deploy/eks/sql/create-user.sql creates the ClickHouse user.",
+    )
     return {key: values[key] for key in CLICKSTACK_KEYS}
 
 
@@ -146,12 +145,7 @@ def load_langfuse_env(env=None):
     of this demo, so there is no valid "none of them" configuration left on this target.
     """
     values = load_env() if env is None else env
-    missing = [key for key in LANGFUSE_KEYS if not values.get(key)]
-    if missing:
-        core.die(
-            f"blank or missing in .env: {', '.join(missing)}. "
-            "The EKS section of .env.example describes all three."
-        )
+    core.require_keys(values, LANGFUSE_KEYS, "The EKS section of .env.example describes all three.")
     return langfuse_secret(values)
 
 
