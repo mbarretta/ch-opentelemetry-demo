@@ -7,9 +7,8 @@
 # - A README (README.md, deploy/eks/README.md, docker/README.md, frontend/overlay/README.md):
 #   `BARE_SPANS` in `tests/test_docs.py` pins every bare command span each of the four shows,
 #   and `MENTIONS` pins the spans that name a piece of the CLI instead of showing a line to
-#   run. `RETIRED` pins the pre-merge names no document may use outside the root README's
-#   History note, and the root's own outline and EKS runbook are pinned by `SECTIONS`,
-#   `FIRST_RUN` and `EVERYDAY`.
+#   run. `RETIRED` pins the pre-merge names no document may use at all, and the root's own
+#   outline and EKS runbook are pinned by `SECTIONS`, `FIRST_RUN` and `EVERYDAY`.
 # - A `raise SystemExit("...")` added under launcher/ or scripts/, or either tree renamed:
 #   `REFUSAL_TREES` in `tests/test_core.py` is the scanned pair -- scripts/ included, since it
 #   holds the other operator-facing entry points -- and

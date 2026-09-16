@@ -18,8 +18,8 @@ from launcher import cli, core
 READMES = ("README.md", "deploy/eks/README.md", "docker/README.md", "frontend/overlay/README.md")
 
 # Names the merge retired: the two old repositories, the bash CLI and its env files, and the
-# upstream pin the EKS repository used. They survive only in the root README's History note,
-# which is the one place whose subject is what this repository used to be.
+# upstream pin the EKS repository used. No document may use them at all -- the root README's
+# History note that once named them was deleted.
 RETIRED = (
     "demo.sh",
     "envvars.",
@@ -29,7 +29,6 @@ RETIRED = (
     "langfuse-sample-agent-app",
     "ch-otel-demo-eks",
 )
-HISTORY_HEADING = "## History"
 
 # The outline the root README has to keep: the merge's point is one document that gets someone
 # from a clone to a running demo on either target, and each of these answers one of those
@@ -48,7 +47,6 @@ SECTIONS = (
     "## Optional MCP transport",
     "## Test and develop",
     "## Source and integration notes",
-    HISTORY_HEADING,
 )
 
 CONFIGURATION_HEADING = "## Configuration"
@@ -118,9 +116,9 @@ BARE_SPANS = {
 
 # Spans these documents really contain that name a piece of the CLI instead of showing a line to
 # run. Each one would be refused by the parser, so each is a false positive the widened extractor
-# has to keep classifying as prose. `eks` is the Configuration table's "every `eks` subcommand"
-# and the History note's "an `eks` half"; `build --platform` is docker/README.md's platform
-# section naming the flag whose value the next clause supplies.
+# has to keep classifying as prose. `eks` is the Configuration table's "every `eks` subcommand";
+# `build --platform` is docker/README.md's platform section naming the flag whose value the next
+# clause supplies.
 MENTIONS = (["eks"], ["build", "--platform"], ["publish", "--service"], ["up", "--help"])
 
 KEY = re.compile(r"`([A-Z][A-Z0-9_]*)`")
@@ -284,8 +282,8 @@ def test_the_configuration_table_and_env_example_hold_the_same_keys():
 
 
 @pytest.mark.parametrize("name", READMES)
-def test_no_retired_name_survives_outside_the_history_note(name):
-    text = document(name).split(HISTORY_HEADING, 1)[0]
+def test_no_retired_name_survives(name):
+    text = document(name)
     for retired in RETIRED:
         assert retired not in text, f"{name} still refers to {retired}"
 
