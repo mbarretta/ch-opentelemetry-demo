@@ -90,10 +90,10 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 - An AWS account and an **IAM Identity Center (SSO) profile** with access to it: `aws configure sso --profile <name>`, then `AWS_PROFILE` in `.env`. Everything deploys into one region (`AWS_REGION`, default `us-east-1`).
 - `aws`, `tofu`, `kubectl`, `helm`, `docker` (with `buildx`) and `git` on the path. `demo.py eks init` names whichever is missing.
 - A **ClickHouse Cloud** service. Run `deploy/eks/sql/create-user.sql` once in its SQL console with a real password in place of `SECURE_PASSWORD`, then fill in the five ClickStack keys in the EKS section of `.env` (`CLICKHOUSE_ENDPOINT`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE`, `OTLP_AUTH_TOKEN`). `OTLP_AUTH_TOKEN` is any long random string; it never leaves the cluster.
-- Langfuse keys are optional here, as on the laptop. With them, the collector gets a Langfuse pipeline and the agent gets the Secret; without them the demo runs ClickStack-only.
+- Langfuse is required here too, the same as ClickStack: fill in all three keys in the EKS section of `.env` (`LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`). `eks deploy` refuses, naming whichever is blank, before creating the `langfuse-credentials` Secret or any other Secret.
 - An **arm64 build host**. The node group is Graviton, and `publish` refuses to push a manifest whose platform does not match the cluster's, so a wrong build cannot reach it silently. Apple silicon builds `linux/arm64` natively.
 
-`demo.py eks init` and `eks apply` need only the AWS session; they warn about blank ClickStack keys rather than failing, so a presenter can fill `.env` in during the ten minutes the control plane takes.
+`demo.py eks init` and `eks apply` need only the AWS session; they warn about blank ClickStack or Langfuse keys rather than failing, so a presenter can fill `.env` in during the ten minutes the control plane takes -- `eks deploy` is the step that actually refuses.
 
 ### First run
 
@@ -184,7 +184,7 @@ One root `.env`, created from `.env.example` by `bootstrap` and ignored by Git. 
 | `AGENT_BASE_URL`, `ASSISTANT_TRANSPORT` | Yes. `AGENT_BASE_URL` is server-side only — the storefront's routes call the agent with it, and no agent, model or Langfuse address ever reaches the browser bundle | Fixed by `deploy/eks/k8s/demo-values.yaml` (`http://agent:8010` and `live`) |
 | `ASSISTANT_DEMO_DETAILS` | Yes | Yes, through the generated Helm values |
 | `CLICKSTACK_OTLP_ENDPOINT`, `CLICKSTACK_API_KEY` | The collector exports straight to your ClickStack deployment with these | Ignored: the cluster's gateway collector exports to the in-cluster ClickStack collector instead, authenticating with `OTLP_AUTH_TOKEN` |
-| `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | All three or none | All three or none, as the `langfuse-credentials` Secret; without them the collector's Langfuse pipeline is not rendered at all |
+| `LANGFUSE_BASE_URL`, `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY` | Required, all three: `demo.py config`/`up` refuse to start before compose runs if any is blank | Required, all three, as the `langfuse-credentials` Secret; `eks deploy` refuses before creating any Secret if any is blank |
 | `LANGFUSE_PROJECT_ID`, `LANGFUSE_PUBLIC_URL`, `CLICKSTACK_TRACE_URL_TEMPLATE` | The browser-facing links under **Demo details** | The same, through the generated Helm values |
 | `LANGFUSE_PROMPT_LABEL` | Which prompt label the agent reads (`production`, or `budget-check` for a comparison) | The same, through the generated Helm values |
 | `SESSION_REPLAY` | `auto` records whenever ClickStack is configured; `true` forces, `false` disables | The same three modes, through the generated Helm values, which derive the frontend's `PUBLIC_HYPERDX_ENABLED` from it. `auto` records on every deployment, because the cluster's gateway collector always exports to ClickStack; `false` is applied by the next `eks deploy` |
@@ -210,7 +210,7 @@ Every recommendation is a compact product card whose name, picture, and price co
 
 ## Connect ClickStack and Langfuse
 
-Both destinations are external and both are optional, on both targets. Fill in `.env`; [Configuration](#configuration) says which target reads what, and this table is about the values themselves, which are easy to get subtly wrong.
+Both destinations are external and both are required, on both targets: `demo.py config`/`up` refuse to start on the laptop, and `eks deploy` refuses to create any Secret on the cluster, until every key below is filled in. Fill in `.env`; [Configuration](#configuration) says which target reads what, and this table is about the values themselves, which are easy to get subtly wrong.
 
 | Key | Value |
 | --- | --- |
