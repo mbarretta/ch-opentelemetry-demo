@@ -21,6 +21,7 @@ from opentelemetry.trace import SpanKind, Status, StatusCode
 from pydantic import BaseModel, Field
 from src.agents.agents import Agent
 from src.agents.llm import ChatLLM
+from src.agents.mcp_client import MCPClient
 
 from concierge.contract import (
     CONTRACT_VERSION,
@@ -47,6 +48,12 @@ logger = logging.getLogger(__name__)
 # Refusals shared by the legacy /prompt route (plain-string detail) and the storefront routes.
 REBIND_MESSAGE = "Start a new conversation to change scenario or budget."
 TURN_LIMIT_MESSAGE = f"This conversation reached {MAX_TURNS} turns. Start a new one."
+
+# How long a turn waits, while holding mcp_lock, for a replacement MCP connection. Without a
+# bound here, streamablehttp_client's 30s default POST timeout would run under the mutex and
+# every queued turn would wait behind one wedged connect, eating a third of the 90s turn budget
+# (execute_turn's asyncio.timeout(90)) before any of them got a chance to retry.
+RECONNECT_TIMEOUT = 10
 
 
 def conflict(reason: ConflictReason, message: str) -> HTTPException:
@@ -105,11 +112,39 @@ class ConciergeAgent(Agent):
         self.app.post("/assistant/message")(self.assistant_message)
         self.app.post("/assistant/actions/add-to-cart")(self.assistant_add_to_cart)
         self.app.get("/assistant/conversations/{conversation_id}")(self.assistant_conversation)
+        # Constructed outside a running loop, which is valid on 3.14 (the loop parameter and
+        # get_event_loop() call were removed in 3.10; binding is lazy via _LoopBoundMixin's
+        # _get_loop, on acquire's slow path). That laziness is also why this must stay a
+        # per-instance lock rather than a module-level or session-scoped shared agent: the
+        # latter would bind it to whichever loop acquired it first and break the ac12(c)
+        # concurrency test, since run_agent.py builds the agent at module scope for one
+        # long-lived uvicorn loop while the test fixture rebuilds it, function-scoped, per test.
+        self.mcp_lock = asyncio.Lock()
+        # A dedicated task per MCP connection (see _mcp_owner) opens, publishes, and later
+        # closes it; these strong references keep such a task alive even if nothing else awaits
+        # it -- the event loop only holds a weak reference to a task, so an unreferenced one can
+        # be garbage collected mid-run.
+        self._mcp_owner_tasks = set()
+        # The retire signal for whichever connection is currently installed, if that connection
+        # was opened by one of our owner tasks rather than by the lifespan task's own startup
+        # connect. Set here by the reconnect that supersedes it.
+        self._mcp_retire = None
+        # Overridable one-line seam: tests install a fake here so the real reconnect/owner-task
+        # path runs against a client with no socket.
+        self.mcp_client_factory = MCPClient
 
     @asynccontextmanager
     async def lifespan(self, app):
         async with super().lifespan(app):
+            # The vendored teardown below (`if self.mcp_server: await self.mcp_server.cleanup()`,
+            # in Agent.lifespan) must close the connection THIS task opened, not whatever
+            # generation a reconnect has since installed -- so capture it now and restore it
+            # right before that teardown runs, no matter how many reconnects happened in
+            # between. Every replacement connection is retired through its own owner task
+            # instead (ac8).
+            startup_client = self.mcp_server
             yield
+            self.mcp_server = startup_client
         trace.get_tracer_provider().force_flush()
 
     async def health(self):
@@ -179,6 +214,105 @@ class ConciergeAgent(Agent):
             raise conflict("turn_limit", TURN_LIMIT_MESSAGE)
         return None
 
+    # -- MCP reconnect ----------------------------------------------------------------------
+    #
+    # ONE OWNER TASK PER CONNECTION. Whichever task calls connect_to_mcp_server() is the only
+    # task that ever calls cleanup() on that connection, and it does so only after its own
+    # retire signal fires -- never from a request task, and never by dropping the last
+    # reference for the garbage collector to finalize (an async generator's finalization is
+    # cancellation too, at an unpredictable later moment). This is not a style preference: the
+    # exit stack's ClientSession.__aexit__ closes an anyio CancelScope, and CancelScope.__enter__
+    # records whichever task entered it as that scope's _host_task; anyio's _deliver_cancellation
+    # then cancels every task in the scope that "is not current" -- including the host task, if
+    # some other task calls cleanup(). For the very first connection, the host task is uvicorn's
+    # lifespan task, so a stray cleanup() from a request task kills lifespan and the shutdown
+    # force_flush() (see lifespan() above) never runs again. Do not "simplify" this back into a
+    # plain `await client.cleanup()` from a request task.
+
+    async def fetch_tools(self):
+        """The tool list, replacing a probably-dead MCP session with a fresh one on failure.
+
+        Broad `except Exception` on purpose, matching the precedent at invoke()'s own
+        `except Exception` above (an "external system misbehaved" boundary): the exception shape
+        the released image actually raises on a dead session cannot be pinned down, so the
+        trigger is a failed fetch, never a matched exception type.
+        """
+        stale = self.mcp_server  # captured BEFORE the fetch, never re-read after a failure --
+        # the loser of a reconnect race must compare against what it saw, not against
+        # self.mcp_server as it stands after the fact, or it would reconnect a healthy session.
+        try:
+            return await self.get_tool_list()
+        except Exception:
+            if stale is None:
+                # HTTP-tools mode: get_tool_list() cannot fail this way, but if a test or a
+                # future caller makes it, there is no MCP connection to replace.
+                raise
+        await self._replace_mcp_session(stale)
+        return await self.get_tool_list()
+
+    async def _replace_mcp_session(self, stale):
+        """Install a fresh MCP connection, unless another turn already has.
+
+        Serialized by mcp_lock together with the identity check, so N concurrent turns that all
+        saw `stale` produce exactly one reconnect: the loser of the lock re-checks and finds
+        self.mcp_server already replaced, and returns without opening a second connection.
+        """
+        async with self.mcp_lock:
+            if self.mcp_server is not stale:
+                return
+            ready = asyncio.get_running_loop().create_future()
+            retire = asyncio.Event()
+            owner = asyncio.create_task(self._mcp_owner(ready, retire))
+            self._mcp_owner_tasks.add(owner)
+            owner.add_done_callback(self._mcp_owner_tasks.discard)
+            cancelled = None
+            try:
+                async with asyncio.timeout(RECONNECT_TIMEOUT):
+                    await ready
+            except BaseException as exc:
+                # asyncio.CancelledError derives from BaseException, not Exception (its MRO is
+                # CancelledError -> BaseException -> object), and both an outer cancellation and
+                # this timeout expiring deliver it here, so `except Exception` above would miss
+                # it -- as does a genuine connect failure, reraised through `ready`. Remember it;
+                # whether it is re-raised below depends on whether a connection got installed.
+                cancelled = exc
+                if self.mcp_server is stale:
+                    # Nothing installed yet: the owner is still connecting, or it already
+                    # failed and ran its own cleanup. Cancelling it is how a task that never
+                    # reached `await retire.wait()` notices -- it remains the only task that
+                    # ever calls cleanup() on what it opened. Awaiting it here is what makes
+                    # that retirement deterministic rather than a fire-and-forget hope.
+                    owner.cancel()
+                    await owner
+            if self.mcp_server is not stale:
+                # Installed, cancelled or not: _mcp_owner assigns self.mcp_server BEFORE
+                # signalling `ready`, so a waiter cancelled the instant `ready` resolves still
+                # always finds an installed, owned connection -- never a published-but-
+                # uninstalled one (ac16's same-tick race). Retire the generation this replaces,
+                # through THAT owner's own task rather than here, and remember this one for
+                # whichever reconnect supersedes it next.
+                previous_retire, self._mcp_retire = self._mcp_retire, retire
+                if previous_retire is not None:
+                    previous_retire.set()
+            if cancelled is not None:
+                raise cancelled
+
+    async def _mcp_owner(self, ready, retire):
+        """Open one MCP connection, publish it, then close only what this task itself opened."""
+        client = self.mcp_client_factory()
+        try:
+            await client.connect_to_mcp_server(self.mcp_server_url)
+        except BaseException as exc:
+            await client.cleanup()
+            if not ready.done():
+                ready.set_exception(exc)
+            return
+        self.mcp_server = client
+        if not ready.done():
+            ready.set_result(client)
+        await retire.wait()
+        await client.cleanup()
+
     # -- tools -----------------------------------------------------------------------------
 
     async def scoped_tools(self, user_id, calls, currency_code="USD"):
@@ -187,7 +321,7 @@ class ConciergeAgent(Agent):
         The cart identity and currency are injected here, never by the model, and the same
         wrappers front both the HTTP and the MCP tool transports.
         """
-        upstream = {t.name: t for t in await self.get_tool_list()}
+        upstream = {t.name: t for t in await self.fetch_tools()}
 
         async def invoke(name, args):
             with tracer.start_as_current_span(
