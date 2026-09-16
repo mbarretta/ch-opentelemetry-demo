@@ -221,7 +221,7 @@
     {
       "id": "3",
       "title": "Rewrite docs to present ClickStack and Langfuse as required, not optional",
-      "status": "pending",
+      "status": "complete",
       "depends_on": [
         "1",
         "2"
@@ -265,7 +265,38 @@
         }
       ],
       "notes": "Depends on tasks 1 and 2 so the reworded prose describes the exact enforcement behavior/messages actually implemented rather than a parallel guess.",
-      "verdicts": []
+      "verdicts": [
+        {
+          "overall": "PASS",
+          "verification": "PASS",
+          "criteria": "PASS",
+          "criteria_critical": "PASS",
+          "constraints": "PASS",
+          "quality": "PASS",
+          "no_placeholders": "PASS",
+          "no_test_weakening": "PASS",
+          "issues": [
+            "ac1 (minor, non-blocking): README.md has two stale conditional phrasings (SESSION_REPLAY line, eks-smoke-test line) that do not use the AC-named optional-framing language, left as a style nit rather than an AC failure."
+          ],
+          "notes": "Docs-only diff exactly matches the three predicted files; all five critical ACs (ac1-ac5) verified directly against the diff text, matching the actual enforcement behavior implemented by tasks 1 and 2. Verification command passed clean (514 passed, 1 deselected, ruff clean). No test files touched. All plan-level constraints hold since no code was touched.",
+          "timestamp": "2026-09-15T21:33:36-04:00"
+        }
+      ],
+      "worktree": "",
+      "branch": "",
+      "self_review": {
+        "applied": 2,
+        "deferred": 0,
+        "rejected": 0,
+        "recorded_at": "2026-09-15T21:33:36-04:00"
+      },
+      "drift": {
+        "predicted": 3,
+        "touched": 3,
+        "unpredicted": 0,
+        "ratio": 0,
+        "recorded_at": "2026-09-15T21:33:37-04:00"
+      }
     }
   ],
   "deferrals": [],
@@ -310,6 +341,14 @@
     {
       "timestamp": "2026-09-15T21:23:17-04:00",
       "note": "Ran post-merge build: none configured; skipped."
+    },
+    {
+      "timestamp": "2026-09-15T21:24:05-04:00",
+      "note": "Dispatched task 3 to harness-task-runner in worktree .claude/worktrees/improve-mandatory-observability-task-3"
+    },
+    {
+      "timestamp": "2026-09-15T21:33:36-04:00",
+      "note": "[attempt 1] 2026-09-15T22:05:00-04:00: Task 3 implemented: reworded README.md's EKS prerequisites, Configuration table's Langfuse row, and Connect ClickStack and Langfuse intro from optional to required; reworded .env.example's ClickStack/Langfuse block comment naming the exact five enforced keys; reworded docs/LANGFUSE_INTEGRATION.md's minimal-configuration sentence and removed dangling references to a deleted README section. pytest and ruff green; committed on harness/improve-mandatory-observability/task-3."
     }
   ],
   "plan_review_state": {
@@ -611,6 +650,13 @@
         "timestamp": "2026-09-15T21:23:17-04:00",
         "phase": "7.4",
         "decision": "merged wave 1: tasks 1,2 -> main; pushed",
+        "reason": "managed run go-gate pre-authorized merge-and-push for every wave"
+      },
+      {
+        "id": "ad2",
+        "timestamp": "2026-09-15T21:33:50-04:00",
+        "phase": "7.4",
+        "decision": "merged wave 2: task 3 -> main; pushed",
         "reason": "managed run go-gate pre-authorized merge-and-push for every wave"
       }
     ]
