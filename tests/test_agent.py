@@ -1,3 +1,4 @@
+import asyncio
 import json
 from uuid import uuid4
 
@@ -7,7 +8,7 @@ from fastapi import HTTPException
 from langchain.tools import tool
 from src.agents.llm import ChatLLM
 
-from concierge.agent import ChatRequest, ConciergeAgent, FeedbackRequest
+from concierge.agent import RECONNECT_TIMEOUT, ChatRequest, ConciergeAgent, FeedbackRequest
 from concierge.scripted_model import EXPENSIVE, EXPLORASCOPE, tool_data
 
 
@@ -270,3 +271,166 @@ async def test_api_root_contains_meaningful_io(agent, spans):
     assert root.attributes["langfuse.observation.input"] == "Find a beginner telescope"
     assert root.attributes["langfuse.observation.output"] == result["reply"]
     assert root.attributes["session.id"] == result["session_id"]
+
+
+# -- MCP reconnect: fetch_tools() replaces a dead session with an owner task per connection --
+
+
+class FakeMCPClient:
+    """The one-line seam (`agent.mcp_client_factory`) stands in for the real MCPClient, so the
+    real reconnect/owner-task/cleanup path runs with no socket. `delay` is seconds of a real
+    `asyncio.sleep` inside connect, for a test that must catch a connection mid-connect; left at
+    the default, `connect_to_mcp_server` returns without ever suspending, so a fresh connection
+    installs within one scheduled step of its owner task -- which is what test (d2) below needs
+    to catch the ready-but-not-yet-resumed instant deterministically.
+    """
+
+    def __init__(self, delay=None):
+        self.delay = delay
+        self.connected = False
+        self.closed = False
+
+    async def connect_to_mcp_server(self, url):
+        if self.delay is not None:
+            await asyncio.sleep(self.delay)
+        self.connected = True
+
+    async def cleanup(self):
+        self.closed = True
+
+
+async def test_dead_session_is_replaced_and_the_retired_owner_closes_its_own_client(agent):
+    # gen0 stands in for the startup connection: nobody owns it (no owner task), matching ac8 --
+    # a reconnect never calls cleanup() on it. gen1 is what the first reconnect installs.
+    gen0 = FakeMCPClient()
+    agent.mcp_server = gen0
+    real_get_tool_list = agent.get_tool_list  # the fixture's own no-socket stub
+
+    gen1 = FakeMCPClient()
+    agent.mcp_client_factory = lambda: gen1
+
+    async def dead_while_gen0(*, dead):
+        if agent.mcp_server is dead:
+            raise RuntimeError("dead session")
+        return await real_get_tool_list()
+
+    agent.get_tool_list = lambda: dead_while_gen0(dead=gen0)
+    tools = await agent.fetch_tools()
+    assert [t.name for t in tools]  # the turn got a real tool list back
+    assert agent.mcp_server is gen1
+    assert gen1.connected is True
+    assert gen0.closed is False  # (a): not this reconnect's job -- ac8 owns gen0's lifetime
+
+    # A second reconnect supersedes gen1; its retire signal is what closes gen1, and only
+    # gen1's own owner task ever calls cleanup() on it -- proof the connection is closed by its
+    # owner, not by this (a different) request task.
+    gen2 = FakeMCPClient()
+    agent.mcp_client_factory = lambda: gen2
+    agent.get_tool_list = lambda: dead_while_gen0(dead=gen1)
+    tools = await agent.fetch_tools()
+    assert [t.name for t in tools]
+    assert agent.mcp_server is gen2
+    # retire.set() only wakes gen1's owner on a later loop iteration, and the task's own
+    # done-callback dispatch (which discards it from the bookkeeping set) takes one more still;
+    # give it both.
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+    assert gen1.closed is True
+    # gen2's owner is still alive and pending -- it is the current generation's owner, not
+    # something to retire yet.
+    assert len(agent._mcp_owner_tasks) == 1
+
+
+async def test_none_client_reraises_the_original_failure_and_builds_nothing(agent):
+    agent.mcp_server = None
+    boom = RuntimeError("boom")
+
+    async def always_fails():
+        raise boom
+
+    agent.get_tool_list = always_fails
+    constructed = []
+    agent.mcp_client_factory = lambda: constructed.append(FakeMCPClient()) or constructed[-1]
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await agent.fetch_tools()
+    assert excinfo.value is boom
+    assert constructed == []
+
+
+async def test_five_concurrent_stale_fetches_reconnect_exactly_once(agent):
+    stale = FakeMCPClient()
+    agent.mcp_server = stale
+    real_get_tool_list = agent.get_tool_list
+    created = []
+
+    def factory():
+        client = FakeMCPClient()
+        created.append(client)
+        return client
+
+    agent.mcp_client_factory = factory
+
+    async def flaky():
+        if agent.mcp_server is stale:
+            raise RuntimeError("dead session")
+        return await real_get_tool_list()
+
+    agent.get_tool_list = flaky
+    results = await asyncio.gather(*(agent.fetch_tools() for _ in range(5)))
+    assert len(created) == 1
+    assert all(r for r in results)
+    assert agent.mcp_server is created[0]
+
+
+async def test_cancellation_mid_connect_retires_the_uninstalled_owner(agent):
+    stale = FakeMCPClient()
+    agent.mcp_server = stale
+    slow = FakeMCPClient(delay=RECONNECT_TIMEOUT)  # far slower than the outer timeout below
+
+    async def dead():
+        raise RuntimeError("dead session")
+
+    agent.get_tool_list = dead
+    agent.mcp_client_factory = lambda: slow
+
+    with pytest.raises(TimeoutError):
+        async with asyncio.timeout(0.01):
+            await agent.fetch_tools()
+
+    # The stale client stays installed -- the reconnect never got that far -- and the fake
+    # being opened had cleanup() run with no owner task left pending, checked via the agent's
+    # own bookkeeping rather than inferred from the client's state.
+    assert agent.mcp_server is stale
+    assert slow.closed is True
+    assert agent._mcp_owner_tasks == set()
+
+
+async def test_cancellation_after_readiness_but_before_installation_never_loses_the_owner(agent):
+    # ac16(ii): a completed readiness future does not mean the waiting turn assigned
+    # self.mcp_server -- cancel the waiting turn in the same loop tick the fake connect
+    # completes, which `FakeMCPClient`'s no-await connect makes deterministic.
+    stale = FakeMCPClient()
+    agent.mcp_server = stale
+    fresh = FakeMCPClient()
+    agent.mcp_client_factory = lambda: fresh
+
+    async def dead():
+        raise RuntimeError("dead session")
+
+    agent.get_tool_list = dead
+
+    task = asyncio.create_task(agent.fetch_tools())
+    await asyncio.sleep(0)  # fetch_tools starts, fails, acquires mcp_lock, spawns the owner
+    await asyncio.sleep(0)  # the owner runs its whole (no-await) connect and installs `fresh`
+    task.cancel()  # lands in the same tick `ready` resolved, before this task resumes
+
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    # Post-condition, either acceptable outcome -- and here it must be "installed, owner
+    # alive", because the connect already succeeded before the cancellation landed:
+    assert agent.mcp_server is fresh
+    assert fresh.connected is True
+    assert fresh.closed is False
+    assert len(agent._mcp_owner_tasks) == 1
