@@ -16,3 +16,6 @@ deploy/eks/tofu/*.tfstate
 deploy/eks/tofu/*.tfstate.*
 deploy/eks/tofu/terraform.tfvars
 .DS_Store
+
+# Harness plan state: intermediate design/implementation notes, not meant for public sharing.
+.claude/plans/
