@@ -16,7 +16,7 @@ from .. import core
 # The demo chart and its repository. The chart version is pinned: its collector processor names
 # are what the generated values and `eks check` assert against, and a bump can also move the
 # frontend image the replay patch expects.
-CHART_VERSION = "0.41.0"
+CHART_VERSION = "0.41.2"
 HELM_REPO_NAME = "open-telemetry"
 HELM_REPO_URL = "https://open-telemetry.github.io/opentelemetry-helm-charts"
 RELEASE = "otel-demo"

@@ -1,4 +1,4 @@
-# Recorded `helm template` output for the EKS release: chart 0.41.0 rendered from
+# Recorded `helm template` output for the EKS release: chart 0.41.2 rendered from
 # deploy/eks/k8s/demo-values.yaml and the generated values, with Langfuse configured.
 #
 # tests/test_eks_check.py asserts launcher.eks.check against this, so its checks run offline;
@@ -446,7 +446,7 @@ kind: Deployment
 metadata:
   name: agent
   labels:
-    helm.sh/chart: opentelemetry-demo-0.41.0
+    helm.sh/chart: opentelemetry-demo-0.41.2
     
     opentelemetry.io/name: agent
     
@@ -499,6 +499,10 @@ spec:
               value: agent
             - name: GRAPH_RECURSION_LIMIT
               value: "25"
+            - name: FLAGD_HOST
+              value: flagd
+            - name: FLAGD_PORT
+              value: "8013"
             - name: MCP_ENDPOINT
               value: mcp
             - name: MCP_PORT
@@ -580,7 +584,7 @@ kind: Deployment
 metadata:
   name: frontend
   labels:
-    helm.sh/chart: opentelemetry-demo-0.41.0
+    helm.sh/chart: opentelemetry-demo-0.41.2
     
     opentelemetry.io/name: frontend
     
@@ -687,7 +691,7 @@ kind: Deployment
 metadata:
   name: frontend-proxy
   labels:
-    helm.sh/chart: opentelemetry-demo-0.41.0
+    helm.sh/chart: opentelemetry-demo-0.41.2
     
     opentelemetry.io/name: frontend-proxy
     
@@ -809,7 +813,7 @@ kind: Deployment
 metadata:
   name: mcp
   labels:
-    helm.sh/chart: opentelemetry-demo-0.41.0
+    helm.sh/chart: opentelemetry-demo-0.41.2
     
     opentelemetry.io/name: mcp
     

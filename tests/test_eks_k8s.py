@@ -217,7 +217,7 @@ def test_helm_upgrade_args_is_the_exact_argv_the_deploy_mapping_records():
         "otel-demo",
         "open-telemetry/opentelemetry-demo",
         "--version",
-        "0.41.0",
+        "0.41.2",
         "-n",
         "otel-demo",
         "-f",

@@ -22,6 +22,7 @@ def test_context_crosses_wire_and_only_allowed_baggage_becomes_attributes(spans)
     assert attrs["session.id"] == "anonymous-session"
     assert attrs["gen_ai.conversation.id"] == "anonymous-session"
     assert attrs["langfuse.trace.metadata.scenario"] == "shopping"
+    assert attrs["langfuse.trace.tags"] == ("astronomy-concierge",)
     assert "secret" not in attrs
     assert "user.id" not in attrs
 

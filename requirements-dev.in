@@ -1,0 +1,29 @@
+# The committed source of requirements-dev.lock. Compile it with:
+#
+#     .venv/bin/python scripts/relock-dev.py
+#
+# which constrains every resolution to the versions the released images actually ship (agent >
+# mcp > chatbot) instead of to whatever PyPI published most recently. Never run `uv pip compile`
+# on this file directly: unconstrained, it is exactly what let the test environment drift two
+# langchain-core minors ahead of the container the code runs in.
+#
+# The agent's and mcp's own direct pins, read from the pinned upstream checkout rather than
+# copied, so a `COMMIT` bump in launcher/core.py moves them and a stale copy cannot linger.
+# `demo.py bootstrap` creates that checkout.
+-r .upstream/opentelemetry-demo/src/agent/requirements.in
+-r .upstream/opentelemetry-demo/src/mcp/requirements.in
+
+# Gradio, for the `up --debug-chatbot` client in concierge/chatbot.py. Pinned to the version the
+# released chatbot image ships, for the same reason as everything above; its own transitives
+# come from that image through the constraint layering. It is not in the agent or mcp images, so
+# this line is what puts it in the lock at all.
+#
+# Not `-r` of the chatbot image's requirements.in: that file pins OpenTelemetry 1.44.0/0.65b0
+# against the agent's 1.43.0/0.64b0, and no single virtualenv can hold both.
+gradio==6.20.0
+
+# Test-only tooling, in no image and therefore deliberately unpinned: these should track current
+# releases, and nothing about the demo's behaviour depends on their versions.
+pytest
+pytest-asyncio
+ruff

@@ -120,13 +120,7 @@ class ConciergeAgent(Agent):
         self.app.post("/assistant/message")(self.assistant_message)
         self.app.post("/assistant/actions/add-to-cart")(self.assistant_add_to_cart)
         self.app.get("/assistant/conversations/{conversation_id}")(self.assistant_conversation)
-        # Constructed outside a running loop, which is valid on 3.14 (the loop parameter and
-        # get_event_loop() call were removed in 3.10; binding is lazy via _LoopBoundMixin's
-        # _get_loop, on acquire's slow path). That laziness is also why this must stay a
-        # per-instance lock rather than a module-level or session-scoped shared agent: the
-        # latter would bind it to whichever loop acquired it first and break the ac12(c)
-        # concurrency test, since run_agent.py builds the agent at module scope for one
-        # long-lived uvicorn loop while the test fixture rebuilds it, function-scoped, per test.
+
         self.mcp_lock = asyncio.Lock()
         # A dedicated task per MCP connection (see _mcp_owner) opens, publishes, and later
         # closes it; these strong references keep such a task alive even if nothing else awaits
@@ -148,8 +142,7 @@ class ConciergeAgent(Agent):
             # in Agent.lifespan) must close the connection THIS task opened, not whatever
             # generation a reconnect has since installed -- so capture it now and restore it
             # right before that teardown runs, no matter how many reconnects happened in
-            # between. Every replacement connection is retired through its own owner task
-            # instead (ac8).
+            # between.
             startup_client = self.mcp_server
             yield
             self.mcp_server = startup_client

@@ -13,7 +13,7 @@
 # connection, which is the whole effect -- and the only one, since nothing in
 # the chart probes the agent (no liveness or readiness probe is rendered).
 #
-# The two selectors are the labels the pinned chart (0.41.0) puts on the pods,
+# The two selectors are the labels the pinned chart (0.41.2) puts on the pods,
 # not the ones it puts on the Deployments: `opentelemetry.io/name` is also what
 # the chart's own Deployment selectors match on. tests/test_eks_check.py asserts
 # both against the recorded render, so a chart bump that renames the label

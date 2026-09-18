@@ -32,7 +32,7 @@ scripts/demo.py eks --help
  │  EKS control plane "otel-demo-eks" (Kubernetes 1.36, always on)
  │  managed node group "demo": 0 nodes idle, 2 × m7g.xlarge (Graviton) when up
  │
- │   ns otel-demo      opentelemetry-demo Helm chart 0.41.0 (~30 pods)
+ │   ns otel-demo      opentelemetry-demo Helm chart 0.41.2 (~30 pods)
  │                       frontend, frontend-proxy, agent, mcp  <- our four images
  │                       from ECR (ch-opentelemetry-demo/<service>)
  │                       gateway collector (DaemonSet)
@@ -83,7 +83,7 @@ model endpoint, the MCP server and the collector.
 
 | Component | Version | Where |
 | --- | --- | --- |
-| Demo Helm chart `open-telemetry/opentelemetry-demo` | 0.41.0 | `CHART_VERSION` in `launcher/eks/config.py` |
+| Demo Helm chart `open-telemetry/opentelemetry-demo` | 0.41.2 | `CHART_VERSION` in `launcher/eks/config.py` |
 | Demo source (the four custom images) | 3.0.0 (`1755859a`) | `TAG` / `COMMIT` in `launcher/core.py`, shared with the laptop target |
 | EKS Kubernetes | 1.36 | `kubernetes_version` in `tofu/variables.tf` |
 | ClickStack collector `clickhouse/clickstack-otel-collector` | 2.38.0 | `k8s/clickstack-collector.yaml` |

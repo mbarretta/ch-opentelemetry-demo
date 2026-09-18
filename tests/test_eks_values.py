@@ -57,7 +57,7 @@ SECRET_VALUES = (
     LANGFUSE["LANGFUSE_AUTH_HEADER"].split(" ", 1)[1],
 )
 
-# Collector components the chart's own configuration defines (chart 0.41.0, the version
+# Collector components the chart's own configuration defines (chart 0.41.2, the version
 # config.CHART_VERSION pins), so a pipeline may reference them without the generated values
 # defining them. `demo.py eks check` re-checks this against a real `helm template`; here it
 # keeps the unit test honest about what "a valid pipeline" means.

@@ -21,6 +21,7 @@ BAGGAGE_KEYS = {
     "gen_ai.conversation.id",
     "langfuse.session.id",
     "langfuse.trace.name",
+    "langfuse.trace.tags",
     "langfuse.trace.metadata.scenario",
     "langfuse.trace.metadata.mode",
 }
@@ -30,15 +31,23 @@ def encoded(value):
     return json.dumps(value, default=str, ensure_ascii=False)
 
 
+def _as_span_value(key, value):
+    # Baggage only carries strings (it crosses the wire as a W3C header), but Langfuse
+    # expects langfuse.trace.tags as an actual OTel string array attribute.
+    if key == "langfuse.trace.tags" and isinstance(value, str):
+        return [value]
+    return value
+
+
 class ConversationProcessor(SpanProcessor):
     def on_start(self, span, parent_context=None):
         # Only copy our anonymous demo context, never arbitrary incoming baggage.
         for key in BAGGAGE_KEYS:
             value = baggage.get_baggage(key, context=parent_context)
             if isinstance(value, str) and len(value) <= 128:
-                span.set_attribute(key, value)
+                span.set_attribute(key, _as_span_value(key, value))
         for key, value in attributes.get().items():
-            span.set_attribute(key, value)
+            span.set_attribute(key, _as_span_value(key, value))
 
 
 class JsonExporter(SpanExporter):
@@ -96,6 +105,7 @@ def conversation(session_id, scenario, mode, shop_session_id=None):
             "gen_ai.conversation.id": session_id,
             "langfuse.session.id": session_id,
             "langfuse.trace.name": "astronomy-concierge",
+            "langfuse.trace.tags": "astronomy-concierge",
             "langfuse.trace.metadata.scenario": scenario,
             "langfuse.trace.metadata.mode": mode,
         }
@@ -104,7 +114,9 @@ def conversation(session_id, scenario, mode, shop_session_id=None):
     for key, value in attributes.get().items():
         ctx = baggage.set_baggage(key, value, context=ctx)
     baggage_token = context.attach(ctx)
-    trace.get_current_span().set_attributes(attributes.get())
+    trace.get_current_span().set_attributes(
+        {key: _as_span_value(key, value) for key, value in attributes.get().items()}
+    )
     try:
         yield
     finally:

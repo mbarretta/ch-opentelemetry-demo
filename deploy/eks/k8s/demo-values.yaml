@@ -1,4 +1,4 @@
-# Static Helm values for open-telemetry/opentelemetry-demo (chart 0.41.0).
+# Static Helm values for open-telemetry/opentelemetry-demo (chart 0.41.2).
 #
 # Committed as-is: nothing in here is account-specific or secret. The half of the
 # configuration that is arrives at deploy time from two other places, so this

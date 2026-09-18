@@ -523,7 +523,7 @@ def entry_value(entry):
 def collector_configs(documents):
     """Every rendered collector configuration, keyed by the ConfigMap that carries it.
 
-    The subchart writes its configuration into one ConfigMap key (`relay` in chart 0.41.0), so
+    The subchart writes its configuration into one ConfigMap key (`relay` in chart 0.41.2), so
     the key is found by shape rather than by name: any value that parses as a mapping with
     `service.pipelines` in it is a collector configuration.
     """
