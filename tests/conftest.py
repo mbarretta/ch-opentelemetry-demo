@@ -293,6 +293,8 @@ REDIRECT_KEYS = (
     "AWS_REGION",
     # The port the tunnel binds and every client of it then reads back.
     "EKS_TUNNEL_PORT",
+    # The cluster name, which names the state key and the `-var` tofu is handed.
+    "EKS_CLUSTER_NAME",
     # The agent's own configuration. AGENT_MODE and MCP_ENABLED are set for the whole suite at
     # the top of this file, before collection, so without them here a redirected test would read
     # this file's values rather than the `.env` it asked for.

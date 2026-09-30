@@ -26,10 +26,21 @@ FULL_LANGFUSE = {
 # These tests write the `.env` they need themselves, so they ask it for no mapping.
 
 
-def test_the_state_location_is_the_one_the_live_cluster_already_uses():
-    """Renaming either of these orphans the state of the running cluster."""
+def test_the_state_bucket_is_the_one_existing_clusters_already_use():
+    """Renaming the prefix orphans the state of every running cluster."""
     assert config.STATE_BUCKET_PREFIX == "otel-demo-eks-tfstate-"
-    assert config.STATE_KEY == "otel-demo-eks/terraform.tfstate"
+
+
+def test_the_cluster_name_defaults_and_is_overridden_from_env():
+    assert config.DEFAULT_CLUSTER_NAME == "barretta-otel-demo-eks"
+    assert config.cluster_name({}) == "barretta-otel-demo-eks"
+    assert config.cluster_name({"EKS_CLUSTER_NAME": "  "}) == "barretta-otel-demo-eks"
+    assert config.cluster_name({"EKS_CLUSTER_NAME": " my-demo "}) == "my-demo"
+
+
+def test_each_cluster_name_has_its_own_state_key():
+    assert config.state_key("barretta-otel-demo-eks") == "barretta-otel-demo-eks/terraform.tfstate"
+    assert config.state_key("otel-demo-eks") == "otel-demo-eks/terraform.tfstate"
 
 
 def test_paths_are_resolved_at_call_time(redirected):
@@ -118,6 +129,7 @@ def test_env_example_documents_every_eks_key_with_a_comment():
         "AWS_PROFILE",
         "AWS_REGION",
         "EKS_TUNNEL_PORT",
+        "EKS_CLUSTER_NAME",
         *config.CLICKSTACK_KEYS,
     )
     for key in expected:
@@ -129,5 +141,6 @@ def test_env_example_documents_every_eks_key_with_a_comment():
     assert values["CLICKHOUSE_USER"] == "clickstack"
     assert values["HYPERDX_OTEL_EXPORTER_CLICKHOUSE_DATABASE"] == "otel"
     assert values["EKS_TUNNEL_PORT"] == config.DEFAULT_TUNNEL_PORT
+    assert values["EKS_CLUSTER_NAME"] == config.DEFAULT_CLUSTER_NAME
     for key in ("CLICKHOUSE_ENDPOINT", "CLICKHOUSE_PASSWORD", "OTLP_AUTH_TOKEN", "AWS_PROFILE"):
         assert values[key] == "", f"{key} is a secret or account-specific: it ships blank"

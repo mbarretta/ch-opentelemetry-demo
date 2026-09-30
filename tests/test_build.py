@@ -287,6 +287,7 @@ def test_environment_drops_the_eks_only_keys(inputs, monkeypatch):
         "AWS_PROFILE=demo\n"
         "AWS_REGION=us-east-1\n"
         "EKS_TUNNEL_PORT=8080\n"
+        "EKS_CLUSTER_NAME=barretta-otel-demo-eks\n"
     )
     monkeypatch.setenv("AWS_SESSION_TOKEN", "secret-session")
 
@@ -301,6 +302,7 @@ def test_environment_drops_the_eks_only_keys(inputs, monkeypatch):
         "AWS_REGION",
         "AWS_SESSION_TOKEN",
         "EKS_TUNNEL_PORT",
+        "EKS_CLUSTER_NAME",
     ):
         assert key not in env, key
     dumped = json.dumps(env)

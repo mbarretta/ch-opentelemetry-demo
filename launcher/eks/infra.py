@@ -102,12 +102,16 @@ def init():
 
     # backend.tf declares `backend "s3"` with no bucket, key or region, so the account-specific
     # values never land in the repository; they are supplied here, from config, unchanged.
-    core.log(f"tofu init (backend s3://{bucket}/{config.STATE_KEY})")
+    # -reconfigure because the key follows the cluster name: a changed EKS_CLUSTER_NAME is a
+    # different state file, not a state to migrate, and plain init refuses the changed backend.
+    key = config.state_key(config.cluster_name(env))
+    core.log(f"tofu init (backend s3://{bucket}/{key})")
     tofu(
         "init",
         "-input=false",
+        "-reconfigure",
         f"-backend-config=bucket={bucket}",
-        f"-backend-config=key={config.STATE_KEY}",
+        f"-backend-config=key={key}",
         f"-backend-config=region={bucket_region}",
     )
 
@@ -221,6 +225,17 @@ def tofu(*args, **kwargs):
     return core.run("tofu", f"-chdir={config.tofu_dir()}", *args, **kwargs)
 
 
+def name_var():
+    """`-var name=<cluster>` from `.env`, which outranks `terraform.tfvars` in tofu's precedence.
+
+    Passed on the command line rather than as `TF_VAR_name` because the environment ranks below
+    a tfvars file: a `name` left in `terraform.tfvars` would win, and the cluster would be built
+    under a name that does not match the state key `init` derived from `.env`. Only the commands
+    that take variables (apply, destroy) get it; `init` and `output` reject `-var`.
+    """
+    return f"-var=name={config.cluster_name()}"
+
+
 def initialised():
     """Whether `tofu init` has configured the S3 backend in this checkout.
 
@@ -289,7 +304,7 @@ def apply(yes=False):
         aws.ng_scale(node_count)
 
     core.log("tofu apply")
-    tofu("apply", *(["-auto-approve"] if yes else []))
+    tofu("apply", name_var(), *(["-auto-approve"] if yes else []))
 
     core.log("kubeconfig")
     k8s.kubeconfig()
@@ -360,7 +375,7 @@ def destroy(purge_state=False):
         core.log("no reachable cluster in state; skipping down")
 
     core.log("tofu destroy")
-    tofu("destroy")
+    tofu("destroy", name_var())
 
     if purge_state:
         purge_state_bucket()

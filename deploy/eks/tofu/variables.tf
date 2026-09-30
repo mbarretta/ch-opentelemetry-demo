@@ -5,9 +5,9 @@ variable "region" {
 }
 
 variable "name" {
-  description = "Name of the EKS cluster; also prefixes the VPC, IAM role and schedule."
+  description = "Name of the EKS cluster; also prefixes the VPC, IAM role and schedule, and is the Project tag. `demo.py eks apply` and `destroy` pass it from EKS_CLUSTER_NAME in .env with -var, which overrides terraform.tfvars."
   type        = string
-  default     = "otel-demo-eks"
+  default     = "barretta-otel-demo-eks"
 }
 
 variable "kubernetes_version" {

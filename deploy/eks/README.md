@@ -29,7 +29,7 @@ scripts/demo.py eks --help
  AWS us-east-1  ── default VPC 172.31.0.0/16, two default PUBLIC subnets, no NAT gateway
  │                (dedicated 10.20.0.0/16 VPC optional: use_default_vpc = false)
  │
- │  EKS control plane "otel-demo-eks" (Kubernetes 1.36, always on)
+ │  EKS control plane "barretta-otel-demo-eks" (Kubernetes 1.36, always on)
  │  managed node group "demo": 0 nodes idle, 2 × m7g.xlarge (Graviton) when up
  │
  │   ns otel-demo      opentelemetry-demo Helm chart 0.41.2 (~30 pods)
@@ -43,7 +43,7 @@ scripts/demo.py eks --help
                                └──> Langfuse Cloud (assistant traces only,
                                     via the collector's Langfuse pipeline)
 
- EventBridge Scheduler "otel-demo-eks-nightly-scale-down"
+ EventBridge Scheduler "barretta-otel-demo-eks-nightly-scale-down"
    every night at scale_down_hour: eks:UpdateNodegroupConfig desiredSize=0
 ```
 
@@ -200,7 +200,7 @@ it.
 Low-level, if you are in a hurry:
 
 ```sh
-aws eks wait nodegroup-active --cluster-name otel-demo-eks --nodegroup-name demo
+aws eks wait nodegroup-active --cluster-name barretta-otel-demo-eks --nodegroup-name demo
 ```
 
 ### The state file is lost or corrupted
@@ -213,7 +213,7 @@ do anything.**
 ```sh
 export AWS_PROFILE=<your-profile> AWS_REGION=us-east-1
 BUCKET=otel-demo-eks-tfstate-$(aws sts get-caller-identity --query Account --output text)
-KEY=otel-demo-eks/terraform.tfstate
+KEY=barretta-otel-demo-eks/terraform.tfstate
 
 aws s3api list-object-versions --bucket "$BUCKET" --prefix "$KEY" \
   --query 'Versions[].{VersionId:VersionId,LastModified:LastModified,Size:Size,IsLatest:IsLatest}' --output table
@@ -224,15 +224,18 @@ tofu -chdir=deploy/eks/tofu plan      # should show no (or only expected) change
 ```
 
 The bucket and key are not guesses: `demo.py eks init` derives exactly those two
-names, and OpenTofu's state for this cluster has never lived anywhere else.
+names. The commands in this file use the default cluster name,
+`barretta-otel-demo-eks`; if you set `EKS_CLUSTER_NAME` in `.env`, substitute it
+for the name here and in `KEY`. A cluster created before that setting existed is
+called `otel-demo-eks` and keeps its state under that key.
 
 If the bucket itself is gone, or no version is usable, the resources are
 orphaned and have to be removed by hand before `demo.py eks init &&
 demo.py eks apply` can start over. Every resource has a deterministic name and
-carries the tag `Project=otel-demo-eks`, so an inventory is one call:
+carries the tag `Project=barretta-otel-demo-eks`, so an inventory is one call:
 
 ```sh
-aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=otel-demo-eks \
+aws resourcegroupstaggingapi get-resources --tag-filters Key=Project,Values=barretta-otel-demo-eks \
   --query 'ResourceTagMappingList[].ResourceARN' --output text
 ```
 
@@ -241,12 +244,12 @@ The block is bash: run `bash` first if your shell is zsh, which does not split
 `$SGS` and `$rules` into words.
 
 ```sh
-CLUSTER=otel-demo-eks
+CLUSTER=barretta-otel-demo-eks
 
 # 1. The nightly schedule and its role
-aws scheduler delete-schedule --name otel-demo-eks-nightly-scale-down
-aws iam delete-role-policy --role-name otel-demo-eks-scheduler --policy-name scale-demo-nodegroup
-aws iam delete-role --role-name otel-demo-eks-scheduler
+aws scheduler delete-schedule --name barretta-otel-demo-eks-nightly-scale-down
+aws iam delete-role-policy --role-name barretta-otel-demo-eks-scheduler --policy-name scale-demo-nodegroup
+aws iam delete-role --role-name barretta-otel-demo-eks-scheduler
 
 # 2. Node group, then the cluster (add-ons and access entries go with it)
 aws eks delete-nodegroup --cluster-name "$CLUSTER" --nodegroup-name demo
@@ -259,10 +262,10 @@ for svc in frontend frontend-proxy agent mcp; do
   aws ecr delete-repository --force --repository-name "ch-opentelemetry-demo/$svc"
 done
 
-# 4. The IAM roles the EKS module created (name prefixes otel-demo-eks-cluster-
+# 4. The IAM roles the EKS module created (name prefixes barretta-otel-demo-eks-cluster-
 #    and demo-eks-node-group-; check with `aws iam list-role-tags` if in doubt)
 for r in $(aws iam list-roles \
-    --query "Roles[?starts_with(RoleName,'otel-demo-eks-cluster-') || starts_with(RoleName,'demo-eks-node-group-')].RoleName" \
+    --query "Roles[?starts_with(RoleName,'barretta-otel-demo-eks-cluster-') || starts_with(RoleName,'demo-eks-node-group-')].RoleName" \
     --output text); do
   for p in $(aws iam list-attached-role-policies --role-name "$r" --query 'AttachedPolicies[].PolicyArn' --output text); do
     aws iam detach-role-policy --role-name "$r" --policy-arn "$p"
@@ -271,14 +274,14 @@ for r in $(aws iam list-roles \
 done
 
 # 5. The node group's launch template (name prefix demo-)
-for lt in $(aws ec2 describe-launch-templates --filters Name=tag:Project,Values=otel-demo-eks \
+for lt in $(aws ec2 describe-launch-templates --filters Name=tag:Project,Values=barretta-otel-demo-eks \
     --query 'LaunchTemplates[].LaunchTemplateId' --output text); do
   aws ec2 delete-launch-template --launch-template-id "$lt"
 done
 
 # 6. The security groups the EKS module created: the additional cluster SG and
-#    the node SG (named otel-demo-eks-*) and the EKS-owned cluster SG (tagged
-#    kubernetes.io/cluster/otel-demo-eks). They reference each other, so revoke
+#    the node SG (named barretta-otel-demo-eks-*) and the EKS-owned cluster SG (tagged
+#    kubernetes.io/cluster/barretta-otel-demo-eks). They reference each other, so revoke
 #    ingress rules first. With use_default_vpc = true (the default) this is ALL
 #    the network cleanup: the demo ran in the account default VPC, which
 #    OpenTofu never created. NEVER delete the default VPC, its subnets, its
@@ -298,11 +301,11 @@ done
 for sg in $SGS; do aws ec2 delete-security-group --group-id "$sg"; done
 
 # 7. ONLY if the cluster was applied with use_default_vpc = false: the dedicated
-#    VPC (tag Name=otel-demo-eks, never the default one) and what the vpc module
+#    VPC (tag Name=barretta-otel-demo-eks, never the default one) and what the vpc module
 #    put in it. The lookup excludes the default VPC explicitly and the `if`
 #    stops when nothing matches, so this block cannot fall through to deleting
 #    the account default VPC.
-VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=otel-demo-eks Name=is-default,Values=false \
+VPC_ID=$(aws ec2 describe-vpcs --filters Name=tag:Name,Values=barretta-otel-demo-eks Name=is-default,Values=false \
   --query 'Vpcs[0].VpcId' --output text)
 if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
   for s in $(aws ec2 describe-subnets --filters Name=vpc-id,Values="$VPC_ID" --query 'Subnets[].SubnetId' --output text); do
@@ -318,7 +321,7 @@ if [ -n "$VPC_ID" ] && [ "$VPC_ID" != "None" ]; then
   done
   aws ec2 delete-vpc --vpc-id "$VPC_ID"
 else
-  echo "no dedicated VPC tagged Name=otel-demo-eks; nothing more to delete (default VPC left alone)"
+  echo "no dedicated VPC tagged Name=barretta-otel-demo-eks; nothing more to delete (default VPC left alone)"
 fi
 ```
 

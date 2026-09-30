@@ -215,8 +215,8 @@ def chdir():
     return (f"-chdir={config.tofu_dir()}",)
 
 
-def test_init_supplies_the_backend_the_live_cluster_already_uses(fake_sh, stubbed, redirected):
-    """Constraint 3: move the bucket or the key and the state of the running cluster is orphaned."""
+def test_init_supplies_the_backend_for_the_named_cluster(fake_sh, stubbed, redirected):
+    """The bucket is the account's; the key follows the cluster name, so names never share state."""
     infra.init()
 
     init = one(fake_sh, "tofu", *chdir(), "init")
@@ -225,14 +225,37 @@ def test_init_supplies_the_backend_the_live_cluster_already_uses(fake_sh, stubbe
         f"-chdir={config.tofu_dir()}",
         "init",
         "-input=false",
+        "-reconfigure",
         f"-backend-config=bucket={BUCKET}",
-        "-backend-config=key=otel-demo-eks/terraform.tfstate",
+        "-backend-config=key=barretta-otel-demo-eks/terraform.tfstate",
         "-backend-config=region=us-east-1",
     ]
     # The names come from config and the discovered account, not from anything spelled here.
     assert f"-backend-config=bucket={config.STATE_BUCKET_PREFIX}{ACCOUNT}" in init.argv
-    assert f"-backend-config=key={config.STATE_KEY}" in init.argv
+    assert f"-backend-config=key={config.state_key(config.DEFAULT_CLUSTER_NAME)}" in init.argv
     assert stubbed.called("state_bucket")
+
+
+def test_apply_and_destroy_pass_the_env_name_as_a_var_that_outranks_tfvars(
+    fake_sh, stubbed, redirected
+):
+    """A `name` in terraform.tfvars must not beat `.env`: only -var does, TF_VAR_ does not."""
+    (redirected / ".env").write_text("AWS_PROFILE=demo\nEKS_CLUSTER_NAME=other-eks\n")
+
+    initialised(redirected)
+
+    infra.apply(yes=True)
+
+    assert "-var=name=other-eks" in one(fake_sh, "tofu", *chdir(), "apply").argv
+
+
+def test_init_uses_the_cluster_name_from_env_for_the_state_key(fake_sh, stubbed, redirected):
+    (redirected / ".env").write_text("AWS_PROFILE=demo\nEKS_CLUSTER_NAME=other-eks\n")
+
+    infra.init()
+
+    init = one(fake_sh, "tofu", *chdir(), "init")
+    assert "-backend-config=key=other-eks/terraform.tfstate" in init.argv
 
 
 def test_init_registers_the_chart_repository_and_reports_the_next_command(
@@ -291,7 +314,12 @@ def test_apply_runs_tofu_apply_interactively_and_reports_the_next_steps(
     infra.apply()
 
     apply = one(fake_sh, "tofu", *chdir(), "apply")
-    assert apply.argv == ["tofu", f"-chdir={config.tofu_dir()}", "apply"]
+    assert apply.argv == [
+        "tofu",
+        f"-chdir={config.tofu_dir()}",
+        "apply",
+        "-var=name=barretta-otel-demo-eks",
+    ]
     assert apply.kwargs == {}, "stdin, stdout and stderr all stay inherited"
     assert "-input=false" not in apply.argv and "-auto-approve" not in apply.argv
 
@@ -392,7 +420,12 @@ def test_destroy_closes_the_tunnel_and_takes_the_workloads_down_first(
     order = stubbed.names()
     assert order.index("stop") < order.index("down"), "the port-forward goes first"
     destroy = one(fake_sh, "tofu", *chdir(), "destroy")
-    assert destroy.argv == ["tofu", f"-chdir={config.tofu_dir()}", "destroy"]
+    assert destroy.argv == [
+        "tofu",
+        f"-chdir={config.tofu_dir()}",
+        "destroy",
+        "-var=name=barretta-otel-demo-eks",
+    ]
     assert destroy.kwargs == {}, "tofu asks for confirmation on the inherited stdin"
     assert "destroy complete" in capsys.readouterr().out
 

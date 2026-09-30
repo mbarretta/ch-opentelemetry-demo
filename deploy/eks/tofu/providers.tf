@@ -6,7 +6,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project   = "otel-demo-eks"
+      Project   = var.name
       ManagedBy = "opentofu"
     }
   }

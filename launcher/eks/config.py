@@ -24,11 +24,16 @@ RELEASE = "otel-demo"
 NS_DEMO = "otel-demo"
 NS_CS = "clickstack"
 
+# The EKS cluster's name, which also prefixes the VPC, the IAM roles, the schedule and the state
+# key. `EKS_CLUSTER_NAME` in `.env` overrides it; the OpenTofu variable `name` receives it.
+DEFAULT_CLUSTER_NAME = "barretta-otel-demo-eks"
+
 # OpenTofu state. One bucket per AWS account, deterministic so `eks destroy --purge-state` and a
-# second laptop can find it with no local state. Renaming either the bucket prefix or the key
-# orphans the state of the live cluster, so both stay exactly as the bash `init.sh` wrote them.
+# second laptop can find it with no local state. Renaming the bucket prefix orphans the state of
+# every live cluster, so it stays exactly as the bash `init.sh` wrote it. The key is per cluster
+# name (`state_key`): two names in one account never share a state file, and a cluster created
+# under another name stays reachable by setting `EKS_CLUSTER_NAME` back to it.
 STATE_BUCKET_PREFIX = "otel-demo-eks-tfstate-"
-STATE_KEY = "otel-demo-eks/terraform.tfstate"
 DEFAULT_REGION = "us-east-1"
 
 # The storefront is private: access is a local port-forward, not an ingress.
@@ -118,6 +123,17 @@ def load_env():
     """
     values = {**core.dotenv(core.ROOT / ".env"), **os.environ}
     return {key: str(value) for key, value in values.items() if value is not None}
+
+
+def cluster_name(env=None):
+    """The EKS cluster's name: `EKS_CLUSTER_NAME` from `.env`, else `DEFAULT_CLUSTER_NAME`."""
+    values = load_env() if env is None else env
+    return values.get("EKS_CLUSTER_NAME", "").strip() or DEFAULT_CLUSTER_NAME
+
+
+def state_key(name):
+    """The OpenTofu state object for the cluster called `name`."""
+    return f"{name}/terraform.tfstate"
 
 
 def load_clickstack_env(env=None):
