@@ -97,3 +97,57 @@ async def test_project_id_without_a_name_or_disabled_client_skips_the_call():
     api = LangfuseAPI()
     assert (await api.project_id("")) is None
     assert (await api.project_id("otel-demo")) is None
+
+
+async def test_score_without_observation_id_keeps_the_trace_level_body(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://langfuse.test")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    api = LangfuseAPI()
+    calls = []
+
+    async def request(method, path, **kwargs):
+        calls.append((method, path, kwargs["json"]))
+
+    api.request = request
+    assert await api.score("trace1", "user_helpfulness", True, "thumbs up")
+    assert calls == [
+        (
+            "POST",
+            "/api/public/scores",
+            {
+                "id": "trace1-user_helpfulness",
+                "traceId": "trace1",
+                "name": "user_helpfulness",
+                "value": True,
+                "dataType": "BOOLEAN",
+                "comment": "thumbs up",
+            },
+        )
+    ]
+    assert "observationId" not in calls[0][2]
+
+
+async def test_score_with_observation_id_attaches_it_to_the_observation(monkeypatch):
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://langfuse.test")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+    api = LangfuseAPI()
+    calls = []
+
+    async def request(method, path, **kwargs):
+        calls.append(kwargs["json"])
+
+    api.request = request
+    assert await api.score("trace1", "budget_adherence", False, "over", observation_id="span1")
+    assert calls == [
+        {
+            "id": "trace1-budget_adherence",
+            "traceId": "trace1",
+            "name": "budget_adherence",
+            "value": False,
+            "dataType": "BOOLEAN",
+            "comment": "over",
+            "observationId": "span1",
+        }
+    ]
