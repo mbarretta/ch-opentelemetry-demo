@@ -19,3 +19,7 @@ deploy/eks/tofu/terraform.tfvars
 
 # Harness plan state: intermediate design/implementation notes, not meant for public sharing.
 .claude/plans/
+# Per-machine Claude Code state.
+.claude/lessons.md
+.claude/settings.local.json
+.claude/worktrees/
