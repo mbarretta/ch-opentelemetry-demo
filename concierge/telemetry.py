@@ -126,3 +126,65 @@ def conversation(session_id, scenario, mode, shop_session_id=None):
 
 def trace_id():
     return format(trace.get_current_span().get_span_context().trace_id, "032x")
+
+
+class Steps:
+    """Numbered ``agent.step`` spans that group one model decision with the tools it triggered.
+
+    A step starts when the model is called and stays open until the next model call (or the end of
+    the turn), because the tool node runs *after* the model hook returns. That lifetime cannot be
+    a ``with`` block, so this helper owns it. Every parent is passed explicitly: the turn context
+    is captured at construction, and ``ctx`` is the open step's context for whoever starts a child
+    span, so nothing depends on contextvar inheritance across the graph's task boundaries.
+    """
+
+    NAME = "agent.step"
+
+    def __init__(self):
+        self.turn = context.get_current()
+        self.ctx = self.turn
+        self.number = 0
+        self.span = None
+
+    def begin(self):
+        """End the previous step, start the next one under the turn, and return its context."""
+        self.end()
+        self.number += 1
+        self.span = tracer.start_span(
+            self.NAME,
+            context=self.turn,
+            attributes={
+                "langfuse.observation.type": "chain",
+                "langfuse.observation.metadata.step": self.number,
+            },
+        )
+        self.ctx = trace.set_span_in_context(self.span, self.turn)
+        return self.ctx
+
+    def record(self, finish_reason, tool_names):
+        """Note what the model decided at this step: why it stopped and which tools it asked for."""
+        if self.span is None:
+            return
+        final = not tool_names
+        self.span.set_attributes(
+            {
+                "langfuse.observation.metadata.finish_reason": finish_reason,
+                "langfuse.observation.metadata.tools_requested": list(tool_names),
+                "langfuse.observation.metadata.final": final,
+                "langfuse.observation.output": encoded(
+                    {
+                        "step": self.number,
+                        "finish_reason": finish_reason,
+                        "tools_requested": list(tool_names),
+                        "final": final,
+                    }
+                ),
+            }
+        )
+
+    def end(self):
+        """Close the open step, if any; safe to call again."""
+        span, self.span = self.span, None
+        self.ctx = self.turn
+        if span is not None:
+            span.end()
