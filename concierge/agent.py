@@ -40,7 +40,7 @@ from concierge.contract import (
 )
 from concierge.langfuse_api import PROMPT_NAME, LangfuseAPI
 from concierge.scripted_model import ScriptedModel, price, tool_data
-from concierge.telemetry import conversation, encoded, trace_id, tracer
+from concierge.telemetry import Steps, conversation, encoded, trace_id, tracer
 
 logger = logging.getLogger(__name__)
 
@@ -316,17 +316,20 @@ class ConciergeAgent(Agent):
 
     # -- tools -----------------------------------------------------------------------------
 
-    async def scoped_tools(self, user_id, calls, currency_code="USD"):
+    async def scoped_tools(self, user_id, calls, currency_code="USD", steps=None):
         """Model-visible tools.
 
         The cart identity and currency are injected here, never by the model, and the same
-        wrappers front both the HTTP and the MCP tool transports.
+        wrappers front both the HTTP and the MCP tool transports. With ``steps``, each tool span
+        is parented on the open agent.step; without it (the add-to-cart action) it inherits the
+        current span.
         """
         upstream = {t.name: t for t in await self.fetch_tools()}
 
         async def invoke(name, args):
             with tracer.start_as_current_span(
                 name,
+                context=steps.ctx if steps else None,
                 attributes={
                     "langfuse.observation.type": "tool",
                     "langfuse.observation.input": encoded(args),
@@ -619,7 +622,8 @@ class ConciergeAgent(Agent):
     async def run_turn(self, state, message, product_id=None):
         prompt = await self.langfuse.prompt()
         calls = []
-        tools = await self.scoped_tools(state.shop_session_id, calls, state.currency_code)
+        steps = Steps()
+        tools = await self.scoped_tools(state.shop_session_id, calls, state.currency_code, steps)
         if self.mode == "scripted":
             model = ScriptedModel(scenario=state.scenario, product_id=product_id)
         else:
@@ -662,6 +666,7 @@ class ConciergeAgent(Agent):
                 )
             with tracer.start_as_current_span(
                 "model.generate",
+                context=steps.begin(),
                 attributes=span_attrs,
                 kind=SpanKind.CLIENT if self.mode == "live" else SpanKind.INTERNAL,
             ) as span:
@@ -679,6 +684,14 @@ class ConciergeAgent(Agent):
                     span.set_attribute(
                         "gen_ai.response.finish_reasons", [metadata["finish_reason"]]
                     )
+                requested = [call["name"] for call in getattr(message, "tool_calls", None) or []]
+                # The scripted model reports no finish_reason, so the step falls back to the
+                # OpenAI convention it stands in for; model.generate above still records only
+                # what the model actually returned.
+                steps.record(
+                    metadata.get("finish_reason") or ("tool_calls" if requested else "stop"),
+                    requested,
+                )
                 usage = getattr(message, "usage_metadata", None)
                 if usage and self.mode == "live":
                     # Langfuse maps standard usage attributes; missing usage stays unknown.
@@ -709,6 +722,7 @@ class ConciergeAgent(Agent):
                 config={"recursion_limit": self.agentRecursionLimit},
             )
         finally:
+            steps.end()
             if self.mode == "live":
                 await model.http_async_client.aclose()
         state.messages = result["messages"]

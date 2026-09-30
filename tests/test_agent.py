@@ -9,6 +9,7 @@ from langchain.tools import tool
 from src.agents.llm import ChatLLM
 
 from concierge.agent import RECONNECT_TIMEOUT, ChatRequest, ConciergeAgent, FeedbackRequest
+from concierge.contract import AddToCartAction, MessageRequest
 from concierge.scripted_model import EXPENSIVE, EXPLORASCOPE, tool_data
 
 
@@ -271,6 +272,114 @@ async def test_api_root_contains_meaningful_io(agent, spans):
     assert root.attributes["langfuse.observation.input"] == "Find a beginner telescope"
     assert root.attributes["langfuse.observation.output"] == result["reply"]
     assert root.attributes["session.id"] == result["session_id"]
+
+
+def children(recorded, parent):
+    return [s for s in recorded if s.parent and s.parent.span_id == parent.context.span_id]
+
+
+async def test_model_and_tool_spans_hang_off_numbered_agent_steps(agent, spans):
+    session = uuid4()
+    await agent.handle_prompt(ChatRequest(session_id=session, message="Find a beginner telescope"))
+    recorded = spans.get_finished_spans()
+    turn = next(s for s in recorded if s.name == "concierge.turn")
+    steps = sorted(
+        (s for s in recorded if s.name == "agent.step"),
+        key=lambda s: s.attributes["langfuse.observation.metadata.step"],
+    )
+    assert [s.attributes["langfuse.observation.metadata.step"] for s in steps] == [1, 2, 3]
+    assert all(s.parent.span_id == turn.context.span_id for s in steps)
+    step_ids = {s.context.span_id for s in steps}
+    tools = [s for s in recorded if s.name in {"list_products", "get_product"}]
+    generations = [s for s in recorded if s.name == "model.generate"]
+    assert len(tools) == 2 and len(generations) == 3
+    assert all(s.parent.span_id in step_ids for s in [*tools, *generations])
+    by_step = [{c.name for c in children(recorded, step)} for step in steps]
+    assert by_step == [
+        {"model.generate", "list_products"},
+        {"model.generate", "get_product"},
+        {"model.generate"},
+    ]
+    # The budget evaluator is turn-level work, not part of any step.
+    evaluation = next(s for s in recorded if s.name == "evaluate.budget")
+    assert evaluation.parent.span_id == turn.context.span_id
+    assert all(s.attributes["session.id"] == str(session) for s in steps)
+    assert all(s.attributes["langfuse.session.id"] == str(session) for s in steps)
+
+
+async def test_agent_steps_record_what_the_model_decided(agent, spans):
+    await agent.handle_prompt(ChatRequest(session_id=uuid4(), message="Find a beginner telescope"))
+    steps = sorted(
+        (s for s in spans.get_finished_spans() if s.name == "agent.step"),
+        key=lambda s: s.attributes["langfuse.observation.metadata.step"],
+    )
+    assert all(s.attributes["langfuse.observation.type"] == "chain" for s in steps)
+    outputs = [json.loads(s.attributes["langfuse.observation.output"]) for s in steps]
+    assert [o["tools_requested"] for o in outputs] == [["list_products"], ["get_product"], []]
+    assert [o["finish_reason"] for o in outputs] == ["tool_calls", "tool_calls", "stop"]
+    assert [o["final"] for o in outputs] == [False, False, True]
+    assert [s.attributes["langfuse.observation.metadata.final"] for s in steps] == [
+        False,
+        False,
+        True,
+    ]
+    assert steps[0].attributes["langfuse.observation.metadata.tools_requested"] == (
+        "list_products",
+    )
+    assert steps[2].attributes["langfuse.observation.metadata.finish_reason"] == "stop"
+
+
+async def test_open_step_is_exported_when_the_graph_raises(agent, spans, monkeypatch):
+    from langchain_core.messages import ToolMessage
+
+    from concierge.scripted_model import ScriptedModel
+
+    real = ScriptedModel._generate
+
+    def broken(self, messages, *args, **kwargs):
+        if any(isinstance(m, ToolMessage) for m in messages):
+            raise RuntimeError("model went away")
+        return real(self, messages, *args, **kwargs)
+
+    monkeypatch.setattr(ScriptedModel, "_generate", broken)
+    session = uuid4()
+    with pytest.raises(HTTPException) as failed:
+        await agent.handle_prompt(
+            ChatRequest(session_id=session, message="Find a beginner telescope")
+        )
+    assert failed.value.status_code == 502
+    recorded = spans.get_finished_spans()
+    steps = [s for s in recorded if s.name == "agent.step"]
+    assert sorted(s.attributes["langfuse.observation.metadata.step"] for s in steps) == [1, 2]
+    assert all(s.attributes["session.id"] == str(session) for s in steps)
+    assert all(s.attributes["langfuse.session.id"] == str(session) for s in steps)
+    # The step the failed model call opened never got a decision recorded, so it is not "final".
+    failed_step = next(s for s in steps if s.attributes["langfuse.observation.metadata.step"] == 2)
+    assert "langfuse.observation.metadata.final" not in failed_step.attributes
+
+
+async def test_add_to_cart_action_tool_span_stays_under_the_action_span(agent, spans):
+    shop = uuid4()
+    first = await agent.assistant_message(
+        MessageRequest(
+            shop_session_id=shop, request_id=uuid4(), message="Find a beginner telescope"
+        )
+    )
+    spans.clear()
+    await agent.assistant_add_to_cart(
+        AddToCartAction(
+            conversation_id=first.conversation_id,
+            shop_session_id=shop,
+            request_id=uuid4(),
+            product_id=EXPLORASCOPE,
+            quantity=1,
+        )
+    )
+    recorded = spans.get_finished_spans()
+    action = next(s for s in recorded if s.name == "concierge.action")
+    tool_span = next(s for s in recorded if s.name == "add_to_cart")
+    assert tool_span.parent.span_id == action.context.span_id
+    assert not [s for s in recorded if s.name == "agent.step"]
 
 
 # -- MCP reconnect: fetch_tools() replaces a dead session with an owner task per connection --
