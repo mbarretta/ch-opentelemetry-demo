@@ -103,19 +103,19 @@ class LangfuseAPI:
             logger.warning("Could not resolve the Langfuse project id for %r", name)
             return None
 
-    async def score(self, trace_id, name, value, comment=""):
+    async def score(self, trace_id, name, value, comment="", observation_id=None):
+        """Write a BOOLEAN score to the trace, or to one observation of it when `observation_id` is given."""
         if not self.enabled:
             return False
-        await self.request(
-            "POST",
-            "/api/public/scores",
-            json={
-                "id": f"{trace_id}-{name}",
-                "traceId": trace_id,
-                "name": name,
-                "value": value,
-                "dataType": "BOOLEAN",
-                "comment": comment,
-            },
-        )
+        body = {
+            "id": f"{trace_id}-{name}",
+            "traceId": trace_id,
+            "name": name,
+            "value": value,
+            "dataType": "BOOLEAN",
+            "comment": comment,
+        }
+        if observation_id:
+            body["observationId"] = observation_id
+        await self.request("POST", "/api/public/scores", json=body)
         return True
