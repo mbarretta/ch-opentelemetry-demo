@@ -45,15 +45,19 @@ browser (assistant.turn span)
         → product-catalog / cart / currency (shop gRPC services)
 ```
 
-Inside the agent, one turn is a tree. Each `agent.step` holds one model decision and the tool calls it triggered, and `evaluate.budget` (scripted mode only, when the turn looked up a product) is a direct child of the turn rather than of the last step:
+Inside the agent, one turn is a tree. Each `agent.step` holds one model decision and the tool calls it triggered, and `evaluate.budget` (scripted mode only, when the turn looked up a product) is a direct child of the turn rather than of the last step. This is the scripted "Find a beginner telescope" turn: `list_products` in step 1, `get_product` in step 2, and the answer in step 3, which has no tool call:
 
 ```
 concierge.turn            [agent]
 ├── agent.step 1          [chain]
 │   ├── model.generate    [generation]
 │   │   └── thinking      [span]        (only when the response has visible reasoning)
-│   └── get_product       [tool]        (one span per tool call the model requested)
+│   └── list_products     [tool]        (one span per tool call the model requested)
 ├── agent.step 2          [chain]
+│   ├── model.generate    [generation]
+│   │   └── thinking      [span]
+│   └── get_product       [tool]
+├── agent.step 3          [chain]
 │   └── model.generate    [generation]
 │       └── thinking      [span]
 └── evaluate.budget       [evaluator]   (scripted mode only)
