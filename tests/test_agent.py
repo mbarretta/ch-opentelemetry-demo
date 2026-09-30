@@ -265,6 +265,10 @@ async def test_live_adapter_records_provider_usage_and_closes_client(agent, monk
     assert generation.attributes["gen_ai.response.model"] == "test-model"
     assert generation.attributes["gen_ai.response.finish_reasons"] == ("stop",)
     assert generation.kind.name == "CLIENT"
+    assert json.loads(generation.attributes["langfuse.observation.model.parameters"]) == {
+        "timeout": 30,
+        "max_retries": 1,
+    }
     assert "langfuse.observation.usage_details" not in generation.attributes
     # The provider returned no reasoning, so no thinking span is invented.
     assert not [s for s in spans.get_finished_spans() if s.name == "thinking"]
@@ -643,3 +647,79 @@ def test_scripted_model_attaches_a_one_line_rationale_to_every_reply():
         rationale = reply.additional_kwargs["reasoning_content"]
         assert rationale.strip() and "\n" not in rationale
         assert thinking_text(reply)[1] == "reasoning_content"
+
+
+async def test_live_generation_records_reasoning_effort_when_it_is_set(agent, monkeypatch, spans):
+    monkeypatch.setenv("API_KEY", "test-key-not-a-secret")
+    monkeypatch.setenv("LLM_MODEL", "gpt-5-mini")
+    monkeypatch.setenv("LLM_BASE_URL", "https://model.example/v1")
+
+    async def completion(request):
+        return httpx.Response(
+            200,
+            json={
+                "id": "test-completion",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": "Who is it for?"},
+                    }
+                ],
+            },
+        )
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(completion))
+    monkeypatch.setattr(
+        "concierge.agent.ChatLLM", lambda **kwargs: ChatLLM(http_async_client=client, **kwargs)
+    )
+    agent.mode = "live"
+    await agent.handle_prompt(ChatRequest(session_id=uuid4(), message="Help me choose"))
+    generation = next(s for s in spans.get_finished_spans() if s.name == "model.generate")
+    assert json.loads(generation.attributes["langfuse.observation.model.parameters"]) == {
+        "timeout": 30,
+        "max_retries": 1,
+        "reasoning_effort": "none",
+    }
+
+
+async def test_scripted_generations_record_an_empty_parameters_object(agent, spans):
+    await agent.handle_prompt(ChatRequest(session_id=uuid4(), message="Find a beginner telescope"))
+    generations = [s for s in spans.get_finished_spans() if s.name == "model.generate"]
+    assert len(generations) == 3
+    for generation in generations:
+        assert generation.attributes["langfuse.observation.model.parameters"] == "{}"
+
+
+async def test_budget_score_targets_its_evaluator_span_and_feedback_stays_trace_level(
+    agent, spans
+):
+    agent.langfuse.url, agent.langfuse.public_key, agent.langfuse.secret_key = (
+        "https://example.test",
+        "pk",
+        "sk",
+    )
+    received = []
+
+    async def request(method, path, **kwargs):
+        received.append(kwargs["json"])
+        return {"id": "score"}
+
+    agent.langfuse.request = request
+    session = uuid4()
+    result = await agent.handle_prompt(
+        ChatRequest(session_id=session, message="Find a beginner telescope")
+    )
+    evaluation = next(s for s in spans.get_finished_spans() if s.name == "evaluate.budget")
+    (budget,) = received
+    assert budget["name"] == "budget_adherence"
+    assert budget["observationId"] == format(evaluation.context.span_id, "016x")
+    assert len(budget["observationId"]) == 16
+
+    await agent.feedback(FeedbackRequest(session_id=session, trace_id=result["trace_id"], value=1))
+    helpfulness = received[-1]
+    assert helpfulness["name"] == "user_helpfulness"
+    assert "observationId" not in helpfulness
