@@ -22,8 +22,8 @@ import pytest
 import yaml
 from conftest import Recorder, write_env
 
-from launcher import core, images
-from launcher.eks import aws, config, k8s, lifecycle, tunnel, values
+from launcher import core, images, upstream
+from launcher.eks import aws, config, k8s, lifecycle, ops, tunnel, values
 
 REGION = "us-east-1"
 REGISTRY = "111122223333.dkr.ecr.us-east-1.amazonaws.com"
@@ -682,6 +682,140 @@ def test_up_asks_for_the_node_count_by_keyword_not_by_position(cluster, steps, m
     lifecycle.up()
 
     assert waited == [((), {"count": NODE_COUNT})]
+
+
+# --- start ---------------------------------------------------------------------------------
+
+NODE_PLATFORM = "linux/arm64"
+REPOSITORIES = {service: entry["repository"] for service, entry in PUBLISHED.items()}
+
+
+def morning(monkeypatch, cluster, *, manifest, in_ecr=True, tools=True):
+    """`start` with every collaborator recorded: what it would build, publish, bring up, check.
+
+    `manifest` is what `images.read_manifest()` answers, `in_ecr` whether the registry holds the
+    tag, and `tools` whether the bootstrap has already written `.runtime/tools.py`.
+    """
+    recorder = Steps(cluster)
+    core.RUNTIME.mkdir(parents=True, exist_ok=True)
+    if tools:
+        (core.RUNTIME / "tools.py").write_text("# corrected tools\n")
+    recorder.patch(monkeypatch, upstream, "bootstrap")
+    recorder.patch(monkeypatch, images, "build_tag", result=TAG)
+    recorder.patch(monkeypatch, images, "read_manifest", result=manifest)
+    recorder.patch(monkeypatch, images, "missing_images", result=[])
+    recorder.patch(monkeypatch, images, "build")
+    recorder.patch(monkeypatch, images, "publish")
+    outputs = {"ecr_repository_urls": REPOSITORIES, "node_platform": NODE_PLATFORM}
+    recorder.patch(monkeypatch, aws, "tf_out", result=lambda name: outputs[name])
+    recorder.patch(monkeypatch, aws, "ecr_has_image", result=in_ecr)
+    recorder.patch(monkeypatch, lifecycle, "up")
+    recorder.patch(monkeypatch, ops, "verify")
+    return recorder
+
+
+def built(**changes):
+    """A manifest for the current tag, built for the node group and published in full."""
+    return {"tag": TAG, "platform": NODE_PLATFORM, "published": PUBLISHED, **changes}
+
+
+def stale():
+    """A manifest from before the build inputs moved: built and published at an older tag."""
+    old = "0ld0ld0ld0ld"
+    return built(tag=old, published={s: {**entry, "tag": old} for s, entry in PUBLISHED.items()})
+
+
+def test_start_with_nothing_changed_goes_straight_to_up_and_verify(
+    cluster, redirected, monkeypatch
+):
+    recorder = morning(monkeypatch, cluster, manifest=built())
+
+    lifecycle.start()
+
+    assert recorder.names() == [
+        "build_tag",
+        "read_manifest",
+        "tf_out",
+        *["ecr_has_image"] * len(core.IMAGES),
+        "up",
+        "verify",
+    ]
+    assert argvs(cluster) == LOGIN, "the session is established before anything reads ECR"
+
+
+def test_start_publishes_without_rebuilding_when_the_current_build_was_never_pushed(
+    cluster, redirected, monkeypatch
+):
+    recorder = morning(monkeypatch, cluster, manifest=built(published={}))
+
+    lifecycle.start()
+
+    assert not recorder.called("build")
+    assert recorder.args("publish") == [(list(core.IMAGES),)]
+    assert recorder.names()[-3:] == ["publish", "up", "verify"]
+
+
+def test_start_builds_for_the_node_platform_then_publishes_when_the_inputs_moved(
+    cluster, redirected, monkeypatch
+):
+    recorder = morning(monkeypatch, cluster, manifest=stale())
+
+    lifecycle.start()
+
+    assert recorder.args("build") == [(list(core.IMAGES), NODE_PLATFORM)]
+    assert recorder.names()[-4:] == ["build", "publish", "up", "verify"]
+
+
+def test_start_rebuilds_a_build_made_for_the_wrong_platform(cluster, redirected, monkeypatch):
+    recorder = morning(
+        monkeypatch, cluster, manifest=built(platform="linux/amd64", published={})
+    )
+
+    lifecycle.start()
+
+    assert recorder.args("build") == [(list(core.IMAGES), NODE_PLATFORM)]
+
+
+def test_start_does_not_trust_a_manifest_the_registry_contradicts(
+    cluster, redirected, monkeypatch
+):
+    """Recorded as published at the current tag, but ECR no longer holds it: publish again."""
+    recorder = morning(monkeypatch, cluster, manifest=built(), in_ecr=False)
+
+    lifecycle.start()
+
+    assert recorder.args("publish") == [(list(core.IMAGES),)]
+
+
+def test_start_builds_from_nothing_after_a_first_clone(cluster, redirected, monkeypatch):
+    recorder = morning(monkeypatch, cluster, manifest=None, tools=False)
+
+    lifecycle.start()
+
+    assert recorder.names()[0] == "bootstrap", "the tag is derived from the upstream checkout"
+    assert recorder.names()[-4:] == ["build", "publish", "up", "verify"]
+
+
+def test_start_skip_verify_stops_once_the_storefront_is_up(cluster, redirected, monkeypatch):
+    recorder = morning(monkeypatch, cluster, manifest=built())
+
+    lifecycle.start(verify=False)
+
+    assert recorder.names()[-1] == "up"
+    assert not recorder.called("verify")
+
+
+def test_start_brings_nothing_up_when_the_build_fails(
+    cluster, redirected, monkeypatch
+):
+    """A failed build must not scale up nodes that are then billed for nothing."""
+    recorder = morning(monkeypatch, cluster, manifest=stale())
+    recorder.patch(monkeypatch, images, "build", raises=SystemExit("docker build failed"))
+
+    with pytest.raises(SystemExit):
+        lifecycle.start()
+
+    assert not recorder.called("up")
 
 
 # --- down ----------------------------------------------------------------------------------

@@ -14,8 +14,8 @@ rather than an hour's -- and what makes `down` worth running at the end of every
 
 import sys
 
-from .. import core, images
-from . import aws, config, k8s, tunnel, values
+from .. import core, images, upstream
+from . import aws, config, k8s, ops, tunnel, values
 
 # The collector is one small pod pulling one pinned image, so it gets the five minutes the bash
 # allowed it rather than the release's twenty.
@@ -28,7 +28,7 @@ NAMESPACE_DELETE_TIMEOUT = "300s"
 
 
 def register(subparsers):
-    """Declare `eks deploy`, `eks up` and `eks down`."""
+    """Declare `eks deploy`, `eks up`, `eks start` and `eks down`."""
     deploy_parser = subparsers.add_parser(
         "deploy", help="deploy the collector and the demo onto the running cluster, then tunnel"
     )
@@ -38,6 +38,17 @@ def register(subparsers):
         "up", help="scale the node group up, wait for the nodes, then deploy"
     )
     up_parser.set_defaults(handler=lambda args: up())
+
+    start_parser = subparsers.add_parser(
+        "start",
+        help="the everyday morning: build and publish only if stale, then up, then verify",
+    )
+    start_parser.add_argument(
+        "--skip-verify",
+        action="store_true",
+        help="stop once the storefront is up, without driving the verification turn",
+    )
+    start_parser.set_defaults(handler=lambda args: start(verify=not args.skip_verify))
 
     down_parser = subparsers.add_parser(
         "down", help="close the tunnel, remove the workloads and scale the node group to zero"
@@ -277,6 +288,72 @@ def up():
     # `deploy` owns the rest -- Secrets, collector, release, tunnel -- and its refusals are
     # this command's refusals.
     deploy()
+
+
+def start(verify=True):
+    """Everything the everyday morning takes, in order: images if stale, `up`, then `verify`.
+
+    `up` on its own refuses (through the published-image gate) when the build inputs have moved
+    since the last push, and the fix is two more commands by hand. This runs them only when the
+    gate would have refused, so a morning with nothing changed costs an `up` and a `verify`,
+    and a morning after an edit to `concierge/` or the overlay costs the rebuild it needs.
+
+    The AWS session comes first, ahead of the image check: the check reads ECR, and an expired
+    SSO session should ask for its browser tab before a rebuild has been started rather than
+    after it.
+    """
+    core.need("aws", "docker", "tofu", "kubectl", "helm")
+
+    aws.aws_login()
+    ensure_images()
+    up()
+    if verify:
+        ops.verify()
+
+
+def ensure_images():
+    """Build and publish the four images, but only for the part of that which is out of date.
+
+    Current means the manifest records every service as published at the tag the build inputs
+    produce now, and ECR still holds it: the manifest alone is not enough, because a registry
+    that lost an image (or a manifest copied from another laptop) reads as published here and
+    then fails as an ImagePullBackOff on the cluster. Anything less than current publishes; and
+    publishing needs local images built for the node group's platform, so it builds first
+    unless the recorded build already is that.
+    """
+    # `build_tag` reads the pinned upstream checkout, which `bootstrap` creates.
+    if not (core.RUNTIME / "tools.py").exists():
+        core.log("no upstream checkout yet; bootstrapping")
+        upstream.bootstrap()
+
+    tag = images.build_tag()
+    manifest = images.read_manifest() or {}
+    repositories = aws.tf_out("ecr_repository_urls")
+    recorded = manifest.get("published") or {}
+    current = all(
+        service in repositories
+        and (recorded.get(service) or {}).get("tag") == tag
+        and aws.ecr_has_image(repositories[service], tag)
+        for service in core.IMAGES
+    )
+    if current:
+        core.log(f"all four images are already published at build tag {tag}")
+        return
+
+    node_platform = aws.tf_out("node_platform")
+    if (
+        manifest.get("tag") == tag
+        and manifest.get("platform") == node_platform
+        and not images.missing_images(manifest, core.IMAGES)
+    ):
+        core.log(f"build tag {tag} is already built for {node_platform}; publishing it")
+    else:
+        core.log(
+            f"building the four images at tag {tag} for {node_platform} "
+            "(the frontend alone takes several minutes)"
+        )
+        images.build(list(core.IMAGES), node_platform)
+    images.publish(list(core.IMAGES))
 
 
 def down(keep=False):

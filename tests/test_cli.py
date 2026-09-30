@@ -39,6 +39,8 @@ COMMAND_LINES = [
     "eks apply --yes",
     "eks deploy",
     "eks up",
+    "eks start",
+    "eks start --skip-verify",
     "eks down",
     "eks down --keep",
     "eks tunnel",
@@ -67,6 +69,7 @@ EKS_INVOCATIONS = {
     "nightly": "eks nightly on",
     "deploy": "eks deploy",
     "up": "eks up",
+    "start": "eks start",
     "down": "eks down",
     "tunnel": "eks tunnel",
     "flag": "eks flag",
@@ -128,6 +131,8 @@ def test_flags_belong_to_the_subcommand_that_uses_them():
     assert parse("logs agent frontend".split()).arguments == ["agent", "frontend"]
     assert parse(["up", "--dev", "--debug-chatbot"]).dev is True
     assert parse(["eks", "down", "--keep"]).keep is True
+    assert parse(["eks", "start", "--skip-verify"]).skip_verify is True
+    assert parse(["eks", "start"]).skip_verify is False
     assert parse(["eks", "destroy", "--purge-state"]).purge_state is True
     assert parse(["eks", "nightly", "off"]).state == "off"
     assert parse(["eks", "flag", "paymentUnreachable", "on"]).variant == "on"
@@ -203,6 +208,7 @@ IMPLEMENTED = {
     "nightly": "tests/test_eks_infra.py",
     "deploy": "tests/test_eks_deploy.py",
     "up": "tests/test_eks_deploy.py",
+    "start": "tests/test_eks_deploy.py",
     "down": "tests/test_eks_deploy.py",
     "tunnel": "tests/test_eks_tunnel.py",
     "flag": "tests/test_eks_flags.py",

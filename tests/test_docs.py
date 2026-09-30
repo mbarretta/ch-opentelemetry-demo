@@ -78,6 +78,7 @@ BARE_SPANS = {
         "eks flag",
         "eks flag --reset",
         "eks init",
+        "eks start",
         "eks status",
         "eks tunnel",
         "eks tunnel status",

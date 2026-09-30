@@ -117,6 +117,14 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 
 ### The everyday cycle
 
+The whole morning is one command, `eks start`: it signs in to AWS if the session has expired, builds and publishes the images only when the build inputs have moved (or ECR no longer holds them), runs `eks up`, and finishes with `eks verify`.
+
+```sh
+.venv/bin/python scripts/demo.py eks start     # the morning in one go
+```
+
+The steps it runs are also available one at a time:
+
 ```sh
 .venv/bin/python scripts/demo.py eks up        # scale up, wait for nodes, deploy, tunnel
 .venv/bin/python scripts/demo.py eks status    # who you are, what is running, what tonight does
@@ -127,6 +135,7 @@ The cluster runs the same demo for a room instead of one laptop: a managed node 
 
 | Command | What it is for |
 | --- | --- |
+| `eks start` | `aws sso login` when the session is stale, then `build` and `publish` if — and only if — the current build tag is not in ECR for all four images, then `eks up`, then `eks verify`. A morning with nothing changed costs `up` and `verify`; a morning after editing `concierge/` or the overlay also pays for the rebuild, and the first frontend build takes several minutes. It builds for the node group's platform, and a failed build stops it before the node group scales up. `--skip-verify` stops once the storefront is up. |
 | `eks up` | Idle to a browsable storefront in about two and a half minutes. It writes the kubeconfig *before* it scales the node group, so an expired SSO session or a cluster that is no longer there fails in seconds rather than after five minutes of nodes you are already paying for. |
 | `eks down` | The nightly state: tunnel closed, release uninstalled, both namespaces deleted, node group at zero. `--keep` scales to zero but leaves the workloads in the API, so they reschedule on the way up. |
 | `eks tunnel` | Restarts the port-forward; `eks tunnel stop` closes it and `eks tunnel status` exits 0 only when the storefront answers. A 503 from Envoy means the tunnel is fine and the frontend is still starting. |
