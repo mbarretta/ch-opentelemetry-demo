@@ -75,6 +75,12 @@ def slept(monkeypatch):
     return taken
 
 
+@pytest.fixture
+def port_free(monkeypatch):
+    """The busy-port check answering "free", so a listener on the real 9090 cannot fail `start`."""
+    monkeypatch.setattr(tunnel, "port_is_busy", lambda port: False)
+
+
 def dead_pid():
     """A pid that names no process, for the stale-pidfile cases."""
     for candidate in range(99999, 300, -1):
@@ -156,7 +162,7 @@ def test_a_port_nobody_listens_on_is_not_reported_busy():
 
 
 def test_start_clears_a_stale_pidfile_and_launches_the_detached_loop(
-    redirected, spawned, tools, slept, monkeypatch
+    redirected, spawned, tools, slept, port_free, monkeypatch
 ):
     tunnel.pidfile().write_text(f"{dead_pid()}\n")
     monkeypatch.setattr(tunnel, "probe", lambda port, timeout=None: True)
@@ -184,7 +190,7 @@ def test_start_clears_a_stale_pidfile_and_launches_the_detached_loop(
 
 
 def test_the_readiness_probe_polls_twenty_times_at_one_second_intervals(
-    redirected, spawned, tools, slept, monkeypatch, capsys
+    redirected, spawned, tools, slept, port_free, monkeypatch, capsys
 ):
     """Twenty seconds for the port-forward to answer, then a warning rather than a failure."""
     attempts = []
@@ -198,7 +204,9 @@ def test_the_readiness_probe_polls_twenty_times_at_one_second_intervals(
     assert tunnel.pidfile().read_text().strip() == str(os.getpid()), "the loop is still running"
 
 
-def test_start_reports_a_loop_that_exits_immediately(redirected, tools, slept, monkeypatch):
+def test_start_reports_a_loop_that_exits_immediately(
+    redirected, tools, slept, port_free, monkeypatch
+):
     handle = Spawned(dead_pid())
     monkeypatch.setattr(core, "popen", handle.popen)
     monkeypatch.setattr(tunnel, "probe", lambda port, timeout=None: False)
