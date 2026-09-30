@@ -653,6 +653,7 @@ class ConciergeAgent(Agent):
         tools = await self.scoped_tools(state.shop_session_id, calls, state.currency_code, steps)
         if self.mode == "scripted":
             model = ScriptedModel(scenario=state.scenario, product_id=product_id)
+            llm_kwargs = {}
         else:
             llm_kwargs = {"timeout": 30, "max_retries": 1}
             if os.getenv("LLM_MODEL", "").lower().startswith("gpt-5"):
@@ -668,6 +669,8 @@ class ConciergeAgent(Agent):
             span_attrs = {
                 "langfuse.observation.type": "generation",
                 "langfuse.observation.model.name": model_name,
+                # The scripted model has no request parameters, so its object is empty.
+                "langfuse.observation.model.parameters": encoded(llm_kwargs),
                 "gen_ai.request.model": model_name,
                 "gen_ai.operation.name": "chat",
                 "gen_ai.prompt.name": PROMPT_NAME,
@@ -794,10 +797,14 @@ class ConciergeAgent(Agent):
                     ),
                     "langfuse.observation.output": encoded({name: value}),
                 },
-            ):
+            ) as span:
                 try:
                     await self.langfuse.score(
-                        trace_id(), name, value, "Deterministic scripted recommendation check"
+                        trace_id(),
+                        name,
+                        value,
+                        "Deterministic scripted recommendation check",
+                        observation_id=format(span.get_span_context().span_id, "016x"),
                     )
                 except httpx.HTTPError:
                     logger.warning("Could not submit evaluation score; trace_id=%s", trace_id())
