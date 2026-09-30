@@ -6,9 +6,16 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from langchain.tools import tool
+from langchain_core.messages import AIMessage
 from src.agents.llm import ChatLLM
 
-from concierge.agent import RECONNECT_TIMEOUT, ChatRequest, ConciergeAgent, FeedbackRequest
+from concierge.agent import (
+    RECONNECT_TIMEOUT,
+    ChatRequest,
+    ConciergeAgent,
+    FeedbackRequest,
+    thinking_text,
+)
 from concierge.contract import AddToCartAction, MessageRequest
 from concierge.scripted_model import EXPENSIVE, EXPLORASCOPE, tool_data
 
@@ -259,6 +266,8 @@ async def test_live_adapter_records_provider_usage_and_closes_client(agent, monk
     assert generation.attributes["gen_ai.response.finish_reasons"] == ("stop",)
     assert generation.kind.name == "CLIENT"
     assert "langfuse.observation.usage_details" not in generation.attributes
+    # The provider returned no reasoning, so no thinking span is invented.
+    assert not [s for s in spans.get_finished_spans() if s.name == "thinking"]
 
 
 async def test_api_root_contains_meaningful_io(agent, spans):
@@ -543,3 +552,94 @@ async def test_cancellation_after_readiness_but_before_installation_never_loses_
     assert fresh.connected is True
     assert fresh.closed is False
     assert len(agent._mcp_owner_tasks) == 1
+
+
+def test_thinking_text_reads_reasoning_content_blocks():
+    message = AIMessage(
+        content=[
+            {"type": "thinking", "thinking": "Weigh the budget."},
+            {"type": "reasoning", "reasoning": "Then pick one."},
+            {"type": "text", "text": "Answer."},
+        ]
+    )
+    assert thinking_text(message) == ("Weigh the budget.\n\nThen pick one.", "content_block")
+
+
+def test_thinking_text_reads_reasoning_fields_in_additional_kwargs():
+    content = AIMessage(content="", additional_kwargs={"reasoning_content": "via content"})
+    assert thinking_text(content) == ("via content", "reasoning_content")
+    plain = AIMessage(content="", additional_kwargs={"reasoning": "via reasoning"})
+    assert thinking_text(plain) == ("via reasoning", "reasoning")
+
+
+def test_thinking_text_treats_text_beside_tool_calls_as_narration():
+    calls = [{"name": "get_cart", "args": {}, "id": "1", "type": "tool_call"}]
+    message = AIMessage(content="Let me check the cart.", tool_calls=calls)
+    assert thinking_text(message) == ("Let me check the cart.", "narration")
+
+
+def test_thinking_text_prefers_blocks_then_fields_then_narration():
+    calls = [{"name": "get_cart", "args": {}, "id": "1", "type": "tool_call"}]
+    message = AIMessage(
+        content=[{"type": "thinking", "thinking": "block"}],
+        additional_kwargs={"reasoning_content": "field"},
+        tool_calls=calls,
+    )
+    assert thinking_text(message) == ("block", "content_block")
+    message = AIMessage(
+        content="narration", additional_kwargs={"reasoning_content": "field"}, tool_calls=calls
+    )
+    assert thinking_text(message) == ("field", "reasoning_content")
+
+
+def test_thinking_text_is_none_without_reasoning():
+    assert thinking_text(AIMessage(content="Here is the answer.")) is None
+    assert thinking_text(AIMessage(content="")) is None
+    blank = AIMessage(content=[{"type": "thinking", "thinking": "  "}], additional_kwargs={})
+    assert thinking_text(blank) is None
+    calls = [{"name": "get_cart", "args": {}, "id": "1", "type": "tool_call"}]
+    assert thinking_text(AIMessage(content="   ", tool_calls=calls)) is None
+
+
+async def test_scripted_generations_get_a_thinking_child_span(agent, spans):
+    await agent.handle_prompt(ChatRequest(session_id=uuid4(), message="Find a beginner telescope"))
+    recorded = spans.get_finished_spans()
+    generations = [s for s in recorded if s.name == "model.generate"]
+    thoughts = [s for s in recorded if s.name == "thinking"]
+    assert len(generations) == len(thoughts) == 3
+    for generation in generations:
+        (thought,) = children(recorded, generation)
+        assert thought.name == "thinking"
+        assert thought.attributes["langfuse.observation.type"] == "span"
+        assert thought.attributes["langfuse.observation.metadata.source"] == "reasoning_content"
+        rationale = thought.attributes["langfuse.observation.output"]
+        assert rationale and "\n" not in rationale
+        # The rationale is also what the generation's own output carries.
+        assert rationale in generation.attributes["langfuse.observation.output"]
+
+
+def test_scripted_model_attaches_a_one_line_rationale_to_every_reply():
+    from langchain_core.messages import HumanMessage, ToolMessage
+
+    from concierge.scripted_model import ScriptedModel
+
+    model = ScriptedModel()
+    asked = [HumanMessage(content="Find a beginner telescope")]
+    first = model.invoke(asked)
+    assert first.tool_calls[0]["name"] == "list_products" and first.content == ""
+    listed = [*asked, first, ToolMessage(content="[]", name="list_products", tool_call_id="a")]
+    second = model.invoke(listed)
+    assert second.tool_calls[0]["name"] == "get_product"
+    looked_up = [
+        *listed,
+        second,
+        ToolMessage(
+            content=json.dumps(product(EXPLORASCOPE)), name="get_product", tool_call_id="b"
+        ),
+    ]
+    final = model.invoke(looked_up)
+    assert not final.tool_calls and "Explorascope" in final.content
+    for reply in (first, second, final):
+        rationale = reply.additional_kwargs["reasoning_content"]
+        assert rationale.strip() and "\n" not in rationale
+        assert thinking_text(reply)[1] == "reasoning_content"

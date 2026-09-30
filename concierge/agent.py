@@ -64,6 +64,33 @@ RECONNECT_TIMEOUT = 10
 ADD_TO_CART_TOOL_LIST_TIMEOUT = 15
 
 
+def thinking_text(message):
+    """The model's visible reasoning for one response as ``(text, source)``, or None.
+
+    Checked in order: reasoning/thinking content blocks, the ``reasoning_content`` or
+    ``reasoning`` field providers put in additional_kwargs, then narration -- text the model
+    wrote alongside tool calls. Plain reply text with no tool calls is the answer, not thinking.
+    """
+    content = message.content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") in ("reasoning", "thinking"):
+                text = block.get("thinking") or block.get("reasoning") or block.get("text")
+                if isinstance(text, str) and text.strip():
+                    parts.append(text.strip())
+        if parts:
+            return "\n\n".join(parts), "content_block"
+    extra = message.additional_kwargs or {}
+    for key in ("reasoning_content", "reasoning"):
+        text = extra.get(key)
+        if isinstance(text, str) and text.strip():
+            return text.strip(), key
+    if message.tool_calls and isinstance(content, str) and content.strip():
+        return content.strip(), "narration"
+    return None
+
+
 def conflict(reason: ConflictReason, message: str) -> HTTPException:
     """A 409 on the storefront routes: the reason lets the client classify it (contract.py)."""
     return HTTPException(409, {"message": message, "reason": reason})
@@ -676,6 +703,19 @@ class ConciergeAgent(Agent):
                     encoded([m.model_dump() for m in response.result]),
                 )
                 message = response.result[-1]
+                thinking = thinking_text(message)
+                if thinking:
+                    text, source = thinking
+                    # Already inside model.generate, so this span is its child.
+                    with tracer.start_as_current_span(
+                        "thinking",
+                        attributes={
+                            "langfuse.observation.type": "span",
+                            "langfuse.observation.output": text,
+                            "langfuse.observation.metadata.source": source,
+                        },
+                    ):
+                        pass
                 metadata = message.response_metadata
                 for source, target in (("model_name", "model"), ("id", "id")):
                     if metadata.get(source):
