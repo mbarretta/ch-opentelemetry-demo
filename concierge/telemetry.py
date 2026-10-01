@@ -66,6 +66,35 @@ class JsonExporter(SpanExporter):
             return SpanExportResult.FAILURE
 
 
+def drop_mcp_stream_writer_spans():
+    """Stop the released MCP instrumentation from opening a span around every stream send.
+
+    Each ``ResponseStreamWriter`` span is a transport detail with nothing of its own to say, but
+    the one around a request is also where the trace context is injected, so the server's span
+    becomes its child and a collector-side filter could not drop it without orphaning the
+    server's spans. Replacing ``send`` keeps the injection and loses the span: the server's span
+    is then a direct child of the client's ``<method>.mcp`` span. Applied to the class, so it
+    covers whichever of the agent's and the MCP server's instrumentors created the writer.
+    """
+    from mcp.types import JSONRPCRequest
+    from opentelemetry import propagate
+    from opentelemetry.instrumentation.mcp.instrumentation import InstrumentedStreamWriter
+    from opentelemetry.instrumentation.mcp.utils import dont_throw
+
+    @dont_throw
+    async def send(self, item):
+        # The same three message shapes the released ``send`` unwraps.
+        message = getattr(item, "message", None)
+        request = getattr(message, "root", None) or getattr(item, "root", None)
+        if isinstance(request, JSONRPCRequest):
+            if not request.params:
+                request.params = {}
+            propagate.get_global_textmap().inject(request.params.setdefault("_meta", {}))
+        return await self.__wrapped__.send(item)
+
+    InstrumentedStreamWriter.send = send
+
+
 def configure(service):
     provider = TracerProvider(
         resource=Resource.create(
@@ -89,6 +118,7 @@ def configure(service):
         from opentelemetry.instrumentation.mcp import McpInstrumentor
 
         McpInstrumentor().instrument()
+        drop_mcp_stream_writer_spans()
     return provider
 
 

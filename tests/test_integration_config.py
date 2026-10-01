@@ -51,6 +51,28 @@ def test_langfuse_pipeline_filters_after_route_normalization():
     assert processors[-1] == "batch"
 
 
+def test_langfuse_renames_the_transport_hops_after_sanitizing_and_filtering_and_nowhere_else():
+    config = collector.collector_config(BOTH_BACKENDS)
+    pipelines = config["service"]["pipelines"]
+    processors = pipelines["traces/langfuse"]["processors"]
+    assert processors.index("filter/langfuse") < processors.index("transform/assistant_names")
+    assert processors.index("transform/assistant_names") < processors.index("gen_ai_normalizer")
+    assert "transform/assistant_names" not in pipelines["traces"]["processors"]
+    names = config["processors"]["transform/assistant_names"]
+    assert names["error_mode"] == "ignore"
+    statements = names["trace_statements"]
+    assert statements == collector.assistant_name_statements()
+    # One statement per hop that the instrumentations would otherwise all call POST, each
+    # scoped to the layer that emits it so no other span in the turn is renamed.
+    assert len(statements) == 5
+    for statement in statements:
+        assert statement.startswith("set(span.name, ")
+        assert " where " in statement
+    assert any('"browser fetch"' in s and "instrumentation-fetch" in s for s in statements)
+    assert any('"proxy ingress"' in s and "SPAN_KIND_SERVER" in s for s in statements)
+    assert any("storefront call to agent" in s and 'attributes["url.path"]' in s for s in statements)
+
+
 def test_langfuse_filter_keeps_the_whole_assistant_ancestor_chain():
     config = collector.collector_config({})
     span_filter = config["processors"]["filter/langfuse"]

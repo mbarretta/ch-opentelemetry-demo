@@ -46,13 +46,16 @@ ENV_DEFAULTS = {"AGENT_MODE": "scripted", "LANGFUSE_PROMPT_LABEL": "production"}
 
 # The Langfuse-bound trace pipeline, its processors in the only order that works: routes are set
 # before `transform/sanitize_spans` normalizes span names from them, the filter drops everything
-# outside one assistant turn before the batcher, and `batch` is last.
+# outside one assistant turn before the batcher, the kept hops are renamed after both (the
+# sanitizer would rename them back, and the filter matches the spans as the instrumentations
+# emit them), and `batch` is last.
 LANGFUSE_PIPELINE = "traces/langfuse"
 LANGFUSE_PROCESSORS = (
     "memory_limiter",
     "transform/assistant_routes",
     "transform/sanitize_spans",
     "filter/langfuse",
+    "transform/assistant_names",
     "gen_ai_normalizer",
     "batch",
 )
@@ -211,6 +214,10 @@ def collector_values(langfuse):
             "transform/assistant_routes": {
                 "error_mode": "ignore",
                 "trace_statements": collector.assistant_route_statements(),
+            },
+            "transform/assistant_names": {
+                "error_mode": "ignore",
+                "trace_statements": collector.assistant_name_statements(),
             },
             "filter/langfuse": {
                 "error_mode": "ignore",

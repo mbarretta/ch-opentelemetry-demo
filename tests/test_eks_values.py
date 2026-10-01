@@ -251,12 +251,13 @@ def test_no_credential_reaches_the_generated_document(configured):
 
 
 def test_the_langfuse_pipeline_runs_the_processors_in_the_order_that_works(configured):
-    """Routes are set before span names are sanitized, and the filter runs before batching."""
+    """Routes are set before span names are sanitized, the kept hops are renamed after the filter."""
     assert langfuse_pipeline(configured)["processors"] == [
         "memory_limiter",
         "transform/assistant_routes",
         "transform/sanitize_spans",
         "filter/langfuse",
+        "transform/assistant_names",
         "gen_ai_normalizer",
         "batch",
     ]
@@ -273,6 +274,10 @@ def test_the_ottl_is_the_laptops_ottl(configured):
     assert processors["transform/assistant_routes"] == {
         "error_mode": "ignore",
         "trace_statements": collector.assistant_route_statements(),
+    }
+    assert processors["transform/assistant_names"] == {
+        "error_mode": "ignore",
+        "trace_statements": collector.assistant_name_statements(),
     }
     assert processors["transform/assistant_routes"]["trace_statements"], (
         "the static file declares this processor empty; the generated file fills it"

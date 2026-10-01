@@ -90,6 +90,36 @@ def assistant_route_statements():
     return statements
 
 
+def assistant_name_statements():
+    """OTTL statements that give each transport hop of a turn its own name, for Langfuse only.
+
+    One turn crosses the browser fetch, Envoy, the storefront's Node server, Next.js and an
+    outbound call before it reaches the agent, and the released instrumentations name most of
+    those hops `POST` or `POST /api/assistant/message`, so the Langfuse tree read as copies of
+    one span. Run after the filter, so only the kept chain is touched, and after
+    `transform/sanitize_spans`, which would otherwise rename the spans back. Matched on
+    instrumentation scope and span kind rather than on the old name. Envoy's egress span
+    (`router frontend-assistant egress`), Next's `executing api route (pages) ...` and the
+    agent's own `POST /assistant/message` are already distinct and are left alone.
+    """
+    hop = 'instrumentation_scope.name == "{}"'
+    return [
+        f'set(span.name, "browser fetch") where {hop.format("@opentelemetry/instrumentation-fetch")}',
+        'set(span.name, "proxy ingress") where span.kind == SPAN_KIND_SERVER'
+        f' and {service_is("frontend-proxy")}',
+        'set(span.name, Concat(["storefront http:", span.name], " ")) where'
+        f' span.kind == SPAN_KIND_SERVER and {service_is("frontend")}'
+        f' and {hop.format("@opentelemetry/instrumentation-http")}',
+        'set(span.name, Concat(["storefront next.js:", span.name], " ")) where'
+        f' {service_is("frontend")} and {hop.format("next.js")}'
+        ' and span.attributes["next.span_type"] == "BaseServer.handleRequest"',
+        'set(span.name, Concat(["storefront call to agent", span.attributes["url.path"]], " "))'
+        f' where span.kind == SPAN_KIND_CLIENT and {service_is("frontend")}'
+        f' and {hop.format("@opentelemetry/instrumentation-undici")}'
+        ' and span.attributes["url.path"] != nil',
+    ]
+
+
 def collector_config(env):
     import yaml
 
@@ -130,12 +160,17 @@ def collector_config(env):
         "error_mode": "ignore",
         "traces": {"span": langfuse_span_filter()},
     }
+    processors["transform/assistant_names"] = {
+        "error_mode": "ignore",
+        "trace_statements": assistant_name_statements(),
+    }
     pipelines["traces/langfuse"] = {
         "receivers": ["otlp"],
         "processors": [
             "memory_limiter",
             "transform/sanitize_spans",
             "filter/langfuse",
+            "transform/assistant_names",
             "gen_ai_normalizer",
             "batch",
         ],

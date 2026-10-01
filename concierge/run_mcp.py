@@ -7,11 +7,12 @@ from opentelemetry import trace
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from traceloop.sdk import Traceloop
 
-from concierge.telemetry import ConversationProcessor
+from concierge.telemetry import ConversationProcessor, drop_mcp_stream_writer_spans
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 Traceloop.init(app_name="mcp")
+drop_mcp_stream_writer_spans()
 provider = trace.get_tracer_provider()
 provider.add_span_processor(ConversationProcessor())
 HTTPXClientInstrumentor().instrument()

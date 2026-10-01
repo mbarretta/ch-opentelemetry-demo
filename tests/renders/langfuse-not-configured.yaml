@@ -173,6 +173,22 @@ data:
         detectors:
         - env
         - system
+      transform/assistant_names:
+        error_mode: ignore
+        trace_statements:
+        - set(span.name, "browser fetch") where instrumentation_scope.name == "@opentelemetry/instrumentation-fetch"
+        - set(span.name, "proxy ingress") where span.kind == SPAN_KIND_SERVER and resource.attributes["service.name"]
+          == "frontend-proxy"
+        - set(span.name, Concat(["storefront http:", span.name], " ")) where span.kind
+          == SPAN_KIND_SERVER and resource.attributes["service.name"] == "frontend" and
+          instrumentation_scope.name == "@opentelemetry/instrumentation-http"
+        - set(span.name, Concat(["storefront next.js:", span.name], " ")) where resource.attributes["service.name"]
+          == "frontend" and instrumentation_scope.name == "next.js" and span.attributes["next.span_type"]
+          == "BaseServer.handleRequest"
+        - set(span.name, Concat(["storefront call to agent", span.attributes["url.path"]],
+          " ")) where span.kind == SPAN_KIND_CLIENT and resource.attributes["service.name"]
+          == "frontend" and instrumentation_scope.name == "@opentelemetry/instrumentation-undici"
+          and span.attributes["url.path"] != nil
       transform/assistant_routes:
         error_mode: ignore
         trace_statements:
@@ -403,6 +419,7 @@ data:
           - transform/assistant_routes
           - transform/sanitize_spans
           - filter/langfuse
+          - transform/assistant_names
           - gen_ai_normalizer
           - batch
           receivers:
