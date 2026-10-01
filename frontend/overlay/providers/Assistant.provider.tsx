@@ -72,6 +72,10 @@ interface IContext {
   currencyCode: string;
   productContext: AssistantProductContext | null;
   clearProductContext(): void;
+  // A product page reports the product on screen; it becomes the context (once per page visit, so
+  // a chip the shopper removed stays removed) and is dropped again when the page goes away.
+  viewProduct(product: AssistantProductContext): void;
+  leaveProduct(productId: string): void;
   sendMessage(text: string): Promise<void>;
   retry(): Promise<void>;
   addToCart(product: AssistantProductRef, quantity?: number): Promise<void>;
@@ -107,6 +111,8 @@ export const Context = createContext<IContext>({
   currencyCode: 'USD',
   productContext: null,
   clearProductContext: () => {},
+  viewProduct: () => {},
+  leaveProduct: () => {},
   sendMessage: noop,
   retry: noop,
   addToCart: noop,
@@ -245,6 +251,21 @@ const AssistantProvider = ({ children }: IProps) => {
 
   const close = useCallback(() => setIsOpen(false), []);
   const clearProductContext = useCallback(() => setProductContext(null), []);
+
+  const viewedProductRef = useRef<string | null>(null);
+  const viewProduct = useCallback((product: AssistantProductContext) => {
+    if (viewedProductRef.current !== product.productId) {
+      viewedProductRef.current = product.productId;
+      setProductContext(product);
+    } else {
+      // Same visit: only the name arriving late may change the chip, never bring back a removed one.
+      setProductContext(current => (current?.productId === product.productId ? product : current));
+    }
+  }, []);
+  const leaveProduct = useCallback((productId: string) => {
+    if (viewedProductRef.current === productId) viewedProductRef.current = null;
+    setProductContext(current => (current?.productId === productId ? null : current));
+  }, []);
 
   const startFresh = useCallback(
     (notes: string[] = []) => {
@@ -460,6 +481,8 @@ const AssistantProvider = ({ children }: IProps) => {
       currencyCode,
       productContext,
       clearProductContext,
+      viewProduct,
+      leaveProduct,
       sendMessage,
       retry,
       addToCart,
@@ -487,6 +510,8 @@ const AssistantProvider = ({ children }: IProps) => {
       currencyCode,
       productContext,
       clearProductContext,
+      viewProduct,
+      leaveProduct,
       sendMessage,
       retry,
       addToCart,

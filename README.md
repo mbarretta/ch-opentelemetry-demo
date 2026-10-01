@@ -205,7 +205,7 @@ One root `.env`, created from `.env.example` by `bootstrap` and ignored by Git. 
 
 ## Use the assistant
 
-The panel opens as a right-side panel at desktop widths (768 px and up) and as a full-screen dialog below that. It starts with **Find the right telescope**, three suggestions (**A telescope for a beginner**, **Help me choose under $150**, **Explain this product**), and the active budget and currency. Product pages add **Ask about this product**, which opens the same panel with that product as context.
+The panel opens as a right-side panel at desktop widths (768 px and up) and as a full-screen dialog below that. It starts with **Find the right telescope**, three suggestions (**A telescope for a beginner**, **Help me choose under $150**, **Explain this product**), and the active budget and currency. Product pages add **Ask about this product**, which opens the same panel with that product as context; the product on the page is the context whenever the panel is open there, so **Explain this product** works however the panel was opened, and removing the chip drops it for that page visit.
 
 Every recommendation is a compact product card whose name, picture, and price come from the agent's successful catalog tool results, never from the reply text. **View product** opens the product page; **Add to cart** performs one agent cart action against the shopper's storefront cart, and the header count, cart dropdown, and cart page update without a reload. Each answer offers **Helpful** / **Not helpful**, which scores that answer's trace in Langfuse and reports whether the score was saved.
 

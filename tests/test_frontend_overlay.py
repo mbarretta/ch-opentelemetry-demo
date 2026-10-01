@@ -177,6 +177,15 @@ def test_empty_state_copy_and_suggestion_chips():
         assert chip in joined, f"missing suggestion chip {chip!r}"
 
 
+def test_product_page_supplies_the_product_context_without_the_ask_button():
+    """"Explain this product" is plain text; only product_context tells the agent which product."""
+    button = (OVERLAY / "components/Assistant/AskAboutProduct.tsx").read_text()
+    provider = (OVERLAY / "providers/Assistant.provider.tsx").read_text()
+    assert "viewProduct({ productId, name })" in button
+    assert "leaveProduct(productId)" in button
+    assert "viewedProductRef" in provider
+
+
 def test_no_agent_or_langfuse_address_reaches_the_browser_bundle():
     assert TRACING in ASSISTANT_SOURCES
     for path in ASSISTANT_SOURCES:
